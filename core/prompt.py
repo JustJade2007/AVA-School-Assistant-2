@@ -82,12 +82,15 @@ Your tasks are:
      }}
    - If no supplementary info is needed or if multi-view images are ALREADY provided (Image 1 = question, Image 2 = reference/scrolled view), solve the question completely and set "status": "ready" (or omit status).
 
-IMPORTANT COORDINATE INSTRUCTIONS:
+IMPORTANT COORDINATE & BOUNDING BOX INSTRUCTIONS:
 - All coordinates (x, y, from_x, from_y, to_x, to_y) MUST be normalized integers from 0 to 1000:
   * (x=0, y=0) is top-left corner (0%, 0%) of the screenshot.
   * (x=1000, y=1000) is bottom-right corner (100%, 100%) of the screenshot.
   * Example: screen center is x=500, y=500.
-- Return the exact CENTER coordinates of buttons, checkboxes, input fields, or text targets.
+- For ALL fill-in-the-blank input boxes, text/numeric fields, options, and clickable buttons:
+  Provide BOTH "box_2d": [ymin, xmin, ymax, xmax] (representing the exact outer boundary of the box/control, normalized 0..1000)
+  AND center coordinates "x": (xmin + xmax) // 2 and "y": (ymin + ymax) // 2.
+  Providing accurate "box_2d" boundaries is CRITICAL for high-precision targeting.
 
 RESPONSE FORMAT:
 You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
@@ -133,12 +136,14 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
       "actions": [
         {{
           "type": "click",
+          "box_2d": [535, 360, 565, 480],
           "x": 420,
           "y": 550,
           "description": "Focus input box for Part 2"
         }},
         {{
           "type": "type_text",
+          "box_2d": [535, 360, 565, 480],
           "x": 420,
           "y": 550,
           "clear_first": true,
@@ -149,11 +154,13 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
     }}
   ],
   "check_button": {{
+    "box_2d": [905, 730, 935, 830],
     "x": 780,
     "y": 920,
     "description": "Check Answer button"
   }},
   "next_button": {{
+    "box_2d": [905, 835, 935, 925],
     "x": 880,
     "y": 920,
     "description": "Next Question button"

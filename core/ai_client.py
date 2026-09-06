@@ -534,8 +534,8 @@ class AIClient:
 
         def _process_action(action: Dict[str, Any], context_label: str = ""):
             action_type = action.get("type", "action")
-            # Support box_2d: [ymin, xmin, ymax, xmax] fallback only if x and y are not provided
-            if ("x" not in action or "y" not in action) and "box_2d" in action and isinstance(action["box_2d"], (list, tuple)) and len(action["box_2d"]) == 4:
+            # Support box_2d: [ymin, xmin, ymax, xmax]
+            if "box_2d" in action and isinstance(action["box_2d"], (list, tuple)) and len(action["box_2d"]) == 4:
                 b = action["box_2d"]
                 ymin, xmin, ymax, xmax = float(b[0]), float(b[1]), float(b[2]), float(b[3])
                 # Check if coordinates are 0..1 normalized instead of 0..1000
@@ -544,8 +544,16 @@ class AIClient:
                     xmin *= 1000.0
                     ymax *= 1000.0
                     xmax *= 1000.0
+                action["box_2d"] = [ymin, xmin, ymax, xmax]
+                # Center of the bounding box is the most grounded spatial target
                 action["x"] = (xmin + xmax) / 2.0
                 action["y"] = (ymin + ymax) / 2.0
+
+                bx1, by1 = _translate_point(xmin, ymin)
+                bx2, by2 = _translate_point(xmax, ymax)
+                action["box_screen"] = [min(bx1, bx2), min(by1, by2), max(bx1, bx2), max(by1, by2)]
+                action["box_width"] = abs(bx2 - bx1)
+                action["box_height"] = abs(by2 - by1)
 
             if "x" in action and "y" in action:
                 sx, sy = _translate_point(float(action["x"]), float(action["y"]))
@@ -553,9 +561,10 @@ class AIClient:
                 action["screen_y"] = sy
                 desc = action.get("description", "")
                 prefix = f"[{context_label}] " if context_label else ""
+                box_info = f" box={action['box_screen']}" if "box_screen" in action else ""
                 logger.info(
                     f"Target mapped {prefix}[{action_type}]: model=({action['x']}, {action['y']}) -> "
-                    f"screen=({sx}, {sy}) [cal_offset=+({calibration_offset_x},{calibration_offset_y}), "
+                    f"screen=({sx}, {sy}){box_info} [cal_offset=+({calibration_offset_x},{calibration_offset_y}), "
                     f"cal_scale=({calibration_scale_x},{calibration_scale_y})] - {desc}"
                 )
 
@@ -603,8 +612,20 @@ class AIClient:
             if btn and isinstance(btn, dict):
                 if "box_2d" in btn and isinstance(btn["box_2d"], (list, tuple)) and len(btn["box_2d"]) == 4:
                     b = btn["box_2d"]
-                    btn["x"] = (b[1] + b[3]) / 2.0
-                    btn["y"] = (b[0] + b[2]) / 2.0
+                    ymin, xmin, ymax, xmax = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+                    if max(ymin, xmin, ymax, xmax) <= 1.0:
+                        ymin *= 1000.0
+                        xmin *= 1000.0
+                        ymax *= 1000.0
+                        xmax *= 1000.0
+                    btn["box_2d"] = [ymin, xmin, ymax, xmax]
+                    btn["x"] = (xmin + xmax) / 2.0
+                    btn["y"] = (ymin + ymax) / 2.0
+                    bx1, by1 = _translate_point(xmin, ymin)
+                    bx2, by2 = _translate_point(xmax, ymax)
+                    btn["box_screen"] = [min(bx1, bx2), min(by1, by2), max(bx1, bx2), max(by1, by2)]
+                    btn["box_width"] = abs(bx2 - bx1)
+                    btn["box_height"] = abs(by2 - by1)
 
                 if "x" in btn and "y" in btn:
                     sx, sy = _translate_point(float(btn["x"]), float(btn["y"]))

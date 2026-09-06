@@ -75,6 +75,16 @@ class CloakedVisualizer:
 
             if x is not None and y is not None:
                 x, y = int(x), int(y)
+
+                # If bounding box is known (e.g. from fill-in box detection or box_2d), highlight the full box outline
+                box_screen = action.get("box_screen")
+                if box_screen and len(box_screen) == 4:
+                    bx1, by1, bx2, by2 = int(box_screen[0]), int(box_screen[1]), int(box_screen[2]), int(box_screen[3])
+                    self.canvas.create_rectangle(
+                        bx1, by1, bx2, by2,
+                        outline="#00ffcc", width=2, dash=(4, 2)
+                    )
+
                 # Outer glowing ring
                 self.canvas.create_oval(
                     x - 22, y - 22, x + 22, y + 22,
@@ -117,12 +127,18 @@ class CloakedVisualizer:
             cy = check_button.get("screen_y", check_button.get("y"))
             if cx is not None and cy is not None:
                 cx, cy = int(cx), int(cy)
+                c_box = check_button.get("box_screen")
+                if c_box and len(c_box) == 4:
+                    cbx1, cby1, cbx2, cby2 = int(c_box[0]), int(c_box[1]), int(c_box[2]), int(c_box[3])
+                else:
+                    cbx1, cby1, cbx2, cby2 = cx - 55, cy - 18, cx + 55, cy + 18
+
                 self.canvas.create_rectangle(
-                    cx - 55, cy - 18, cx + 55, cy + 18,
+                    cbx1, cby1, cbx2, cby2,
                     outline="#f59e0b", width=3
                 )
                 self.canvas.create_text(
-                    cx, cy - 28, text="[CHECK ANSWER]",
+                    cx, cby1 - 10, text="[CHECK ANSWER]",
                     fill="#f59e0b", font=("Arial", 9, "bold")
                 )
 
@@ -132,12 +148,18 @@ class CloakedVisualizer:
             ny = next_button.get("screen_y", next_button.get("y"))
             if nx is not None and ny is not None:
                 nx, ny = int(nx), int(ny)
+                n_box = next_button.get("box_screen")
+                if n_box and len(n_box) == 4:
+                    nbx1, nby1, nbx2, nby2 = int(n_box[0]), int(n_box[1]), int(n_box[2]), int(n_box[3])
+                else:
+                    nbx1, nby1, nbx2, nby2 = nx - 45, ny - 18, nx + 45, ny + 18
+
                 self.canvas.create_rectangle(
-                    nx - 45, ny - 18, nx + 45, ny + 18,
+                    nbx1, nby1, nbx2, nby2,
                     outline="#ff0055", width=3
                 )
                 self.canvas.create_text(
-                    nx, ny - 28, text="[NEXT BUTTON]",
+                    nx, nby1 - 10, text="[NEXT BUTTON]",
                     fill="#ff0055", font=("Arial", 9, "bold")
                 )
 

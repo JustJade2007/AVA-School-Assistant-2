@@ -28,7 +28,7 @@
     "overlay_y": 40,
     "capture_mode": "fullscreen",
     "roi_box": null,
-    "max_capture_dimension": 1920,
+    "max_capture_dimension": 2880,
     "calibration_offset_x": 0,
     "calibration_offset_y": 0,
     "calibration_scale_x": 1.0,

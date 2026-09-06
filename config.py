@@ -166,7 +166,7 @@ class AppConfig:
     # Capture & Display Resolution Settings
     capture_mode: str = "fullscreen"  # "fullscreen" or "roi"
     roi_box: Optional[list] = None  # [x1, y1, x2, y2] if capture_mode == "roi"
-    max_capture_dimension: int = 1920  # 1920, 2560, or 0 for native unscaled
+    max_capture_dimension: int = 2880  # 2880, 1920, 2560, or 0 for native unscaled
 
     # Coordinate Calibration Settings
     calibration_offset_x: int = 0      # Fine-tuning horizontal offset in pixels

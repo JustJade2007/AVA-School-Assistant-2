@@ -520,6 +520,10 @@ class AssistantEngine:
             else:
                 logger.info(f"Question evaluation status: UNSUBMITTED ({eval_info['details']})")
 
+            # Precision Fill-In Box Snapping:
+            # Measure physical boundaries of input boxes on screen and snap to middle 50%
+            self._refine_input_box_targets(result)
+
             self.last_result = result
             self.last_error = None
             self._notify_result(result)
@@ -881,6 +885,102 @@ class AssistantEngine:
             self.last_error = diag
             self.set_state(EngineState.ERROR, diag.message)
             self._notify_error(diag)
+
+    def _refine_input_box_targets(self, result: Dict[str, Any]):
+        """
+        Refines action target coordinates for fill-in-the-blank input boxes:
+        1. If the action already has box_screen from the AI model (box_2d), computes the middle 50% sub-region.
+        2. Inspects the screen ROI around the target coordinate with measure_and_target_input_box to find
+           the true rectangular input borders and snap to the middle 50% (leaving 25% safety margins from all outer borders).
+        3. Synchronizes associated click & type_text actions for the same blank so focus and typing land in the exact same spot.
+        """
+        actions = result.get("actions", [])
+        if not actions or not isinstance(actions, list):
+            return
+
+        for action in actions:
+            act_type = str(action.get("type", "")).lower()
+            desc = str(action.get("description", "")).lower()
+            is_input_target = (
+                act_type == "type_text"
+                or "input" in desc
+                or "box" in desc
+                or "blank" in desc
+                or "field" in desc
+                or "entry" in desc
+            )
+            if not is_input_target:
+                continue
+
+            sx = action.get("screen_x")
+            sy = action.get("screen_y")
+            if sx is None or sy is None:
+                continue
+
+            # Case A: If box_screen is already provided by AI (via box_2d)
+            box_screen = action.get("box_screen")
+            if box_screen and len(box_screen) == 4:
+                b_x1, b_y1, b_x2, b_y2 = box_screen
+                bw = abs(b_x2 - b_x1)
+                bh = abs(b_y2 - b_y1)
+                if bw >= 14 and bh >= 8:
+                    mid50_x1 = int(b_x1 + 0.25 * bw)
+                    mid50_x2 = int(b_x2 - 0.25 * bw)
+                    mid50_y1 = int(b_y1 + 0.25 * bh)
+                    mid50_y2 = int(b_y2 - 0.25 * bh)
+                    if mid50_x1 <= mid50_x2 and mid50_y1 <= mid50_y2:
+                        # Snap to middle 50% center
+                        snapped_x = (mid50_x1 + mid50_x2) // 2
+                        snapped_y = (mid50_y1 + mid50_y2) // 2
+                        action["screen_x"] = snapped_x
+                        action["screen_y"] = snapped_y
+                        if "x" in action: action["x"] = snapped_x
+                        if "y" in action: action["y"] = snapped_y
+
+            # Case B: Live visual contour detection using local verifier
+            if self.config.local_verification_enabled:
+                try:
+                    cur_x = int(action["screen_x"])
+                    cur_y = int(action["screen_y"])
+                    snapped_x, snapped_y, meta = self.verifier.measure_and_target_input_box(
+                        roi_img=None,
+                        center_screen_x=cur_x,
+                        center_screen_y=cur_y,
+                        radius_w=140,
+                        radius_h=45
+                    )
+                    if meta.get("detected"):
+                        action["screen_x"] = snapped_x
+                        action["screen_y"] = snapped_y
+                        if "x" in action: action["x"] = snapped_x
+                        if "y" in action: action["y"] = snapped_y
+                        if meta.get("screen_bounds"):
+                            action["box_screen"] = list(meta["screen_bounds"])
+                            action["box_width"] = meta.get("box_width", 0)
+                            action["box_height"] = meta.get("box_height", 0)
+                        logger.info(
+                            f"Input target refined via visual box detection: ({cur_x}, {cur_y}) -> "
+                            f"({snapped_x}, {snapped_y}) [box={action.get('box_screen')}]"
+                        )
+                except Exception as e:
+                    logger.debug(f"_refine_input_box_targets exception: {e}")
+
+        # Synchronize action coordinates inside multi-part items if present
+        items = result.get("items", [])
+        if isinstance(items, list):
+            for item in items:
+                item_actions = item.get("actions", [])
+                if isinstance(item_actions, list) and len(item_actions) >= 2:
+                    # If an item has both click and type_text, ensure type_text inherits click's refined target
+                    click_act = next((a for a in item_actions if str(a.get("type", "")).lower() == "click"), None)
+                    type_act = next((a for a in item_actions if str(a.get("type", "")).lower() == "type_text"), None)
+                    if click_act and type_act and click_act.get("screen_x") and click_act.get("screen_y"):
+                        type_act["screen_x"] = click_act["screen_x"]
+                        type_act["screen_y"] = click_act["screen_y"]
+                        if "x" in click_act: type_act["x"] = click_act["x"]
+                        if "y" in click_act: type_act["y"] = click_act["y"]
+                        if click_act.get("box_screen"):
+                            type_act["box_screen"] = click_act["box_screen"]
 
     def _discover_and_click_next_button(self, override_region: Optional[Tuple[int, int, int, int]] = None) -> bool:
         """

@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Application user configurations & secrets
+config.json
+*.local.json
+*.secret.json
+logs/
+*.log
+
+# Explicitly keep repository default configuration templates
+!config.default.json
+!config.example.json

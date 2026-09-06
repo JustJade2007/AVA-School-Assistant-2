@@ -10,7 +10,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.3.3.a] - 2026-09-06
+## [0.4.3.a] - 2026-09-06
 
 ### Fixed
 - **Next Button Duplicate Click Debouncing & Rate Limiting (`core/assistant_engine.py`)**:
@@ -23,7 +23,7 @@ The version format is `1.2.3.a`:
   - Hardened platform evaluation heuristics so local green pixel markers cannot override an AI-detected `unsubmitted` status.
   - In multi-part questions, gating advance strictly on completion of all sub-parts (`has_pending_items = False`).
 
-## [1.3.2.a] - 2026-09-06
+## [0.4.2.a] - 2026-09-06
 
 ### Added
 - **Per-Input Failsafe Verification & 3-Stage Zero-Token Recovery (`core/automation.py`, `core/local_verifier.py`, `core/assistant_engine.py`)**:
@@ -42,7 +42,7 @@ The version format is `1.2.3.a`:
 - **Positive Feedback Modal Handling (`core/prompt.py`, `core/assistant_engine.py`)**:
   - Instructed vision prompt to prioritize semantic positive feedback ("Correct!", green checkmarks) over raw pixel heuristics, preventing wasteful rethinking loops when an answer is already verified correct.
 
-## [1.3.1.a] - 2026-09-06
+## [0.4.1.a] - 2026-09-06
 
 ### Fixed
 - **Auto-Advance Recovery After Correcting Answers (`core/assistant_engine.py`)**:
@@ -54,7 +54,7 @@ The version format is `1.2.3.a`:
   - If a clicked Next button does not transition the screen (e.g. coordinates shifted, button disabled until post-submit, or platform layout changed), AVA immediately falls back to dynamic navigation button discovery (`_discover_and_click_next_button`) instead of failing silently.
   - When dynamic navigation detection clicks a Submit or Check button, AVA now waits for the platform to reveal the Next button, performs a secondary scan, and clicks the revealed Next button automatically.
 
-## [1.3.0.a] - 2026-09-06
+## [0.4.0.a] - 2026-09-06
 
 ### Added
 - **Platform Evaluation Status & Answer Rethinking Architecture (`core/prompt.py`, `core/ai_client.py`, `core/local_verifier.py`, `core/assistant_engine.py`, `ui/hud_overlay.py`)**:
@@ -83,7 +83,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.2.3.b] - 2026-09-06
+## [0.3.3.b] - 2026-09-06
 
 ### Fixed
 - **API Key Persistence Across Application Restarts (`config.py`, `ui/settings_view.py`, `ui/app.py`, `core/assistant_engine.py`)**:
@@ -99,7 +99,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.2.3.a] - 2026-09-06
+## [0.3.3.a] - 2026-09-06
 
 ### Added
 - **AI-Detected Scrolling Quiz Advancing (`core/prompt.py`, `core/ai_client.py`, `core/assistant_engine.py`)**:
@@ -113,7 +113,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.2.2.a] - 2026-09-06
+## [0.3.2.a] - 2026-09-06
 
 ### Added
 - **Universal Zero-Token Action Verification System (`core/local_verifier.py`, `core/automation.py`, `core/assistant_engine.py`)**:
@@ -135,7 +135,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.2.1.a] - 2026-09-05
+## [0.3.1.a] - 2026-09-05
 
 ### Fixed
 - **Scrapped Moving Past Target / Overshoot in Mouse Trajectories (`core/automation.py`)**:
@@ -147,7 +147,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.2.0.a] - 2026-09-05
+## [0.3.0.a] - 2026-09-05
 
 ### Added
 - **Supplementary Material & Reference Sheet Inspection Engine**:
@@ -169,7 +169,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.1.2.a] - 2026-09-05
+## [0.2.2.a] - 2026-09-05
 
 ### Added
 - **Zero-Token Answer Verification & Recovery System**:
@@ -199,7 +199,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.1.1.a] - 2026-09-05
+## [0.2.1.a] - 2026-09-05
 
 ### Fixed
 - **Settings Dashboard Initialization & AttributeError**:
@@ -222,7 +222,7 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [1.1.0.a] - 2026-09-05
+## [0.2.0.a] - 2026-09-05
 
 ### Added
 - **Human-like Anti-Bot Automation Suite**:

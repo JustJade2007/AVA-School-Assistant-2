@@ -9,7 +9,7 @@ import random
 import threading
 from enum import Enum
 from typing import Dict, Any, Optional, Callable, List, Tuple
-from PIL import Image
+from PIL import Image, ImageStat
 
 from config import AppConfig, ConfigManager
 from core.capture import ScreenCapture
@@ -52,6 +52,7 @@ class AssistantEngine:
         self.last_verification_detail: str = ""
 
         self._state_lock = threading.Lock()
+        self._action_gate_lock = threading.Lock()
         self._running_thread: Optional[threading.Thread] = None
         self._state_callbacks: List[Callable[[EngineState, str], None]] = []
         self._result_callbacks: List[Callable[[Dict[str, Any]], None]] = []
@@ -249,15 +250,39 @@ class AssistantEngine:
 
     def trigger_solve(self, region: Optional[Tuple[int, int, int, int]] = None):
         """Initiates screen capture and AI solution resolution, optionally for a specific region."""
-        if self.state in [EngineState.SCANNING, EngineState.THINKING, EngineState.EXECUTING]:
-            logger.warning(f"Cannot trigger solve: currently busy in state '{self.state.value}'.")
-            return
+        with self._action_gate_lock:
+            # If busy, cancel current pipeline and restart fresh (equivalent to F12 -> F8)
+            if self.state in [
+                EngineState.SCANNING,
+                EngineState.THINKING,
+                EngineState.READING,
+                EngineState.EXECUTING,
+                EngineState.VERIFYING,
+                EngineState.INSPECTING,
+                EngineState.NAVIGATING,
+            ] or self.executor.is_input_active():
+                logger.info(
+                    f"F8 triggered while engine is busy in state '{self.state.value}'. "
+                    "Aborting current operations and restarting fresh solve (F12 -> F8)..."
+                )
+                self._handle_adjustment("🔄 Aborting current operations & restarting solve...")
+                self.executor.request_stop()
 
-        logger.info(f"Solve triggered (region override={region is not None}). Starting capture and solving pipeline...")
-        self.executor.reset_stop()
-        t = threading.Thread(target=lambda: self._run_solve_pipeline(override_region=region), daemon=True)
-        self._running_thread = t
-        t.start()
+                # Wait briefly for previous thread to terminate cleanly
+                if self._running_thread and self._running_thread.is_alive() and self._running_thread != threading.current_thread():
+                    self._running_thread.join(timeout=0.4)
+
+            # Atomically claim the state before unlocking so no concurrent F8/F9 can enter
+            self.set_state(EngineState.SCANNING)
+            self.executor.reset_stop()
+            logger.info(f"Solve triggered (region override={region is not None}). Starting capture and solving pipeline...")
+            t = threading.Thread(
+                target=lambda: self._run_solve_pipeline(override_region=region),
+                daemon=True,
+                name="SolvePipelineThread"
+            )
+            self._running_thread = t
+            t.start()
 
     def _run_solve_pipeline(self, override_region: Optional[Tuple[int, int, int, int]] = None):
         phase = "Initialization"
@@ -284,6 +309,28 @@ class AssistantEngine:
                  region=region,
                  max_dimension=self.config.max_capture_dimension
              )
+
+            # Blank screen render guard: if screen is completely blank (e.g. white loading screen), pause and re-capture
+            try:
+                check_img = self.capture.capture_screen(region=region)
+                stat = ImageStat.Stat(check_img.convert("L"))
+                if stat.stddev[0] < 1.8:
+                    logger.warning("Blank screen detected (stddev < 1.8). Page is likely loading. Waiting 1.0s before capturing...")
+                    self._handle_adjustment("⏳ Waiting for page to finish loading...")
+                    time.sleep(1.0)
+                    (base64_data,
+                     curr_w,
+                     curr_h,
+                     scale_x,
+                     scale_y,
+                     offset_x,
+                     offset_y) = self.capture.capture_and_encode(
+                         region=region,
+                         max_dimension=self.config.max_capture_dimension
+                     )
+            except Exception as e:
+                logger.debug(f"Blank screen check skipped: {e}")
+
             logger.debug(f"Capture successful ({curr_w}x{curr_h}, base64 len={len(base64_data)}).")
 
             # 2. AI Reasoning Phase
@@ -494,6 +541,7 @@ class AssistantEngine:
                             self._discover_and_click_next_button(override_region=self.last_region)
                     if self.config.autonomous_mode and not self.executor.is_stopped():
                         time.sleep(1.2)
+                        self.set_state(EngineState.IDLE)
                         self.trigger_solve()
                     return
                 else:
@@ -549,30 +597,53 @@ class AssistantEngine:
 
     def confirm_and_execute(self):
         """Called when user confirms the solution or skips reading wait (via F9 or HUD click)."""
-        if self.state == EngineState.READING:
-            logger.info("Skip wait requested during reading deliberation (F9). Proceeding to execute.")
-            self._force_execute_after_reading = True
-            self._skip_reading_event.set()
-            return
+        with self._action_gate_lock:
+            if self.state == EngineState.READING:
+                logger.info("Skip wait requested during reading deliberation (F9). Proceeding to execute.")
+                self._force_execute_after_reading = True
+                self._skip_reading_event.set()
+                return
 
-        if self.state != EngineState.WAITING_CONFIRMATION and self.last_result is None:
-            logger.warning("Nothing to confirm (state is not WAITING_CONFIRMATION and no last_result).")
-            return
+            if self.state != EngineState.WAITING_CONFIRMATION:
+                logger.warning(
+                    f"Safeguard engaged: Cannot confirm and execute (F9) in state '{self.state.value}'. "
+                    f"Execution is only allowed in WAITING_CONFIRMATION or READING."
+                )
+                if self.state in [
+                    EngineState.SCANNING,
+                    EngineState.THINKING,
+                    EngineState.EXECUTING,
+                    EngineState.VERIFYING,
+                    EngineState.INSPECTING,
+                    EngineState.NAVIGATING,
+                ]:
+                    self._handle_adjustment("⚠️ Busy: Confirm (F9) ignored while action/solve is in progress")
+                return
 
-        # If already marked CORRECT by platform, skip action execution
-        if self.last_result and self.last_result.get("evaluation_status") == "correct":
-            logger.info("confirm_and_execute: Question already marked CORRECT by platform.")
-            self.last_verification_detail = "already marked CORRECT by platform"
-            self._handle_adjustment("✓ Question already marked CORRECT by platform")
-            if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
-                self.trigger_next_question()
-            else:
-                self.set_state(EngineState.IDLE, "Question confirmed correct")
-            return
+            if self.last_result is None:
+                logger.warning("Nothing to confirm (no last_result).")
+                return
 
-        logger.info("Solution confirmed by user. Launching execution thread...")
-        t = threading.Thread(target=self.execute_current_solution, daemon=True)
-        t.start()
+            if self.executor.is_input_active():
+                logger.warning("Safeguard engaged: Cannot confirm and execute (F9): input stream is already active.")
+                return
+
+            # If already marked CORRECT by platform, skip action execution
+            if self.last_result and self.last_result.get("evaluation_status") == "correct":
+                logger.info("confirm_and_execute: Question already marked CORRECT by platform.")
+                self.last_verification_detail = "already marked CORRECT by platform"
+                self._handle_adjustment("✓ Question already marked CORRECT by platform")
+                if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
+                    self.trigger_next_question()
+                else:
+                    self.set_state(EngineState.IDLE, "Question confirmed correct")
+                return
+
+            # Atomically claim EXECUTING state so no other hotkey can interleave
+            self.set_state(EngineState.EXECUTING)
+            logger.info("Solution confirmed by user. Launching execution thread...")
+            t = threading.Thread(target=self.execute_current_solution, daemon=True, name="ActionExecutionThread")
+            t.start()
 
     def execute_current_solution(self):
         """Executes the actions stored in self.last_result."""
@@ -591,12 +662,21 @@ class AssistantEngine:
                 self.set_state(EngineState.IDLE, "Question confirmed correct")
             return
 
+        was_rethinking = (
+            bool(self.last_result.get("is_rethinking"))
+            or self.last_result.get("evaluation_status") == "incorrect"
+            or bool(self.last_result.get("action_missed"))
+        )
         actions = self.last_result.get("actions", [])
         phase = "Action Execution"
         try:
             self.set_state(EngineState.EXECUTING)
             logger.info(f"Executing sequence of {len(actions)} actions...")
             seq_summary = self.executor.execute_action_sequence(actions, delay_between=self.config.action_delay)
+            if isinstance(seq_summary, dict) and seq_summary.get("error") == "concurrent_input_prevented":
+                logger.warning("execute_current_solution: execution aborted because another input stream is already active.")
+                return
+
             if isinstance(seq_summary, dict):
                 logger.info(
                     f"Action sequence completed: {seq_summary.get('verified_count', 0)}/"
@@ -630,19 +710,40 @@ class AssistantEngine:
                     f"Details: {verification.get('details', '')}"
                 )
                 self._handle_adjustment("✓ Answer verified (Zero-Token Confirmed)")
+
+                # If this was a retry or rethink, the corrective answer is now confirmed in place!
+                if was_rethinking:
+                    self.last_result["is_rethinking"] = False
+                    self.last_result["evaluation_status"] = "unsubmitted"
+                    self.last_result["action_missed"] = False
+
+                # Check if multi-part has any remaining pending parts
+                items = self.last_result.get("items", [])
+                has_pending_items = False
+                if isinstance(items, list) and items:
+                    for itm in items:
+                        if itm.get("actions"):
+                            itm["needs_action"] = False
+                            itm["is_rethinking"] = False
+                        elif itm.get("needs_action", False):
+                            has_pending_items = True
+
+                if was_rethinking and not has_pending_items:
+                    self.last_result["ready_to_advance"] = True
             else:
                 logger.warning(
-                    f"[!] Zero-token verification FAILED: Question was NOT confirmed answered after execution and recovery! "
+                    f"[!] Zero-token verification FAILED: Question was NOT confirmed answered after execution and 3 readjustments! "
                     f"Details: {verification.get('details', '')}"
                 )
                 self.last_result["ready_to_advance"] = False
-                unver_msg = "⚠️ Action missed: Question is NOT answered! Press F9 to retry or click manually."
+                self.last_result["action_missed"] = True
+                unver_msg = "⚠️ Action missed after 3 readjustments: Question is NOT answered! Press F9 to retry or click manually."
                 self._handle_adjustment(unver_msg)
 
                 # CRITICAL INVARIANT: DO NOT GO IDLE! DO NOT ADVANCE!
                 self.set_state(
                     EngineState.WAITING_CONFIRMATION,
-                    "UNVERIFIED: Click missed answer. Press F9 to retry."
+                    "UNVERIFIED: Click missed answer after 3 readjustments. Press F9 to retry."
                 )
                 return
 
@@ -709,6 +810,7 @@ class AssistantEngine:
 
                             # Retrigger solve pipeline to inspect platform feedback and rethink
                             time.sleep(0.5)
+                            self.set_state(EngineState.IDLE)
                             self.trigger_solve(region=self.last_region)
                             return
                         elif post_eval.get("status") == "correct":
@@ -716,17 +818,49 @@ class AssistantEngine:
                             self._handle_adjustment("✓ Platform confirmed answer CORRECT!")
 
                     # Step 2: Click "Next" button if known, or dynamically locate the revealed button
+                    advanced = False
                     if next_btn and isinstance(next_btn, dict):
                         logger.info("Auto-advance: Clicking identified 'Next' button...")
+                        before_next_img = None
+                        if self.config.local_verification_enabled:
+                            try:
+                                before_next_img = self.capture.capture_screen(region=self.last_region)
+                            except Exception as e:
+                                logger.debug(f"Pre-next capture unavailable: {e}")
+
                         self.trigger_next_button()
-                    else:
+
+                        # Zero-token verification: verify if screen transitioned to next question
+                        if self.config.local_verification_enabled and before_next_img:
+                            time.sleep(0.4)
+                            try:
+                                after_next_img = self.capture.capture_screen(region=self.last_region)
+                                trans = self.verifier.verify_screen_transition(before_next_img, after_next_img)
+                                if trans.get("transitioned", False):
+                                    advanced = True
+                                    logger.info(f"[OK] Screen transition to next question verified: {trans.get('details')}")
+                                else:
+                                    logger.warning(
+                                        f"Next button click did not transition screen ({trans.get('details')}). "
+                                        "Falling back to dynamic navigation button discovery..."
+                                    )
+                            except Exception as e:
+                                logger.debug(f"Transition check exception: {e}")
+                        else:
+                            advanced = True
+
+                    if not advanced:
                         logger.info("Auto-advance: Scanning screen to detect newly revealed 'Next' / navigation button...")
                         self._discover_and_click_next_button(override_region=self.last_region)
 
                 # Step 3: Multi-part continuation or autonomous loop
                 if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
+                    load_delay = max(2.0, self.config.auto_next_delay + 0.8)
+                    logger.info(f"Advancing to next question: Waiting {load_delay:.1f}s for page to render...")
+                    self._handle_adjustment("⏳ Waiting for next question to load...")
+                    time.sleep(load_delay)
                     logger.info("Continuing solve pipeline for next part/question...")
-                    time.sleep(1.2)
+                    self.set_state(EngineState.IDLE)
                     self.trigger_solve()
                     return
 
@@ -824,6 +958,41 @@ class AssistantEngine:
                         if not diff_ok and diff_score < 1.0:
                             logger.warning(f"Auto-advance Next click unconfirmed (diff={diff_score:.1f}). Retrying firmly...")
                             self.executor.click(int(nx), int(ny), allow_variance=False)
+
+                    # If the clicked button was Submit/Check, the platform validates and reveals the Next button
+                    b_type = str(detected_btn.get("type", "")).lower()
+                    b_desc = desc.lower()
+                    if b_type in ["submit", "check"] or "submit" in b_desc or "check" in b_desc:
+                        logger.info("Navigation button clicked was Submit/Check. Waiting for Next button to be revealed...")
+                        time.sleep(max(1.0, self.config.auto_next_delay))
+                        try:
+                            b64_sub, sw, sh, s_sx, s_sy, s_ox, s_oy = self.capture.capture_and_encode(
+                                region=region,
+                                max_dimension=self.config.max_capture_dimension
+                            )
+                            revealed_next = ai_client.detect_navigation_button(
+                                base64_image=b64_sub,
+                                image_width=sw,
+                                image_height=sh,
+                                scale_x=s_sx,
+                                scale_y=s_sy,
+                                offset_x=s_ox,
+                                offset_y=s_oy,
+                                calibration_offset_x=self.config.calibration_offset_x,
+                                calibration_offset_y=self.config.calibration_offset_y,
+                                calibration_scale_x=self.config.calibration_scale_x,
+                                calibration_scale_y=self.config.calibration_scale_y,
+                                coordinate_mode=self.config.coordinate_mode
+                            )
+                            if revealed_next:
+                                r_nx = revealed_next.get("screen_x", revealed_next.get("x"))
+                                r_ny = revealed_next.get("screen_y", revealed_next.get("y"))
+                                if r_nx is not None and r_ny is not None:
+                                    logger.info(f"Auto-advance: Clicking newly revealed Next button after submit at ({r_nx}, {r_ny})")
+                                    self.executor.click(int(r_nx), int(r_ny))
+                        except Exception as e:
+                            logger.debug(f"Post-submit Next button detection failed: {e}")
+
                     return True
 
             # Attempt 2: If not found, scroll down 350px to see if Next button is below the fold
@@ -1140,38 +1309,57 @@ class AssistantEngine:
 
     def trigger_next_question(self):
         """User manual trigger for Next Question (F10). Supports both button advancing and scroll-down quizzes."""
-        logger.info("Manual Next Question triggered (F10).")
-        check_btn = self.last_result.get("check_button") if self.last_result else None
-        next_btn = self.last_result.get("next_button") if self.last_result else None
-        is_multi_part = self.last_result.get("is_multi_part", False) if self.last_result else False
-        advance_action = str(self.last_result.get("advance_action", "")).lower() if self.last_result else ""
+        with self._action_gate_lock:
+            if self.state in [
+                EngineState.SCANNING,
+                EngineState.THINKING,
+                EngineState.EXECUTING,
+                EngineState.VERIFYING,
+                EngineState.INSPECTING,
+            ] or self.executor.is_input_active():
+                logger.warning(
+                    f"Safeguard engaged: Cannot advance to next question (F10) while busy in state '{self.state.value}'."
+                )
+                self._handle_adjustment("⚠️ Busy: Next Question (F10) ignored while action/solve is in progress")
+                return
 
-        if advance_action == "scroll_down":
-            scroll_amt = int(self.last_result.get("scroll_amount", 450)) if self.last_result else 450
-            logger.info(f"Manual advance: AI detected scrolling quiz, scrolling down {scroll_amt}px...")
-            self._advance_by_scrolling_down(scroll_amt=scroll_amt, override_region=self.last_region)
-        elif check_btn and not next_btn:
-            # Platform only has Check Answer currently displayed
-            self.trigger_check_button()
-            time.sleep(1.0)
-            self._discover_and_click_next_button(override_region=self.last_region)
-        elif check_btn and next_btn:
-            # Platform has Check Answer and Next visible
-            self.trigger_check_button()
-            time.sleep(0.8)
-            self.trigger_next_button()
-        elif next_btn:
-            self.trigger_next_button()
-        else:
-            self._discover_and_click_next_button(override_region=self.last_region)
+            logger.info("Manual Next Question triggered (F10).")
+            self.set_state(EngineState.NAVIGATING)
+            check_btn = self.last_result.get("check_button") if self.last_result else None
+            next_btn = self.last_result.get("next_button") if self.last_result else None
+            is_multi_part = self.last_result.get("is_multi_part", False) if self.last_result else False
+            advance_action = str(self.last_result.get("advance_action", "")).lower() if self.last_result else ""
 
-        # If in autonomous mode or chain multi-parts is enabled on a multi-part question, continue!
-        if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
-            logger.info("Continuing solve pipeline for next part/question after manual advance...")
-            time.sleep(1.2)
-            self.trigger_solve()
-        else:
-            self.set_state(EngineState.IDLE)
+            if advance_action == "scroll_down":
+                scroll_amt = int(self.last_result.get("scroll_amount", 450)) if self.last_result else 450
+                logger.info(f"Manual advance: AI detected scrolling quiz, scrolling down {scroll_amt}px...")
+                self._advance_by_scrolling_down(scroll_amt=scroll_amt, override_region=self.last_region)
+            elif check_btn and not next_btn:
+                # Platform only has Check Answer currently displayed
+                self.trigger_check_button()
+                time.sleep(1.0)
+                self._discover_and_click_next_button(override_region=self.last_region)
+            elif check_btn and next_btn:
+                # Platform has Check Answer and Next visible
+                self.trigger_check_button()
+                time.sleep(0.8)
+                self.trigger_next_button()
+            elif next_btn:
+                self.trigger_next_button()
+            else:
+                self._discover_and_click_next_button(override_region=self.last_region)
+
+            # If in autonomous mode or chain multi-parts is enabled on a multi-part question, continue!
+            if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
+                load_delay = max(2.0, self.config.auto_next_delay + 0.8)
+                logger.info(f"Manual advance: Waiting {load_delay:.1f}s for next question to render...")
+                self._handle_adjustment("⏳ Waiting for next question to load...")
+                time.sleep(load_delay)
+                logger.info("Continuing solve pipeline for next part/question after manual advance...")
+                self.set_state(EngineState.IDLE)
+                self.trigger_solve()
+            else:
+                self.set_state(EngineState.IDLE)
 
     def pause_resume(self):
         """Toggles pause/resume state."""

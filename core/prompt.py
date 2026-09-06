@@ -41,7 +41,7 @@ Your tasks are:
 4. UI ACTION LOCALIZATION:
    - Provide exact coordinates (x, y) required to input or select the answers on screen:
      * Radio buttons/Checkboxes: center coordinate (x, y) of the target option.
-     * Text/Numeric inputs: click coordinate (x, y) to focus, text to type, and clear_first = true if replacing text.
+     * Text/Numeric inputs: exact center click coordinate (x, y) inside the fill-in box to focus, text to type, and clear_first = true if replacing text.
      * Drag-and-drop / Matching: drag action with (from_x, from_y) and (to_x, to_y).
      * Dropdowns: click action to open, then click action for the item.
 

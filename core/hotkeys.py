@@ -3,6 +3,7 @@ Global Hotkey Manager for AVA School Assistant 2.
 Listens for system-wide key combinations and dispatches callbacks asynchronously.
 """
 
+import time
 import threading
 from typing import Dict, Callable, Optional
 from pynput import keyboard
@@ -25,12 +26,17 @@ def normalize_hotkey_str(key_str: str) -> str:
         "alt": "<alt>",
         "shift": "<shift>",
         "cmd": "<cmd>",
+        "win": "<cmd>",
+        "enter": "<enter>",
         "esc": "<esc>",
         "space": "<space>",
-        "enter": "<enter>",
         "tab": "<tab>",
         "backspace": "<backspace>",
         "delete": "<delete>",
+        "up": "<up>",
+        "down": "<down>",
+        "left": "<left>",
+        "right": "<right>",
     }
 
     for part in parts:
@@ -49,10 +55,12 @@ def normalize_hotkey_str(key_str: str) -> str:
 class GlobalHotkeyManager:
     """Manages system-wide hotkeys and event dispatching."""
 
-    def __init__(self):
+    def __init__(self, debounce_cooldown: float = 0.20):
         self.callbacks: Dict[str, Callable[[], None]] = {}
         self._listener: Optional[keyboard.GlobalHotKeys] = None
         self._lock = threading.Lock()
+        self._last_trigger_time: Dict[str, float] = {}
+        self._debounce_cooldown = debounce_cooldown
 
     def register_hotkey(self, name: str, key_str: str, callback: Callable[[], None]):
         """Registers a named callback for a hotkey."""
@@ -88,8 +96,16 @@ class GlobalHotkeyManager:
 
     def _create_dispatcher(self, name: str, callback: Callable[[], None]):
         def handler():
+            now = time.time()
+            with self._lock:
+                last_time = self._last_trigger_time.get(name, 0.0)
+                if now - last_time < self._debounce_cooldown:
+                    logger.debug(f"Hotkey '{name}' debounced ({now - last_time:.3f}s < {self._debounce_cooldown}s).")
+                    return
+                self._last_trigger_time[name] = now
+
             logger.info(f"Hotkey triggered: {name}")
             # Spawn in thread so long operations don't freeze the pynput loop
-            t = threading.Thread(target=callback, daemon=True)
+            t = threading.Thread(target=callback, daemon=True, name=f"HotkeyDispatcher-{name}")
             t.start()
         return handler

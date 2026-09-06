@@ -102,6 +102,11 @@ class AutomationExecutor:
         self.verifier = LocalVisualVerifier()
         self._stop_event = threading.Event()
         self._is_executing = False
+        self._input_stream_lock = threading.Lock()
+
+    def is_input_active(self) -> bool:
+        """Returns True if an automation input stream is currently active."""
+        return self._is_executing or self._input_stream_lock.locked()
 
     def request_stop(self):
         """Immediately signals any running automation sequence to halt."""
@@ -402,69 +407,106 @@ class AutomationExecutor:
                         if diff_ok and diff_score >= 1.6:
                             is_confirmed = True
                             verification_reason = f"pixel_diff (score={diff_score:.1f})"
-
-                # --- SMART ZERO-TOKEN RECOVERY PROBING ---
+                # --- SMART ZERO-TOKEN RECOVERY PROBING (EXACTLY UP TO 3 READJUSTMENTS) ---
                 # If primary click missed (e.g. coordinates landed on text label instead of radio circle):
                 if not is_confirmed:
+                    raw_candidates = []
+
+                    # 1. Search option band leftward for circular radio button / checkbox
+                    found_control = self.verifier.find_radio_or_checkbox_in_band(
+                        after_band, target_x, target_y, band_origin_x, band_origin_y, max_scan_left=90
+                    )
+                    if found_control and found_control != (target_x, target_y):
+                        raw_candidates.append(found_control)
+
+                    # 2. Visual center snapping from ROI
+                    snapped_x, snapped_y = self.verifier.find_visual_element_center(before_roi, target_x, target_y)
+                    if (snapped_x, snapped_y) != (target_x, target_y) and (snapped_x, snapped_y) not in raw_candidates:
+                        raw_candidates.append((snapped_x, snapped_y))
+
+                    # 3. Standard leftward web radio/checkbox offsets (common distances from label text to input control)
+                    for dx in [-35, -50, -22, -65, -15]:
+                        cand = (target_x + dx, target_y)
+                        if cand not in raw_candidates and cand != (target_x, target_y):
+                            raw_candidates.append(cand)
+
+                    # 4. Vertical tweaks if needed
+                    base_ref_x = found_control[0] if found_control else (target_x - 35)
+                    for dy in [-6, +6]:
+                        cand = (base_ref_x, target_y + dy)
+                        if cand not in raw_candidates and cand != (target_x, target_y):
+                            raw_candidates.append(cand)
+
+                    # Select exactly up to 3 distinct readjustment attempts
+                    readjustment_candidates = raw_candidates[:3]
+                    max_attempts = len(readjustment_candidates)
+
                     logger.warning(
                         f"Action [{action_type}] at ({target_x}, {target_y}) did not register answer state. "
-                        f"Initiating zero-token recovery probing..."
+                        f"Initiating zero-token recovery with up to {max_attempts} readjustment attempts..."
                     )
 
-                    recovery_candidates = []
-
-                    # Probe candidate 1: Search option band leftward for circular radio button / checkbox
-                    found_control = self.verifier.find_radio_or_checkbox_in_band(
-                        after_band, target_x, target_y, band_origin_x, band_origin_y, max_scan_left=80
-                    )
-                    if found_control:
-                        recovery_candidates.append(found_control)
-
-                    # Probe candidate 2: Visual center snapping from ROI
-                    snapped_x, snapped_y = self.verifier.find_visual_element_center(before_roi, target_x, target_y)
-                    if (snapped_x, snapped_y) != (target_x, target_y) and (snapped_x, snapped_y) not in recovery_candidates:
-                        recovery_candidates.append((snapped_x, snapped_y))
-
-                    # Probe candidates 3: Standard web radio offsets (radio circles standardly 20-50px left of text)
-                    for dx in [-24, -38, -52, -14]:
-                        cand = (target_x + dx, target_y)
-                        if cand not in recovery_candidates:
-                            recovery_candidates.append(cand)
-
-                    # Probe candidates 4: High-DPI vertical adjustments
-                    for dy in [-8, +8]:
-                        cand = (target_x, target_y + dy)
-                        if cand not in recovery_candidates:
-                            recovery_candidates.append(cand)
-
-                    # Execute recovery probes
-                    for probe_x, probe_y in recovery_candidates:
+                    for attempt_idx, (probe_x, probe_y) in enumerate(readjustment_candidates, 1):
                         self._check_stop()
                         offset_x = probe_x - target_x
                         offset_y = probe_y - target_y
-                        msg = f"🎯 Zero-token recovery: Retrying click at ({probe_x}, {probe_y}) [{offset_x:+d}px, {offset_y:+d}px]"
+                        msg = (
+                            f"🎯 Readjusting missed click (attempt {attempt_idx}/{max_attempts}): "
+                            f"({probe_x}, {probe_y}) [{offset_x:+d}px, {offset_y:+d}px]"
+                        )
                         logger.info(msg)
                         if self.on_adjustment_callback:
                             self.on_adjustment_callback(msg)
 
-                        # Retry click at probed coordinate without mouse variance
+                        # Capture baseline ROI at probe coordinate BEFORE clicking it
+                        before_probe_roi = self.verifier.capture_roi(probe_x, probe_y)
+
+                        # Perform readjusted click without mouse variance
                         self.click(probe_x, probe_y, double=is_double, allow_variance=False)
                         time.sleep(0.09)
 
-                        # Check if this probe successfully activated the radio button / checkbox
-                        probe_roi = self.verifier.capture_roi(probe_x, probe_y)
-                        p_sel, p_reason, p_conf = self.verifier.is_radio_or_checkbox_selected(probe_roi)
-                        p_diff_ok, p_diff_score = self.verifier.verify_action_completion(before_roi, probe_roi, action_type="click")
+                        # Capture local ROI at probe coordinate AFTER clicking it
+                        after_probe_roi = self.verifier.capture_roi(probe_x, probe_y)
+                        after_probe_band, _, _ = self.verifier.capture_band(
+                            target_x, target_y, offset_left=85, offset_right=35, radius_h=25
+                        )
 
-                        if p_sel or (p_diff_ok and p_diff_score >= 1.8):
-                            logger.info(f"[OK] Zero-token recovery SUCCESS at ({probe_x}, {probe_y}): {p_reason if p_sel else 'diff_confirmed'}")
+                        # 1. Direct radio / checkbox selection check at probe location
+                        p_sel, p_reason, p_conf = self.verifier.is_radio_or_checkbox_selected(after_probe_roi)
+
+                        # 2. Local pixel difference between before and after at probe location
+                        p_diff_ok, p_diff_score = self.verifier.verify_action_completion(
+                            before_probe_roi, after_probe_roi, action_type="click"
+                        )
+
+                        # 3. Check for option row highlight
+                        p_row_hl, p_hl_score = self.verifier.is_option_row_highlighted(before_band, after_probe_band)
+
+                        if p_sel or (p_diff_ok and p_diff_score >= 1.6) or p_row_hl:
+                            reason_str = p_reason if p_sel else ("row_highlight" if p_row_hl else f"diff_confirmed={p_diff_score:.1f}")
+                            logger.info(
+                                f"[OK] Zero-token recovery SUCCESS on readjustment {attempt_idx}/{max_attempts} "
+                                f"at ({probe_x}, {probe_y}): {reason_str}"
+                            )
                             is_confirmed = True
-                            verification_reason = f"recovery_{p_reason if p_sel else 'diff_confirmed'}"
+                            verification_reason = f"readjustment_attempt_{attempt_idx}_{reason_str}"
                             action["screen_x"] = probe_x
                             action["screen_y"] = probe_y
                             if "x" in action: action["x"] = probe_x
                             if "y" in action: action["y"] = probe_y
                             break
+                        else:
+                            logger.warning(
+                                f"Readjustment attempt {attempt_idx}/{max_attempts} at ({probe_x}, {probe_y}) "
+                                f"failed to confirm selection."
+                            )
+
+                    if not is_confirmed:
+                        logger.warning(
+                            f"Action [{action_type}] missed after {max_attempts} readjustments. Giving up."
+                        )
+                        if self.on_adjustment_callback:
+                            self.on_adjustment_callback(f"⚠️ Action missed after {max_attempts} readjustments. Press F9 to retry.")
 
             action["verified"] = is_confirmed
             action["verification_reason"] = verification_reason
@@ -475,49 +517,58 @@ class AutomationExecutor:
             tx = action.get("screen_to_x", action.get("to_x"))
             ty = action.get("screen_to_y", action.get("to_y"))
 
-            start_before = None
-            dest_before = None
-            if self.local_verification_enabled and all(v is not None for v in [fx, fy, tx, ty]):
-                start_before = self.verifier.capture_roi(int(fx), int(fy))
-                dest_before = self.verifier.capture_roi(int(tx), int(ty))
+            if fx is not None and fy is not None and tx is not None and ty is not None:
+                start_x, start_y = int(fx), int(fy)
+                end_x, end_y = int(tx), int(ty)
 
-            if all(v is not None for v in [fx, fy, tx, ty]):
-                self.drag(int(fx), int(fy), int(tx), int(ty))
+                # Local verification: capture baseline before drag
+                start_before = None
+                dest_before = None
+                if self.local_verification_enabled:
+                    start_before = self.verifier.capture_roi(start_x, start_y)
+                    dest_before = self.verifier.capture_roi(end_x, end_y)
 
-            is_drag_ok = True
-            drag_reason = "unverified"
-            if self.local_verification_enabled and start_before and dest_before:
-                time.sleep(0.08)
-                start_after = self.verifier.capture_roi(int(fx), int(fy))
-                dest_after = self.verifier.capture_roi(int(tx), int(ty))
-                is_drag_ok, drag_reason = self.verifier.verify_drag_completion(
-                    start_before, start_after, dest_before, dest_after
-                )
-                if not is_drag_ok:
-                    logger.warning(f"Drag action failed zero-token confirmation ({drag_reason}). Retrying with extended hold...")
-                    self.drag(int(fx), int(fy), int(tx), int(ty), duration=0.75)
-                    time.sleep(0.08)
-                    start_after2 = self.verifier.capture_roi(int(fx), int(fy))
-                    dest_after2 = self.verifier.capture_roi(int(tx), int(ty))
+                self.drag(start_x, start_y, end_x, end_y)
+
+                # Post-drag local verification
+                is_drag_ok = True
+                drag_reason = "unverified"
+                if self.local_verification_enabled and start_before and dest_before:
+                    time.sleep(0.1)
+                    start_after = self.verifier.capture_roi(start_x, start_y)
+                    dest_after = self.verifier.capture_roi(end_x, end_y)
                     is_drag_ok, drag_reason = self.verifier.verify_drag_completion(
-                        start_before, start_after2, dest_before, dest_after2
+                        start_before, start_after, dest_before, dest_after
                     )
-                    if is_drag_ok:
-                        drag_reason = f"recovery_{drag_reason}"
+                    # Fallback retry if drag dropped short
+                    if not is_drag_ok:
+                        logger.warning("Drag unconfirmed. Retrying with slightly extended release...")
+                        self.drag(start_x, start_y, end_x, end_y + 4, duration=0.6)
+                        time.sleep(0.1)
+                        dest_after2 = self.verifier.capture_roi(end_x, end_y)
+                        is_drag_ok, drag_reason = self.verifier.verify_drag_completion(
+                            start_before, start_after, dest_before, dest_after2
+                        )
+                        if is_drag_ok:
+                            drag_reason = f"recovery_{drag_reason}"
 
-            action["verified"] = is_drag_ok
-            action["verification_reason"] = drag_reason
+                action["verified"] = is_drag_ok
+                action["verification_reason"] = drag_reason
 
         elif action_type == "type_text":
             text = action.get("text", "")
             clear_first = action.get("clear_first", False)
 
             before_input_roi = None
-            if self.local_verification_enabled and x is not None and y is not None:
-                before_input_roi = self.verifier.capture_roi(int(x), int(y))
+            focus_x = int(x) if x is not None else None
+            focus_y = int(y) if y is not None else None
 
-            if x is not None and y is not None:
-                self.click(int(x), int(y), allow_variance=False)
+            if focus_x is not None and focus_y is not None:
+                if self.local_verification_enabled:
+                    before_input_roi = self.verifier.capture_roi(focus_x, focus_y)
+
+                # Focus directly on the center of the fill-in box without variance
+                self.click(focus_x, focus_y, allow_variance=False)
                 time.sleep(0.1)
 
             if clear_first:
@@ -532,15 +583,15 @@ class AutomationExecutor:
             # Post-typing verification: verify text entered the input
             is_filled = True
             f_reason = "unverified"
-            if self.local_verification_enabled and x is not None and y is not None:
+            if self.local_verification_enabled and focus_x is not None and focus_y is not None:
                 time.sleep(0.08)
-                after_input_roi = self.verifier.capture_roi(int(x), int(y))
+                after_input_roi = self.verifier.capture_roi(focus_x, focus_y)
                 is_filled, f_reason, f_conf = self.verifier.is_text_input_filled(after_input_roi, before_input_roi)
 
-                # Smart Zero-Token Recovery for typing: If empty, snap center, click firmly and retype
+                # Smart Zero-Token Recovery for typing: If empty, re-focus and retype
                 if not is_filled:
                     logger.warning(f"Type text unconfirmed ({f_reason}). Retrying input focus and retyping...")
-                    snapped_x, snapped_y = self.verifier.find_visual_element_center(before_input_roi, int(x), int(y)) if before_input_roi else (int(x), int(y))
+                    snapped_x, snapped_y = self.verifier.find_visual_element_center(before_input_roi, focus_x, focus_y) if before_input_roi else (focus_x, focus_y)
                     self.click(snapped_x, snapped_y, allow_variance=False)
                     time.sleep(0.08)
                     self.key_press("ctrl+a")
@@ -625,8 +676,21 @@ class AutomationExecutor:
         """
         Executes a sequence of actions with delay between each, dynamic blank shift tracking,
         and zero-token action verification.
+        Guarantees mutual exclusion so two input streams can NEVER run at once.
         Returns a verification summary dict.
         """
+        if not self._input_stream_lock.acquire(blocking=False):
+            logger.warning("Safeguard engaged: An automation input stream is already active! Refusing concurrent input sequence.")
+            if self.on_adjustment_callback:
+                self.on_adjustment_callback("⚠️ Safeguard: Prevented concurrent input stream collision")
+            return {
+                "all_verified": False,
+                "verified_count": 0,
+                "total_verifiable": len(actions),
+                "error": "concurrent_input_prevented",
+                "actions": actions
+            }
+
         self.reset_stop()
         self._is_executing = True
         try:
@@ -686,3 +750,7 @@ class AutomationExecutor:
             }
         finally:
             self._is_executing = False
+            try:
+                self._input_stream_lock.release()
+            except RuntimeError:
+                pass

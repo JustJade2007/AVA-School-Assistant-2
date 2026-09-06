@@ -124,7 +124,10 @@ class MemoryLogHandler(logging.Handler):
             msg = self.format(record)
             tb = None
             if record.exc_info:
-                tb = self.formatException(record.exc_info)
+                if self.formatter:
+                    tb = self.formatter.formatException(record.exc_info)
+                else:
+                    tb = logging.Formatter().formatException(record.exc_info)
 
             # Extract formatted time
             t = record.created

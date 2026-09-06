@@ -5,6 +5,7 @@ visual center snapping, and dynamic fill-in-the-blank template tracking.
 """
 
 import math
+import random
 import logging
 from typing import Tuple, Optional, Dict, Any, List
 from PIL import Image, ImageChops, ImageStat, ImageFilter
@@ -163,6 +164,151 @@ class LocalVisualVerifier:
             logger.debug(f"find_visual_element_center fallback: {e}")
 
         return center_screen_x, center_screen_y
+
+    def measure_and_target_input_box(
+        self,
+        roi_img: Optional[Image.Image],
+        center_screen_x: int,
+        center_screen_y: int
+    ) -> Tuple[int, int, Dict[str, Any]]:
+        """
+        Measures the boundary dimensions (width, height) of an input/fill-in box from a local crop,
+        computes the middle 50% sub-region (leaving 25% safety margins from all outer borders),
+        and selects a random spot inside that middle 50% area for high-accuracy focusing.
+
+        Returns: (chosen_screen_x, chosen_screen_y, metadata_dict)
+        """
+        fallback_meta = {
+            "detected": False,
+            "box_width": 0,
+            "box_height": 0,
+            "middle_50_bounds": None
+        }
+        if roi_img is None:
+            return center_screen_x, center_screen_y, fallback_meta
+
+        try:
+            w, h = roi_img.size
+            if w < 16 or h < 12:
+                return center_screen_x, center_screen_y, fallback_meta
+
+            gray = roi_img.convert("L")
+            edges = gray.filter(ImageFilter.FIND_EDGES)
+            edge_data = edges.load()
+
+            roi_mid_x = w // 2
+            roi_mid_y = h // 2
+
+            # Find outer rectangular bounding edges of the input field
+            # Scan outward horizontally and vertically from center to find boundary strokes
+            min_x, max_x = 0, w - 1
+            min_y, max_y = 0, h - 1
+
+            # Detect top edge (scanning upwards from center)
+            found_top = None
+            for y in range(roi_mid_y, max(1, roi_mid_y - (h // 2 - 2)), -1):
+                row_edge_hits = sum(1 for x in range(max(2, roi_mid_x - 30), min(w - 2, roi_mid_x + 30)) if edge_data[x, y] > 38)
+                if row_edge_hits >= 12:
+                    found_top = y
+                    break
+
+            # Detect bottom edge (scanning downwards from center)
+            found_bottom = None
+            for y in range(roi_mid_y, min(h - 2, roi_mid_y + (h // 2 - 2))):
+                row_edge_hits = sum(1 for x in range(max(2, roi_mid_x - 30), min(w - 2, roi_mid_x + 30)) if edge_data[x, y] > 38)
+                if row_edge_hits >= 12:
+                    found_bottom = y
+                    break
+
+            # Detect left edge (scanning leftwards from center)
+            found_left = None
+            for x in range(roi_mid_x, max(1, roi_mid_x - (w // 2 - 2)), -1):
+                col_edge_hits = sum(1 for y in range(max(2, roi_mid_y - 10), min(h - 2, roi_mid_y + 10)) if edge_data[x, y] > 38)
+                if col_edge_hits >= 6:
+                    found_left = x
+                    break
+
+            # Detect right edge (scanning rightwards from center)
+            found_right = None
+            for x in range(roi_mid_x, min(w - 2, roi_mid_x + (w // 2 - 2))):
+                col_edge_hits = sum(1 for y in range(max(2, roi_mid_y - 10), min(h - 2, roi_mid_y + 10)) if edge_data[x, y] > 38)
+                if col_edge_hits >= 6:
+                    found_right = x
+                    break
+
+            # If edge scan didn't find all 4 bounds, fallback to element boundary thresholding
+            if not (found_top and found_bottom and found_left and found_right):
+                search_rx = min(w // 2 - 2, 70)
+                search_ry = min(h // 2 - 2, 25)
+                ex_pts = []
+                for y in range(roi_mid_y - search_ry, roi_mid_y + search_ry):
+                    for x in range(roi_mid_x - search_rx, roi_mid_x + search_rx):
+                        if edge_data[x, y] > 40:
+                            ex_pts.append((x, y))
+                if len(ex_pts) >= 20:
+                    xs = [p[0] for p in ex_pts]
+                    ys = [p[1] for p in ex_pts]
+                    min_x = found_left if found_left is not None else min(xs)
+                    max_x = found_right if found_right is not None else max(xs)
+                    min_y = found_top if found_top is not None else min(ys)
+                    max_y = found_bottom if found_bottom is not None else max(ys)
+                else:
+                    # Generic input box estimation (standard 80x28)
+                    min_x = max(2, roi_mid_x - 35)
+                    max_x = min(w - 2, roi_mid_x + 35)
+                    min_y = max(2, roi_mid_y - 12)
+                    max_y = min(h - 2, roi_mid_y + 12)
+            else:
+                min_x, max_x = found_left, found_right
+                min_y, max_y = found_top, found_bottom
+
+            box_w = max_x - min_x
+            box_h = max_y - min_y
+
+            if box_w >= 14 and box_h >= 8:
+                # Calculate the middle 50% region (leaving 25% safety margins from all edges)
+                mid50_min_x = int(min_x + 0.25 * box_w)
+                mid50_max_x = int(max_x - 0.25 * box_w)
+                mid50_min_y = int(min_y + 0.25 * box_h)
+                mid50_max_y = int(max_y - 0.25 * box_h)
+
+                if mid50_min_x > mid50_max_x:
+                    mid50_min_x = mid50_max_x = (min_x + max_x) // 2
+                if mid50_min_y > mid50_max_y:
+                    mid50_min_y = mid50_max_y = (min_y + max_y) // 2
+
+                # Pick a random spot inside the middle 50% box
+                chosen_roi_x = random.randint(mid50_min_x, mid50_max_x)
+                chosen_roi_y = random.randint(mid50_min_y, mid50_max_y)
+
+                offset_x = chosen_roi_x - roi_mid_x
+                offset_y = chosen_roi_y - roi_mid_y
+
+                target_x = center_screen_x + offset_x
+                target_y = center_screen_y + offset_y
+
+                meta = {
+                    "detected": True,
+                    "box_width": box_w,
+                    "box_height": box_h,
+                    "middle_50_bounds": (mid50_min_x, mid50_min_y, mid50_max_x, mid50_max_y),
+                    "screen_bounds": (
+                        center_screen_x - roi_mid_x + min_x,
+                        center_screen_y - roi_mid_y + min_y,
+                        center_screen_x - roi_mid_x + max_x,
+                        center_screen_y - roi_mid_y + max_y
+                    )
+                }
+                logger.info(
+                    f"Input box measured: {box_w}x{box_h}px. Selected random spot in middle 50%: "
+                    f"({center_screen_x}, {center_screen_y}) -> ({target_x}, {target_y}) [offset=+({offset_x},{offset_y})]"
+                )
+                return target_x, target_y, meta
+
+        except Exception as e:
+            logger.debug(f"measure_and_target_input_box error: {e}")
+
+        return center_screen_x, center_screen_y, fallback_meta
 
     def track_shifted_input_box(
         self,
@@ -547,7 +693,7 @@ class LocalVisualVerifier:
 
             if is_act_verified:
                 verified_count += 1
-                if "recovery" in reason:
+                if "recovery" in reason or "readjustment" in reason:
                     recovery_used = True
                 reasons.append(f"Act #{i+1}: {reason}")
             else:

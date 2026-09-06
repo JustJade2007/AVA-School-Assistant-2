@@ -9,7 +9,7 @@ import sys
 import tkinter as tk
 from typing import List, Dict, Any, Optional
 
-from core.cloaking import apply_anti_capture
+from core.cloaking import apply_anti_capture, make_window_click_through
 
 
 class CloakedVisualizer:
@@ -49,9 +49,10 @@ class CloakedVisualizer:
         )
         self.canvas.pack(fill="both", expand=True)
 
-        # Apply anti-screen capture affinity
+        # Apply anti-screen capture affinity and make window click-through
         self.window.update()
         apply_anti_capture(self.window)
+        make_window_click_through(self.window)
 
     def draw_actions(
         self,
@@ -63,6 +64,8 @@ class CloakedVisualizer:
         """Draws circles, numbers, arrows, and button markers over proposed action coordinates."""
         self._ensure_window()
         self.canvas.delete("all")
+        # Ensure click-through remains active after redraw
+        make_window_click_through(self.window)
 
         step = 1
         for action in actions:

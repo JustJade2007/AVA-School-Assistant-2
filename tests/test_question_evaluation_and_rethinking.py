@@ -211,6 +211,98 @@ class TestQuestionEvaluationAndRethinking(unittest.TestCase):
             # In manual mode, it should recognize already correct and prompt next
             self.assertIn("already marked CORRECT", self.engine.last_verification_detail)
 
+    def test_engine_advances_after_correcting_incorrect_answer(self):
+        """
+        CRITICAL BUG REPRODUCTION & FIX VERIFICATION:
+        When a question was marked 'incorrect' on platform, ready_to_advance was initially False.
+        After AI rethinks and enters the corrected answer (zero-token verified),
+        the engine MUST reset ready_to_advance to True and press the Next button, NOT give up!
+        """
+        self.engine.config_manager.config.autonomous_mode = True
+        self.engine.config_manager.config.auto_next = True
+
+        # Solution entering the rethought answer (initially ready_to_advance is False due to incorrect status)
+        self.engine.last_result = {
+            "evaluation_status": "incorrect",
+            "is_rethinking": True,
+            "rethink_reasoning": "Platform rejected earlier answer 12. Corrected to 24.",
+            "ready_to_advance": False,  # Forced False during rethink analysis
+            "actions": [{"type": "type_text", "text": "24", "screen_x": 450, "screen_y": 550, "verified": True}],
+            "next_button": {"screen_x": 900, "screen_y": 950}
+        }
+
+        self.engine.executor.execute_action_sequence = MagicMock(return_value={"all_verified": True})
+        self.engine.trigger_next_button = MagicMock()
+        self.engine.trigger_solve = MagicMock()
+
+        self.engine.execute_current_solution()
+
+        # Invariant 1: ready_to_advance MUST be restored to True
+        self.assertTrue(self.engine.last_result["ready_to_advance"])
+        # Invariant 2: is_rethinking MUST be cleared
+        self.assertFalse(self.engine.last_result["is_rethinking"])
+        # Invariant 3: Next button MUST be pressed (never aborted or given up!)
+        self.engine.trigger_next_button.assert_called_once()
+        # Invariant 4: Autonomous loop MUST continue
+        self.engine.trigger_solve.assert_called_once()
+
+    def test_engine_advances_after_retrying_missed_action(self):
+        """
+        Verifies that if a click missed initially (causing ready_to_advance=False),
+        upon successfully executing and confirming the corrected action, ready_to_advance is True
+        and auto-advance clicks Next.
+        """
+        self.engine.config_manager.config.autonomous_mode = True
+        self.engine.config_manager.config.auto_next = True
+
+        # Simulation: previous attempt failed zero-token verification, setting ready_to_advance=False and action_missed=True
+        self.engine.last_result = {
+            "evaluation_status": "unsubmitted",
+            "action_missed": True,
+            "ready_to_advance": False,  # from previous missed action
+            "actions": [{"type": "click", "screen_x": 500, "screen_y": 500, "verified": True}],
+            "next_button": {"screen_x": 800, "screen_y": 900}
+        }
+
+        self.engine.executor.execute_action_sequence = MagicMock(return_value={"all_verified": True})
+        self.engine.trigger_next_button = MagicMock()
+        self.engine.trigger_solve = MagicMock()
+
+        self.engine.execute_current_solution()
+
+        self.assertTrue(self.engine.last_result["ready_to_advance"])
+        self.engine.trigger_next_button.assert_called_once()
+        self.engine.trigger_solve.assert_called_once()
+
+    def test_next_button_transition_fallback_to_discovery(self):
+        """
+        Verifies that if clicking next_button does not transition the screen,
+        the engine immediately falls back to dynamic navigation button discovery.
+        """
+        self.engine.config_manager.config.autonomous_mode = False
+        self.engine.config_manager.config.auto_next = True
+        self.engine.config_manager.config.local_verification_enabled = True
+
+        self.engine.last_result = {
+            "ready_to_advance": True,
+            "actions": [{"type": "click", "screen_x": 500, "screen_y": 500, "verified": True}],
+            "next_button": {"screen_x": 800, "screen_y": 900}
+        }
+
+        dummy_img = Image.new("RGB", (100, 100), (255, 255, 255))
+        self.engine.capture.capture_screen = MagicMock(return_value=dummy_img)
+        self.engine.executor.execute_action_sequence = MagicMock(return_value={"all_verified": True})
+        self.engine.trigger_next_button = MagicMock()
+        # Mock transition failure (e.g. diff was zero, page stayed identical)
+        self.engine.verifier.verify_screen_transition = MagicMock(return_value={"transitioned": False, "details": "no change"})
+        self.engine._discover_and_click_next_button = MagicMock(return_value=True)
+
+        self.engine.execute_current_solution()
+
+        self.engine.trigger_next_button.assert_called_once()
+        # Must fall back to discover_and_click_next_button!
+        self.engine._discover_and_click_next_button.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

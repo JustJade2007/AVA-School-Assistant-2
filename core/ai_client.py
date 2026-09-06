@@ -6,6 +6,7 @@ to process screenshots and return structured solving and coordinate data.
 
 import json
 import re
+import random
 from typing import Dict, Any, Optional, Tuple, List
 import requests
 
@@ -234,9 +235,14 @@ class AIClient:
             logger.warning(f"Could not parse navigation detection JSON: {e}")
             return None
 
-        next_btn = result.get("next_button")
-        if not next_btn and result.get("button"):
-            next_btn = result.get("button")
+        next_btn = (
+            result.get("next_button")
+            or result.get("button")
+            or result.get("continue_button")
+            or result.get("submit_button")
+            or result.get("navigation_button")
+            or result.get("action_button")
+        )
 
         if next_btn and isinstance(next_btn, dict):
             # Scale coordinates back to global desktop screen space
@@ -528,11 +534,18 @@ class AIClient:
 
         def _process_action(action: Dict[str, Any], context_label: str = ""):
             action_type = action.get("type", "action")
-            # Support box_2d: [ymin, xmin, ymax, xmax] if provided
-            if "box_2d" in action and isinstance(action["box_2d"], (list, tuple)) and len(action["box_2d"]) == 4:
+            # Support box_2d: [ymin, xmin, ymax, xmax] fallback only if x and y are not provided
+            if ("x" not in action or "y" not in action) and "box_2d" in action and isinstance(action["box_2d"], (list, tuple)) and len(action["box_2d"]) == 4:
                 b = action["box_2d"]
-                action["x"] = (b[1] + b[3]) / 2.0
-                action["y"] = (b[0] + b[2]) / 2.0
+                ymin, xmin, ymax, xmax = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+                # Check if coordinates are 0..1 normalized instead of 0..1000
+                if max(ymin, xmin, ymax, xmax) <= 1.0:
+                    ymin *= 1000.0
+                    xmin *= 1000.0
+                    ymax *= 1000.0
+                    xmax *= 1000.0
+                action["x"] = (xmin + xmax) / 2.0
+                action["y"] = (ymin + ymax) / 2.0
 
             if "x" in action and "y" in action:
                 sx, sy = _translate_point(float(action["x"]), float(action["y"]))

@@ -10,6 +10,18 @@ The version format is `1.2.3.a`:
 
 ---
 
+## [1.3.1.a] - 2026-09-06
+
+### Fixed
+- **Auto-Advance Recovery After Correcting Answers (`core/assistant_engine.py`)**:
+  - Resolved an issue where AVA aborted auto-advance and went `IDLE` ("Incomplete parts remaining") after re-entering a corrected answer or retrying a missed action.
+  - When the AI rethinks an incorrect answer or retries a missed click/typing action, zero-token verification verifies that the answer is in place (`is_answered = True`). The engine now immediately clears `is_rethinking`, resets `action_missed`, and restores `ready_to_advance = True` (provided all other parts are completed).
+  - AVA proceeds directly to submit/advance and click the Next button without stopping or giving up.
+- **Screen Transition Verification with Dynamic Navigation Fallback (`core/assistant_engine.py`)**:
+  - Added screen transition verification (`verify_screen_transition`) when clicking known `next_button` elements.
+  - If a clicked Next button does not transition the screen (e.g. coordinates shifted, button disabled until post-submit, or platform layout changed), AVA immediately falls back to dynamic navigation button discovery (`_discover_and_click_next_button`) instead of failing silently.
+  - When dynamic navigation detection clicks a Submit or Check button, AVA now waits for the platform to reveal the Next button, performs a secondary scan, and clicks the revealed Next button automatically.
+
 ## [1.3.0.a] - 2026-09-06
 
 ### Added

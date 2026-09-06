@@ -133,7 +133,7 @@ class SettingsWindow(ctk.CTkToplevel):
         model_input_frame.grid(row=1, column=1, sticky="w", padx=12, pady=6)
 
         current_provider = (self.config.ai_provider or "gemini").lower()
-        initial_models = AVAILABLE_MODELS.get(current_provider, ["gemini-3.6-flash", "gemini-3.5-flash-lite"])
+        initial_models = AVAILABLE_MODELS.get(current_provider, ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"])
 
         self.combo_model = ctk.CTkComboBox(model_input_frame, values=initial_models, width=200)
         self.combo_model.pack(side="left")
@@ -239,7 +239,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         provider = provider.lower()
         models = AVAILABLE_MODELS.get(provider, [])
-        for m in models[:4]:
+        for m in models[:5]:
             chip_label = m
             if chip_label.startswith("gemini-"):
                 chip_label = chip_label.replace("gemini-", "⚡ ")

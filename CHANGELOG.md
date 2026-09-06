@@ -10,6 +10,38 @@ The version format is `1.2.3.a`:
 
 ---
 
+## [1.3.3.a] - 2026-09-06
+
+### Fixed
+- **Next Button Duplicate Click Debouncing & Rate Limiting (`core/assistant_engine.py`)**:
+  - Added thread-safe navigation rate-limiting (`_can_click_next` with 2.0s minimum interval) in `trigger_next_button` and `_discover_and_click_next_button`.
+  - Suppressed duplicate clicks caused by race conditions or secondary fallback scans triggering while the page is already loading.
+  - Replaced single 0.4s screen transition check with multi-interval polling (up to 1.4s) to accommodate web SPA rendering delays without prematurely triggering fallback navigation clicks.
+- **Unanswered Question Advance & Skip Prevention (`core/prompt.py`, `core/ai_client.py`, `core/assistant_engine.py`)**:
+  - Enforced critical safety invariants across prompt rules, coordinate mapping, and solution execution prohibiting advancing or clicking Next when questions or multi-part items remain unsubmitted or unanswered.
+  - AIClient forces `ready_to_advance = False` whenever an unsubmitted question has 0 actions or incomplete items.
+  - Hardened platform evaluation heuristics so local green pixel markers cannot override an AI-detected `unsubmitted` status.
+  - In multi-part questions, gating advance strictly on completion of all sub-parts (`has_pending_items = False`).
+
+## [1.3.2.a] - 2026-09-06
+
+### Added
+- **Per-Input Failsafe Verification & 3-Stage Zero-Token Recovery (`core/automation.py`, `core/local_verifier.py`, `core/assistant_engine.py`)**:
+  - Implemented immediate zero-token failsafe verification after *each* individual input action (clicks and typing keystrokes).
+  - If typing verification detects empty input or unconfirmed text insertion, automatically executes 3-stage zero-token recovery (box contour centroid targeting, double-click activation, inner left-margin offset) without extra token expenditure.
+  - Per-input verification results tracked in `execute_action_sequence`; `AssistantEngine` gates answer confirmation on zero `failed_inputs`.
+- **Dropdown Question Inspection Architecture (`core/prompt.py`, `core/ai_client.py`, `core/assistant_engine.py`)**:
+  - Added `open_dropdown` / `inspect_dropdown` capability for dropdown-based questions with arrows or unstated options.
+  - AVA clicks the dropdown trigger, visually verifies option expansion, captures the revealed menu as a supplementary view (`extra_images`), and cleanly dismisses the dropdown with Escape before selecting the correct option.
+- **Softlock Prevention on Pre-Next & Second-Next Screen Checks (`core/assistant_engine.py`)**:
+  - When checking for or clicking the second Next button, AVA inspects the screen with zero-token grading heuristics (`detect_platform_evaluation_markers`).
+  - If the question was visually graded incorrect (e.g. red rejection markers or error alerts), AVA halts advance immediately, sets `evaluation_status = "incorrect"`, and triggers the rethink solve pipeline, preventing softlocking in continuous incorrect loops.
+- **Fill-In-The-Blank Input Box Targeting (`core/prompt.py`, `core/ai_client.py`, `core/local_verifier.py`, `core/assistant_engine.py`)**:
+  - Model outputs `box_2d` bounding boxes for text inputs; client preserves `box_screen`.
+  - Refined contour detection snaps click targets to the center of the middle 50% horizontal span of input fields to ensure accurate clicks regardless of screen position.
+- **Positive Feedback Modal Handling (`core/prompt.py`, `core/assistant_engine.py`)**:
+  - Instructed vision prompt to prioritize semantic positive feedback ("Correct!", green checkmarks) over raw pixel heuristics, preventing wasteful rethinking loops when an answer is already verified correct.
+
 ## [1.3.1.a] - 2026-09-06
 
 ### Fixed

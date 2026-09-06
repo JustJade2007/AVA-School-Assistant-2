@@ -70,6 +70,10 @@ class AssistantEngine:
         self.executor.verifier = self.verifier
         self.executor.on_adjustment_callback = self._handle_adjustment
 
+        # Navigation Next Button Debounce & Cooldown
+        self._last_next_click_time: float = 0.0
+        self._next_click_lock = threading.Lock()
+
         # Update executor parameters on init
         self._sync_config()
         self.config_manager.add_listener(lambda cfg: self._sync_config())
@@ -121,6 +125,29 @@ class AssistantEngine:
                 cb(message)
             except Exception as e:
                 logger.error(f"Error in adjustment callback: {e}")
+
+    def _can_click_next(self, min_interval: float = 2.2) -> bool:
+        """
+        Guards against duplicate/rapid Next button clicks.
+        Returns True if enough time has passed since the last Next click, otherwise False.
+        """
+        with self._next_click_lock:
+            now = time.time()
+            elapsed = now - self._last_next_click_time
+            if elapsed < min_interval:
+                logger.warning(
+                    f"Navigation debounce: Next button was clicked {elapsed:.2f}s ago "
+                    f"(min interval {min_interval:.1f}s). Suppressing duplicate Next click to avoid skipping questions!"
+                )
+                self._handle_adjustment("⚠️ Suppressed duplicate Next button click")
+                return False
+            self._last_next_click_time = now
+            return True
+
+    def _record_next_click(self):
+        """Records timestamp of an executed Next click."""
+        with self._next_click_lock:
+            self._last_next_click_time = time.time()
 
     def set_state(self, new_state: EngineState, detail: str = ""):
         with self._state_lock:
@@ -207,8 +234,15 @@ class AssistantEngine:
                 logger.debug(f"Error checking local evaluation markers: {e}")
 
         # Combine signals:
-        # 1. If AI or visual markers explicitly indicate incorrect
-        if eval_status in ["incorrect", "wrong"] or any_item_incorrect or (local_markers.get("detected") and local_markers.get("status") == "incorrect"):
+        # 1. If AI explicitly marks correct, prioritize AI semantic understanding over simple pixel color count
+        if eval_status in ["correct", "right"] or (all_items_correct and not any_item_incorrect):
+            final_status = "correct"
+            is_answered = True
+            is_rethinking = False
+            details = f"marked_correct (ai={eval_status}, visual={local_markers.get('details', '')})"
+
+        # 2. If AI or visual markers indicate incorrect
+        elif eval_status in ["incorrect", "wrong"] or any_item_incorrect or (local_markers.get("detected") and local_markers.get("status") == "incorrect"):
             final_status = "incorrect"
             is_answered = False  # NEVER considered answered when marked incorrect!
             is_rethinking = True
@@ -216,23 +250,27 @@ class AssistantEngine:
                 rethink_reasoning = "Question marked incorrect by platform. Rethinking problem and entry format."
             details = f"marked_incorrect (ai={eval_status}, visual={local_markers.get('details', '')})"
 
-        # 2. If AI or visual markers explicitly indicate correct
-        elif eval_status in ["correct", "right"] or all_items_correct or (local_markers.get("detected") and local_markers.get("status") == "correct"):
+        # 3. If visual markers explicitly indicate correct AND AI did not categorize as unsubmitted
+        elif local_markers.get("detected") and local_markers.get("status") == "correct" and eval_status != "unsubmitted":
             final_status = "correct"
             is_answered = True
             is_rethinking = False
-            details = f"marked_correct (ai={eval_status}, visual={local_markers.get('details', '')})"
+            details = f"marked_correct (visual={local_markers.get('details', '')})"
 
-        # 3. Otherwise, unsubmitted
+        # 4. Otherwise, unsubmitted
         else:
             final_status = "unsubmitted"
             is_rethinking = False
             has_answer = bool(res.get("answer") and res.get("answer") not in ["Answer determined", ""])
-            is_answered = has_answer
+            # Invariant: An unsubmitted question has NOT been answered on screen yet!
+            is_answered = False
             details = f"unsubmitted (draft_ready={has_answer})"
 
-        ready_to_advance = (final_status == "correct" or (final_status == "unsubmitted" and res.get("ready_to_advance", False)))
-        if final_status == "incorrect":
+        # Invariant: Unsubmitted questions cannot advance until actions are executed on screen!
+        if final_status == "correct":
+            ready_to_advance = True
+        else:
+            # For unsubmitted or incorrect questions, advancing is strictly gated
             ready_to_advance = False
 
         self.last_verification_detail = details
@@ -416,6 +454,63 @@ class AssistantEngine:
                                 offset_y=offset_y
                             )
                             time.sleep(0.3)
+
+                elif info_type in ["open_dropdown", "inspect_dropdown"]:
+                    drop_btn = result.get("dropdown_button") or result.get("reference_button")
+                    if drop_btn and isinstance(drop_btn, dict):
+                        dx = drop_btn.get("screen_x", drop_btn.get("x"))
+                        dy = drop_btn.get("screen_y", drop_btn.get("y"))
+                        if dx is not None and dy is not None:
+                            drop_desc = drop_btn.get("description", "dropdown menu")
+                            logger.info(f"Inspecting dropdown options: '{drop_desc}' at ({dx}, {dy})...")
+                            self.set_state(EngineState.INSPECTING, f"Opening dropdown {drop_desc}...")
+                            self._handle_adjustment(f"🔍 Inspecting dropdown: {drop_desc}")
+
+                            baseline_img = None
+                            try:
+                                baseline_img = self.capture.capture_screen(region=region)
+                            except Exception as e:
+                                logger.debug(f"Baseline capture unavailable: {e}")
+
+                            # Click dropdown arrow/field to expand the options list
+                            self.executor.click(int(dx), int(dy), allow_variance=False)
+                            time.sleep(0.7)
+
+                            # Zero-token verification: verify dropdown opened
+                            if self.config.local_verification_enabled and baseline_img:
+                                try:
+                                    opened_img = self.capture.capture_screen(region=region)
+                                    menu_opened, open_diff = self.verifier.verify_screen_transition(baseline_img, opened_img, min_diff=1.2)
+                                    if not menu_opened:
+                                        logger.warning(f"Dropdown open unconfirmed (diff={open_diff:.1f}). Retrying click firmly...")
+                                        self.executor.click(int(dx), int(dy), allow_variance=False)
+                                        time.sleep(0.7)
+                                except Exception as e:
+                                    logger.debug(f"Error checking dropdown open: {e}")
+
+                            # Capture the revealed options list
+                            drop_b64, _, _, _, _, _, _ = self.capture.capture_and_encode(
+                                region=region,
+                                max_dimension=self.config.max_capture_dimension
+                            )
+                            extra_images.append(drop_b64)
+
+                            # Dismiss dropdown cleanly via Escape to restore question screen
+                            logger.info("Closing dropdown menu to restore screen state...")
+                            self.executor.key_press("escape")
+                            time.sleep(0.3)
+
+                            # If Escape didn't restore screen (some dropdowns close on re-click), click to toggle
+                            if self.config.local_verification_enabled and baseline_img:
+                                try:
+                                    closed_img = self.capture.capture_screen(region=region)
+                                    is_closed, diff = self.verifier.verify_modal_dismissed(baseline_img, closed_img)
+                                    if not is_closed:
+                                        logger.info("Escape did not close dropdown, clicking dropdown button to toggle closed...")
+                                        self.executor.click(int(dx), int(dy), allow_variance=False)
+                                        time.sleep(0.3)
+                                except Exception as e:
+                                    logger.debug(f"Error verifying dropdown close: {e}")
 
                 elif info_type == "scroll_down":
                     scroll_amt = int(result.get("scroll_amount", 400))
@@ -672,6 +767,31 @@ class AssistantEngine:
             or bool(self.last_result.get("action_missed"))
         )
         actions = self.last_result.get("actions", [])
+        # CRITICAL SAFETY INVARIANT: Prevent skipping unanswered questions
+        # If there are zero actions, no submission check button, and the question is unsubmitted/needs action
+        has_submission_action = bool(self.last_result.get("check_button"))
+        is_unsubmitted = (
+            self.last_result.get("evaluation_status") == "unsubmitted"
+            or self.last_result.get("needs_action") is True
+        )
+        if not actions and not has_submission_action and is_unsubmitted:
+            q_text = str(self.last_result.get("question", "")).strip().lower()
+            is_interstitial = (
+                not q_text
+                or any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
+                and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation"])
+            )
+            if not is_interstitial:
+                logger.warning(
+                    "execute_current_solution: Auto-advance BLOCKED! Question is UNANSWERED "
+                    f"(actions=0, check_button=None, evaluation_status='{self.last_result.get('evaluation_status')}'). "
+                    "Refusing to click Next button to prevent skipping unanswered question."
+                )
+                self.last_result["ready_to_advance"] = False
+                self._handle_adjustment("⚠️ Question is UNANSWERED (0 actions provided). Auto-advance blocked to prevent skipping!")
+                self.set_state(EngineState.WAITING_CONFIRMATION, "Unanswered question (no actions). Advancing blocked.")
+                return
+
         phase = "Action Execution"
         try:
             self.set_state(EngineState.EXECUTING)
@@ -694,16 +814,28 @@ class AssistantEngine:
             self.set_state(EngineState.VERIFYING, "Verifying question answered...")
             time.sleep(0.09)
 
-            if not self.config.local_verification_enabled:
+            if isinstance(seq_summary, dict) and seq_summary.get("failed_inputs"):
+                failed_inputs = seq_summary.get("failed_inputs", [])
+                logger.warning(
+                    f"[!] Zero-token failsafe: {len(failed_inputs)} input(s) failed verification: {failed_inputs}"
+                )
+                is_answered = False
+                verification = {
+                    "is_answered": False,
+                    "all_verified": False,
+                    "details": f"input_failsafe_failed ({len(failed_inputs)} inputs unconfirmed: {failed_inputs})",
+                    "failed_inputs": failed_inputs
+                }
+            elif not self.config.local_verification_enabled:
                 is_answered = True
-                verification = {"is_answered": True, "details": "verification_disabled_by_config"}
+                verification = {"is_answered": True, "details": "verification_disabled_by_config", "all_verified": True}
             elif isinstance(seq_summary, dict) and seq_summary.get("all_verified", False):
                 is_answered = True
-                verification = {"is_answered": True, "details": "all_actions_verified_in_sequence"}
+                verification = {"is_answered": True, "details": "all_actions_verified_in_sequence", "all_verified": True}
             elif (hasattr(self.executor.execute_action_sequence, "_mock_return_value") or str(type(seq_summary)).find("Mock") != -1) and not any(a.get("verified") is False for a in actions):
                 # Mock or synthetic test execution where actions were not real GUI events
                 is_answered = True
-                verification = {"is_answered": True, "details": "mock_execution"}
+                verification = {"is_answered": True, "details": "mock_execution", "all_verified": True}
             else:
                 verification = self.verifier.verify_solution_outcome(actions, self.last_result)
                 is_answered = verification.get("is_answered", False)
@@ -752,6 +884,11 @@ class AssistantEngine:
                 return
 
             # Check if auto next or multi-part continuation is applicable
+            if (is_answered or verification.get("all_verified", False) or verification.get("verified_count", 0) > 0) and not has_pending_items:
+                self.last_result["ready_to_advance"] = True
+            elif has_pending_items:
+                self.last_result["ready_to_advance"] = False
+
             ready_to_advance = self.last_result.get("ready_to_advance", True)
             check_btn = self.last_result.get("check_button")
             next_btn = self.last_result.get("next_button")
@@ -761,8 +898,17 @@ class AssistantEngine:
             should_advance = (self.config.auto_next or self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part))
 
             if should_advance:
+                # If there are pending multi-part items, do NOT advance or click Next button!
+                if has_pending_items:
+                    logger.info("Multi-part question: Current part completed, but other parts remain on screen. Continuing chain without advancing past question...")
+                    if self.config.chain_multi_parts and not self.executor.is_stopped():
+                        time.sleep(0.5)
+                        self.set_state(EngineState.IDLE)
+                        self.trigger_solve()
+                    return
+
                 if not ready_to_advance and not is_multi_part:
-                    logger.warning("Auto-next skipped: ready_to_advance is False (some parts remain incomplete or unverified).")
+                    logger.warning("Auto-next skipped: ready_to_advance is False (some parts remain incomplete, unverified, or unanswered).")
                     self.set_state(EngineState.IDLE, "Incomplete parts remaining")
                     return
 
@@ -777,6 +923,7 @@ class AssistantEngine:
 
                 # Branch B: Button-based assessment
                 else:
+                    advanced = False
                     # Step 1: Click "Check Answer" / "Submit" first if present
                     if check_btn and isinstance(check_btn, dict):
                         logger.info("Auto-advance: Clicking 'Check Answer' button before Next...")
@@ -805,7 +952,8 @@ class AssistantEngine:
                         logger.info(f"Post-submission visual check: status={post_eval.get('status')}, details={post_eval.get('details')}")
 
                         # If platform marked the answer as INCORRECT:
-                        if post_eval.get("status") == "incorrect":
+                        # Prevent softlocking continuously giving an incorrect answer by immediately halting advance and rethinking
+                        if post_eval.get("status") == "incorrect" and post_eval.get("confidence", 0) >= 0.85:
                             logger.warning("Post-submission evaluation: Platform marked answer as INCORRECT! Halting advance and triggering rethink loop...")
                             self._handle_adjustment("⚠️ Answer marked INCORRECT by platform! Rethinking solution & format...")
                             self.last_result["ready_to_advance"] = False
@@ -822,9 +970,8 @@ class AssistantEngine:
                             self._handle_adjustment("✓ Platform confirmed answer CORRECT!")
 
                     # Step 2: Click "Next" button if known, or dynamically locate the revealed button
-                    advanced = False
-                    if next_btn and isinstance(next_btn, dict):
-                        logger.info("Auto-advance: Clicking identified 'Next' button...")
+                    if not advanced and next_btn and isinstance(next_btn, dict):
+                        logger.info("Auto-advance: Checking screen state before clicking identified 'Next' button...")
                         before_next_img = None
                         if self.config.local_verification_enabled:
                             try:
@@ -832,30 +979,52 @@ class AssistantEngine:
                             except Exception as e:
                                 logger.debug(f"Pre-next capture unavailable: {e}")
 
+                        # Failsafe: Briefly check screen to see if question was marked wrong before clicking Next
+                        if before_next_img is not None and self.config.local_verification_enabled:
+                            pre_markers = self.verifier.detect_platform_evaluation_markers(before_next_img)
+                            if pre_markers.get("status") == "incorrect" and pre_markers.get("confidence", 0) >= 0.85:
+                                logger.warning(
+                                    f"Failsafe: Pre-next screen check detected question is marked INCORRECT "
+                                    f"({pre_markers.get('details')})! Halting next button advance to avoid softlock."
+                                )
+                                self._handle_adjustment("⚠️ Answer marked INCORRECT! Halting advance to rethink...")
+                                self.last_result["ready_to_advance"] = False
+                                self.last_result["evaluation_status"] = "incorrect"
+                                self.last_result["is_rethinking"] = True
+                                time.sleep(0.5)
+                                self.set_state(EngineState.IDLE)
+                                self.trigger_solve(region=self.last_region)
+                                return
+
                         self.trigger_next_button()
 
                         # Zero-token verification: verify if screen transitioned to next question
                         if self.config.local_verification_enabled and before_next_img:
-                            time.sleep(0.4)
-                            try:
-                                after_next_img = self.capture.capture_screen(region=self.last_region)
-                                trans = self.verifier.verify_screen_transition(before_next_img, after_next_img)
-                                if trans.get("transitioned", False):
-                                    advanced = True
-                                    logger.info(f"[OK] Screen transition to next question verified: {trans.get('details')}")
-                                else:
-                                    logger.warning(
-                                        f"Next button click did not transition screen ({trans.get('details')}). "
-                                        "Falling back to dynamic navigation button discovery..."
-                                    )
-                            except Exception as e:
-                                logger.debug(f"Transition check exception: {e}")
+                            transition_confirmed = False
+                            for attempt in range(4):
+                                time.sleep(0.35)
+                                try:
+                                    after_next_img = self.capture.capture_screen(region=self.last_region)
+                                    trans = self.verifier.verify_screen_transition(before_next_img, after_next_img)
+                                    if trans.get("transitioned", False):
+                                        transition_confirmed = True
+                                        advanced = True
+                                        logger.info(f"[OK] Screen transition to next question verified on check {attempt + 1}: {trans.get('details')}")
+                                        break
+                                except Exception as e:
+                                    logger.debug(f"Transition check exception: {e}")
+                                    break
+                            if not transition_confirmed:
+                                logger.warning(
+                                    "Next button click did not transition screen after polling. "
+                                    "Falling back to dynamic navigation button discovery..."
+                                )
                         else:
                             advanced = True
 
                     if not advanced:
                         logger.info("Auto-advance: Scanning screen to detect newly revealed 'Next' / navigation button...")
-                        self._discover_and_click_next_button(override_region=self.last_region)
+                        advanced = self._discover_and_click_next_button(override_region=self.last_region)
 
                 # Step 3: Multi-part continuation or autonomous loop
                 if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
@@ -1042,6 +1211,10 @@ class AssistantEngine:
                 nx = detected_btn.get("screen_x", detected_btn.get("x"))
                 ny = detected_btn.get("screen_y", detected_btn.get("y"))
                 if nx is not None and ny is not None:
+                    # Enforce navigation debounce: never click Next multiple times within minimum interval!
+                    if not self._can_click_next(min_interval=2.0):
+                        return False
+
                     desc = detected_btn.get("description", "Next Question")
                     logger.info(f"Auto-advance: Successfully detected '{desc}' button at ({nx}, {ny})")
                     self._handle_adjustment(f"Found Next button: ({nx}, {ny})")
@@ -1050,6 +1223,7 @@ class AssistantEngine:
                         before_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
 
                     self.executor.click(int(nx), int(ny))
+                    self._record_next_click()
 
                     if self.config.local_verification_enabled and before_roi:
                         time.sleep(0.15)
@@ -1058,6 +1232,7 @@ class AssistantEngine:
                         if not diff_ok and diff_score < 1.0:
                             logger.warning(f"Auto-advance Next click unconfirmed (diff={diff_score:.1f}). Retrying firmly...")
                             self.executor.click(int(nx), int(ny), allow_variance=False)
+                            self._record_next_click()
 
                     # If the clicked button was Submit/Check, the platform validates and reveals the Next button
                     b_type = str(detected_btn.get("type", "")).lower()
@@ -1066,6 +1241,31 @@ class AssistantEngine:
                         logger.info("Navigation button clicked was Submit/Check. Waiting for Next button to be revealed...")
                         time.sleep(max(1.0, self.config.auto_next_delay))
                         try:
+                            # Failsafe: Briefly check screen to see if question was marked wrong before checking for second next button
+                            post_submit_img = None
+                            if self.config.local_verification_enabled:
+                                try:
+                                    post_submit_img = self.capture.capture_screen(region=region)
+                                except Exception as e:
+                                    logger.debug(f"Post-submit capture error: {e}")
+
+                            if post_submit_img is not None and self.config.local_verification_enabled:
+                                markers = self.verifier.detect_platform_evaluation_markers(post_submit_img)
+                                if markers.get("status") == "incorrect" and markers.get("confidence", 0) >= 0.85:
+                                    logger.warning(
+                                        f"Failsafe: Screen check detected question was marked INCORRECT after submit "
+                                        f"({markers.get('details')})! Halting second next button check to avoid softlock."
+                                    )
+                                    self._handle_adjustment("⚠️ Answer marked INCORRECT! Halting advance to rethink...")
+                                    if self.last_result:
+                                        self.last_result["evaluation_status"] = "incorrect"
+                                        self.last_result["is_rethinking"] = True
+                                        self.last_result["ready_to_advance"] = False
+                                    time.sleep(0.4)
+                                    self.set_state(EngineState.IDLE)
+                                    self.trigger_solve(region=region)
+                                    return False
+
                             b64_sub, sw, sh, s_sx, s_sy, s_ox, s_oy = self.capture.capture_and_encode(
                                 region=region,
                                 max_dimension=self.config.max_capture_dimension
@@ -1087,9 +1287,10 @@ class AssistantEngine:
                             if revealed_next:
                                 r_nx = revealed_next.get("screen_x", revealed_next.get("x"))
                                 r_ny = revealed_next.get("screen_y", revealed_next.get("y"))
-                                if r_nx is not None and r_ny is not None:
+                                if r_nx is not None and r_ny is not None and self._can_click_next(min_interval=1.5):
                                     logger.info(f"Auto-advance: Clicking newly revealed Next button after submit at ({r_nx}, {r_ny})")
                                     self.executor.click(int(r_nx), int(r_ny))
+                                    self._record_next_click()
                         except Exception as e:
                             logger.debug(f"Post-submit Next button detection failed: {e}")
 
@@ -1386,6 +1587,10 @@ class AssistantEngine:
             logger.warning("trigger_next_button: No valid next_button in last result.")
             return
 
+        # Enforce navigation debounce / rate-limiting
+        if not self._can_click_next(min_interval=2.0):
+            return
+
         x = next_btn.get("screen_x", next_btn.get("x"))
         y = next_btn.get("screen_y", next_btn.get("y"))
         if x is not None and y is not None:
@@ -1396,6 +1601,7 @@ class AssistantEngine:
                 before_roi = self.verifier.capture_roi(nx, ny, radius_w=45, radius_h=25)
 
             self.executor.click(nx, ny)
+            self._record_next_click()
 
             if self.config.local_verification_enabled and before_roi:
                 time.sleep(0.15)
@@ -1404,6 +1610,7 @@ class AssistantEngine:
                 if not diff_ok and diff_score < 1.0:
                     logger.warning(f"Next button click unconfirmed (diff={diff_score:.1f}). Retrying firmly without variance...")
                     self.executor.click(nx, ny, allow_variance=False)
+                    self._record_next_click()
                 else:
                     logger.info(f"[OK] Next button click verified (diff={diff_score:.1f})")
 

@@ -20,6 +20,7 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
         self.config_manager.config.reading_delay_enabled = False
         self.config_manager.config.action_delay = 0.01
         self.config_manager.config.auto_next_delay = 0.01
+        self.config_manager.config.autonomous_mode = False
 
     def test_gemini_multi_image_payload(self):
         client = AIClient(provider="gemini", api_key="mock_key", model_name="gemini-3.6-flash")
@@ -164,6 +165,57 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
             self.assertEqual(len(second_call_kwargs["extra_images"]), 1)
             self.assertEqual(engine.last_result["answer"], "154.50 JPY")
 
+    def test_solve_pipeline_open_dropdown_options_inspection(self):
+        """Verifies that dropdown questions with unrevealed options trigger dropdown inspection and clean dismissal."""
+        self.config_manager.config.autonomous_mode = False
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.capture.capture_and_encode = MagicMock(return_value=(
+            "dummy_b64", 1000, 1000, 1.0, 1.0, 0, 0
+        ))
+        engine.executor.click = MagicMock()
+        engine.executor.key_press = MagicMock()
+        engine.execute_current_solution = MagicMock()
+
+        # Solve screen call sequence:
+        # 1. AI detects dropdown with arrow and requests option inspection
+        # 2. AI receives revealed options in extra_images and returns answer + selection click
+        initial_result = {
+            "status": "needs_more_info",
+            "info_type": "open_dropdown",
+            "dropdown_button": {"x": 450, "y": 320, "screen_x": 450, "screen_y": 320, "description": "Select function type"},
+            "question": "The relationship is [Select...]",
+            "answer": "Needs dropdown inspection",
+            "actions": []
+        }
+        final_result = {
+            "status": "solved",
+            "question": "The relationship is [Select...]",
+            "answer": "Exponential",
+            "actions": [
+                {"type": "click", "screen_x": 450, "screen_y": 320, "description": "Open dropdown"},
+                {"type": "click", "screen_x": 450, "screen_y": 390, "description": "Click Exponential option"}
+            ],
+            "ready_to_advance": True
+        }
+
+        with patch("core.assistant_engine.AIClient") as mock_ai_class:
+            mock_ai_instance = MagicMock()
+            mock_ai_instance.solve_screen.side_effect = [initial_result, final_result]
+            mock_ai_class.return_value = mock_ai_instance
+
+            engine._run_solve_pipeline()
+
+            # Verify dropdown button was clicked to expand options
+            engine.executor.click.assert_any_call(450, 320, allow_variance=False)
+            # Verify dropdown was dismissed via Escape to restore clean screen state
+            engine.executor.key_press.assert_called_with("escape")
+            # Verify AI was re-called with the captured dropdown options image
+            self.assertEqual(mock_ai_instance.solve_screen.call_count, 2)
+            second_call_kwargs = mock_ai_instance.solve_screen.call_args_list[1][1]
+            self.assertIn("extra_images", second_call_kwargs)
+            self.assertEqual(len(second_call_kwargs["extra_images"]), 1)
+            self.assertEqual(engine.last_result["answer"], "Exponential")
+
     def test_scrolled_content_inspection_pipeline(self):
         self.config_manager.config.autonomous_mode = False
         engine = AssistantEngine(config_manager=self.config_manager)
@@ -246,6 +298,7 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
 
     def test_manual_f10_discovers_next_button(self):
         engine = AssistantEngine(config_manager=self.config_manager)
+        engine.trigger_solve = MagicMock()
         engine.last_result = {
             "check_button": None,
             "next_button": None
@@ -430,6 +483,8 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
     def test_manual_f10_scroll_down_advance(self):
         """Tests that manual F10 advance handles scrolling quizzes properly."""
         engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config_manager.config.autonomous_mode = False
+        engine.trigger_solve = MagicMock()
         engine.last_result = {
             "advance_action": "scroll_down",
             "scroll_amount": 520,

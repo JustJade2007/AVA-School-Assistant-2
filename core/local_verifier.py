@@ -167,9 +167,9 @@ class LocalVisualVerifier:
 
     def measure_and_target_input_box(
         self,
-        roi_img: Optional[Image.Image],
-        center_screen_x: int,
-        center_screen_y: int,
+        roi_img: Optional[Image.Image] = None,
+        center_screen_x: int = 0,
+        center_screen_y: Optional[int] = None,
         radius_w: int = 140,
         radius_h: int = 45,
         crop_origin_x: Optional[int] = None,
@@ -182,6 +182,14 @@ class LocalVisualVerifier:
 
         Returns: (chosen_screen_x, chosen_screen_y, metadata_dict)
         """
+        # Handle invocation without roi_img: measure_and_target_input_box(x, y)
+        if isinstance(roi_img, (int, float)) and center_screen_y is None:
+            center_screen_y = int(center_screen_x)
+            center_screen_x = int(roi_img)
+            roi_img = None
+        elif center_screen_y is None:
+            center_screen_y = 0
+
         fallback_meta = {
             "detected": False,
             "box_width": 0,
@@ -568,11 +576,13 @@ class LocalVisualVerifier:
             stat = ImageStat.Stat(inner)
             std_dev = stat.stddev[0]
             hist = inner.histogram()
-            # Count dark text pixels against typical light field
+            # Count dark text pixels against light field (light theme) or light text pixels (dark theme)
             dark_pixels = sum(hist[:135])
+            light_pixels = sum(hist[160:])
+            glyph_pixels = max(dark_pixels, light_pixels)
 
-            if std_dev >= 16.0 and dark_pixels >= 12:
-                return True, f"text_glyphs_detected (std={std_dev:.1f}, dark_px={dark_pixels})", 0.88
+            if std_dev >= 16.0 and glyph_pixels >= 12:
+                return True, f"text_glyphs_detected (std={std_dev:.1f}, glyph_px={glyph_pixels})", 0.88
 
         except Exception as e:
             logger.debug(f"Error evaluating is_text_input_filled: {e}")
@@ -916,7 +926,7 @@ class LocalVisualVerifier:
         self,
         image: Optional[Image.Image] = None,
         region: Optional[Tuple[int, int, int, int]] = None,
-        min_cluster_pixels: int = 35
+        min_cluster_pixels: int = 250
     ) -> Dict[str, Any]:
         """
         Inspects an image or screen capture for high-contrast visual grading markers:
@@ -963,14 +973,14 @@ class LocalVisualVerifier:
 
             for r, g, b in pixels:
                 # Strong red evaluation indicators (e.g. #ef4444, #dc2626, #b91c1c, #e11d48)
-                if (r >= 150 and g <= 95 and b <= 95) or (r >= 135 and r > (1.6 * max(g, b))):
+                if (r >= 160 and g <= 80 and b <= 80) or (r >= 145 and r > (1.8 * max(g, b))):
                     red_count += 1
                 # Strong green evaluation indicators (e.g. #10b981, #059669, #16a34a, #22c55e)
-                elif (g >= 125 and r <= 100 and b <= 100) or (g >= 120 and g > (1.4 * max(r, b))):
+                elif (g >= 130 and r <= 90 and b <= 90) or (g >= 120 and g > (1.5 * max(r, b))):
                     green_count += 1
 
-            if red_count >= min_cluster_pixels and red_count > (green_count * 1.5):
-                confidence = min(0.99, 0.65 + (red_count / 300.0) * 0.35)
+            if red_count >= min_cluster_pixels and red_count > (green_count * 2.0):
+                confidence = min(0.99, 0.65 + (red_count / 600.0) * 0.35)
                 return {
                     "detected": True,
                     "status": "incorrect",
@@ -982,7 +992,7 @@ class LocalVisualVerifier:
                     "green_pixels": green_count
                 }
             elif green_count >= min_cluster_pixels and green_count > (red_count * 1.5):
-                confidence = min(0.99, 0.65 + (green_count / 300.0) * 0.35)
+                confidence = min(0.99, 0.65 + (green_count / 600.0) * 0.35)
                 return {
                     "detected": True,
                     "status": "correct",
@@ -1025,17 +1035,45 @@ class LocalVisualVerifier:
         """
         Compares the screen state before and after clicking 'Check Answer' / 'Submit'.
         Detects if newly introduced visual elements signify an incorrect or correct outcome.
+        Uses differential comparison to ignore static pre-existing colored elements.
         """
-        markers = self.detect_platform_evaluation_markers(after_check_img)
+        if after_check_img is None:
+            return {
+                "detected": False,
+                "status": "unsubmitted",
+                "is_incorrect": False,
+                "is_correct": False,
+                "confidence": 0.0,
+                "details": "no_after_image",
+                "screen_transitioned": False,
+                "transition_diff": 0.0
+            }
+
+        target_img = after_check_img
+        trans_ok = False
+        diff = 0.0
+
+        if before_check_img is not None and after_check_img is not None:
+            try:
+                trans_ok, diff = self.verify_screen_transition(before_check_img, after_check_img)
+                # If images are identical size, create a difference mask to inspect ONLY what changed
+                if before_check_img.size == after_check_img.size:
+                    diff_img = ImageChops.difference(before_check_img.convert("RGB"), after_check_img.convert("RGB"))
+                    # Mask of pixels that changed by at least 15 intensity
+                    diff_gray = diff_img.convert("L")
+                    mask = diff_gray.point(lambda p: 255 if p > 15 else 0)
+                    # Apply mask onto after_check_img so only new pixels are evaluated
+                    masked_after = Image.new("RGB", after_check_img.size, (255, 255, 255))
+                    masked_after.paste(after_check_img.convert("RGB"), mask=mask)
+                    target_img = masked_after
+            except Exception as e:
+                logger.debug(f"Differential evaluation mask error: {e}")
+
+        markers = self.detect_platform_evaluation_markers(target_img, min_cluster_pixels=250)
         markers["is_incorrect"] = (markers.get("status") == "incorrect")
         markers["is_correct"] = (markers.get("status") == "correct")
-        if before_check_img and after_check_img:
-            trans_ok, diff = self.verify_screen_transition(before_check_img, after_check_img)
-            markers["screen_transitioned"] = trans_ok
-            markers["transition_diff"] = diff
-        else:
-            markers["screen_transitioned"] = False
-            markers["transition_diff"] = 0.0
+        markers["screen_transitioned"] = trans_ok
+        markers["transition_diff"] = diff
 
         return markers
 

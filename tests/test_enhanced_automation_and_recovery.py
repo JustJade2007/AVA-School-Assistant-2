@@ -272,6 +272,231 @@ class TestEnhancedAutomationAndRecovery(unittest.TestCase):
             sleep_calls = [c[0][0] for c in mock_sleep.call_args_list]
             self.assertTrue(any(s >= 2.0 for s in sleep_calls), f"Expected render delay >= 2.0s, got {sleep_calls}")
 
+    def test_refine_input_box_targets_snapping_and_sync(self):
+        """Verifies that _refine_input_box_targets measures and snaps input boxes and synchronizes multi-part actions."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        click_act = {
+            "type": "click",
+            "screen_x": 500,
+            "screen_y": 300,
+            "description": "Focus input box for Part 1"
+        }
+        type_act = {
+            "type": "type_text",
+            "screen_x": 500,
+            "screen_y": 300,
+            "text": "42",
+            "description": "Type 42 into Part 1"
+        }
+        result = {
+            "actions": [click_act, type_act],
+            "items": [{
+                "part_id": "Part 1",
+                "actions": [click_act, type_act]
+            }]
+        }
+
+        # Mock measure_and_target_input_box to simulate visual box detection at (480, 290)
+        mock_meta = {
+            "detected": True,
+            "box_width": 120,
+            "box_height": 34,
+            "screen_bounds": (420, 273, 540, 307)
+        }
+        engine.verifier.measure_and_target_input_box = MagicMock(return_value=(480, 290, mock_meta))
+
+        engine._refine_input_box_targets(result)
+
+        self.assertEqual(click_act["screen_x"], 480)
+        self.assertEqual(click_act["screen_y"], 290)
+        self.assertEqual(type_act["screen_x"], 480)
+        self.assertEqual(type_act["screen_y"], 290)
+        self.assertEqual(click_act.get("box_screen"), [420, 273, 540, 307])
+        self.assertEqual(type_act.get("box_screen"), [420, 273, 540, 307])
+
+    def test_auto_advance_ensured_after_actions_verified(self):
+        """Verifies that once all actions verify, ready_to_advance is set to True and auto-next proceeds."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config_manager.update(
+            autonomous_mode=True,
+            auto_next=True
+        )
+        engine.last_result = {
+            "question": "Q1",
+            "answer": "144",
+            "ready_to_advance": False,  # Model initially said False prior to submission
+            "next_button": {"screen_x": 800, "screen_y": 900},
+            "actions": [{"type": "click", "screen_x": 400, "screen_y": 400}]
+        }
+        engine.executor.is_stopped = MagicMock(return_value=False)
+        engine.executor.execute_action_sequence = MagicMock(return_value={
+            "all_verified": True,
+            "verified_count": 1,
+            "total_verifiable": 1
+        })
+        engine.trigger_next_button = MagicMock()
+
+        with patch("time.sleep"), patch.object(engine, "trigger_solve"):
+            engine.execute_current_solution()
+
+        self.assertTrue(engine.last_result["ready_to_advance"])
+        engine.trigger_next_button.assert_called_once()
+
+    def test_feedback_modal_dismissal_on_correct_avoids_rethink_loop(self):
+        """Verifies that when platform confirms correct, Next button is clicked without a wasteful rethink loop."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config_manager.update(
+            autonomous_mode=False,
+            auto_next=True
+        )
+        engine.last_result = {
+            "question": "Q1",
+            "answer": "144",
+            "ready_to_advance": True,
+            "check_button": {"screen_x": 700, "screen_y": 900},
+            "next_button": None,
+            "actions": []
+        }
+        engine.executor.is_stopped = MagicMock(return_value=False)
+        engine.trigger_check_button = MagicMock()
+        # Platform confirms correct!
+        engine.verifier.verify_post_submission_evaluation = MagicMock(return_value={
+            "status": "correct",
+            "confidence": 0.95,
+            "details": "detected_green_success_cluster (400px)"
+        })
+        engine._discover_and_click_next_button = MagicMock(return_value=True)
+        engine.trigger_solve = MagicMock()
+
+        with patch("time.sleep"):
+            engine.execute_current_solution()
+
+        engine.trigger_check_button.assert_called_once()
+        engine._discover_and_click_next_button.assert_called_once()
+        # Must NOT have retriggered solve to rethink!
+        engine.trigger_solve.assert_not_called()
+        self.assertFalse(engine.last_result.get("is_rethinking", False))
+
+    def test_second_next_button_halts_and_rethinks_if_question_incorrect(self):
+        """Verifies that checking for second next button checks if question is wrong first and triggers rethink to avoid softlock."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config_manager.update(
+            autonomous_mode=True,
+            auto_next=True
+        )
+        engine.last_result = {
+            "question": "Q1",
+            "answer": "120",
+            "ready_to_advance": True,
+            "check_button": {"screen_x": 700, "screen_y": 900},
+            "next_button": None,
+            "actions": []
+        }
+        engine.executor.is_stopped = MagicMock(return_value=False)
+        engine.trigger_check_button = MagicMock()
+        # Screen check detects answer was marked INCORRECT by platform
+        engine.verifier.verify_post_submission_evaluation = MagicMock(return_value={
+            "status": "incorrect",
+            "confidence": 0.95,
+            "details": "detected_red_error_cluster (320px)"
+        })
+        engine._discover_and_click_next_button = MagicMock()
+        engine.trigger_solve = MagicMock()
+
+        with patch("time.sleep"):
+            engine.execute_current_solution()
+
+        engine.trigger_check_button.assert_called_once()
+        # Must NOT have clicked next button!
+        engine._discover_and_click_next_button.assert_not_called()
+        # Must have triggered solve to rethink the solution!
+        engine.trigger_solve.assert_called_once()
+        self.assertTrue(engine.last_result.get("is_rethinking"))
+        self.assertFalse(engine.last_result.get("ready_to_advance"))
+
+    def test_per_input_typing_failsafe_and_readjustments(self):
+        """Verifies that each typing input triggers zero-token verification and readjustments if empty."""
+        executor = AutomationExecutor(humanize=False, click_variance_enabled=False)
+        executor.local_verification_enabled = True
+
+        dummy_roi = Image.new("RGB", (80, 30), (255, 255, 255))
+        executor.verifier.capture_roi = MagicMock(return_value=dummy_roi)
+        executor.verifier.measure_and_target_input_box = MagicMock(return_value=(490, 305, {"detected": True}))
+        executor.click = MagicMock()
+        executor.key_press = MagicMock()
+        executor.type_text = MagicMock()
+
+        # Initial check says empty (False), 1st readjustment succeeds (True)
+        executor.verifier.is_text_input_filled = MagicMock(side_effect=[
+            (False, "input_empty", 0.0),
+            (True, "text_stroke_diff (strokes=45)", 0.95)
+        ])
+
+        action = {"type": "type_text", "screen_x": 500, "screen_y": 300, "text": "144"}
+        executor.execute_action(action)
+
+        self.assertTrue(action["verified"])
+        self.assertIn("readjustment_attempt_1", action["verification_reason"])
+        self.assertEqual(action["screen_x"], 490)
+        self.assertEqual(action["screen_y"], 305)
+
+    def test_per_input_typing_failsafe_records_failure_after_3_attempts(self):
+        """Verifies that if typing fails all 3 readjustment attempts, action marks failed and sequence tracks failed_inputs."""
+        executor = AutomationExecutor(humanize=False, click_variance_enabled=False)
+        executor.local_verification_enabled = True
+
+        dummy_roi = Image.new("RGB", (80, 30), (255, 255, 255))
+        executor.verifier.capture_roi = MagicMock(return_value=dummy_roi)
+        executor.verifier.measure_and_target_input_box = MagicMock(return_value=(500, 300, {"detected": False}))
+        executor.verifier.find_visual_element_center = MagicMock(return_value=(500, 300))
+        executor.click = MagicMock()
+        executor.key_press = MagicMock()
+        executor.type_text = MagicMock()
+        # All checks return False
+        executor.verifier.is_text_input_filled = MagicMock(return_value=(False, "input_empty", 0.0))
+
+        action = {"type": "type_text", "screen_x": 500, "screen_y": 300, "text": "144"}
+        summary = executor.execute_action_sequence([action], delay_between=0.01)
+
+        self.assertFalse(action["verified"])
+        self.assertFalse(summary["all_verified"])
+        self.assertEqual(len(summary["failed_inputs"]), 1)
+        self.assertEqual(summary["failed_inputs"][0]["type"], "type_text")
+
+    def test_engine_halts_advance_if_per_input_failsafe_detects_untyped_answer(self):
+        """Verifies that execute_current_solution halts without advancing if an input fails verification."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config_manager.update(
+            autonomous_mode=True,
+            auto_next=True
+        )
+        engine.last_result = {
+            "question": "Q1",
+            "answer": "144",
+            "ready_to_advance": True,
+            "next_button": {"screen_x": 800, "screen_y": 900},
+            "actions": [{"type": "type_text", "screen_x": 500, "screen_y": 300, "text": "144"}]
+        }
+        engine.executor.is_stopped = MagicMock(return_value=False)
+        # Mock execute_action_sequence to return failure from per-input failsafe
+        engine.executor.execute_action_sequence = MagicMock(return_value={
+            "all_verified": False,
+            "verified_count": 0,
+            "total_verifiable": 1,
+            "failed_inputs": [{"index": 0, "type": "type_text", "reason": "input_empty"}],
+            "actions": engine.last_result["actions"]
+        })
+        engine.trigger_next_button = MagicMock()
+
+        with patch("time.sleep"):
+            engine.execute_current_solution()
+
+        # Engine must NOT have advanced to next question
+        self.assertFalse(engine.last_result["ready_to_advance"])
+        self.assertTrue(engine.last_result["action_missed"])
+        engine.trigger_next_button.assert_not_called()
+        self.assertEqual(engine.state, EngineState.WAITING_CONFIRMATION)
+
 
 if __name__ == "__main__":
     unittest.main()

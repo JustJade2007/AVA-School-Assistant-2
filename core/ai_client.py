@@ -293,7 +293,7 @@ class AIClient:
         ]
         if extra_images:
             for idx, extra_b64 in enumerate(extra_images):
-                parts.append({"text": f"Supplementary image {idx + 1} (reference sheet or scrolled view):"})
+                parts.append({"text": f"Supplementary image {idx + 1} (reference sheet, dropdown options, or scrolled view):"})
                 parts.append({
                     "inline_data": {
                         "mime_type": "image/jpeg",
@@ -545,9 +545,10 @@ class AIClient:
                     ymax *= 1000.0
                     xmax *= 1000.0
                 action["box_2d"] = [ymin, xmin, ymax, xmax]
-                # Center of the bounding box is the most grounded spatial target
-                action["x"] = (xmin + xmax) / 2.0
-                action["y"] = (ymin + ymax) / 2.0
+                # If x or y are not provided, use the geometric center of the box
+                if "x" not in action or "y" not in action:
+                    action["x"] = (xmin + xmax) / 2.0
+                    action["y"] = (ymin + ymax) / 2.0
 
                 bx1, by1 = _translate_point(xmin, ymin)
                 bx2, by2 = _translate_point(xmax, ymax)
@@ -606,8 +607,8 @@ class AIClient:
         if "continue_button" in result and not result.get("next_button"):
             result["next_button"] = result["continue_button"]
 
-        # Map check_button, next_button, reference_button, and close_button coordinates
-        for btn_key in ["check_button", "next_button", "reference_button", "close_button"]:
+        # Map check_button, next_button, reference_button, close_button, and dropdown_button coordinates
+        for btn_key in ["check_button", "next_button", "reference_button", "close_button", "dropdown_button"]:
             btn = result.get(btn_key)
             if btn and isinstance(btn, dict):
                 if "box_2d" in btn and isinstance(btn["box_2d"], (list, tuple)) and len(btn["box_2d"]) == 4:
@@ -716,6 +717,19 @@ class AIClient:
         else:
             result.setdefault("is_rethinking", False)
             result.setdefault("rethink_reasoning", "")
+
+            # INVARIANT: An unsubmitted question with 0 actions can NEVER be marked ready to advance!
+            # (Prevents skipping unanswered questions due to model hallucination or missing action generation)
+            if result.get("evaluation_status") == "unsubmitted" and not result.get("actions") and not any(itm.get("actions") for itm in items if isinstance(itm, dict)):
+                q_text = str(result.get("question", "")).strip().lower()
+                is_interstitial = (
+                    not q_text
+                    or any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
+                    and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation"])
+                )
+                if not is_interstitial:
+                    logger.warning("Unsubmitted question has zero actions. Forcing ready_to_advance = False to prevent skipping unanswered question.")
+                    result["ready_to_advance"] = False
 
         result.setdefault("platform_feedback", "")
 

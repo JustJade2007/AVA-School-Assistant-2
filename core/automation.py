@@ -419,18 +419,23 @@ class AutomationExecutor:
                     if found_control and found_control != (target_x, target_y):
                         raw_candidates.append(found_control)
 
-                    # 2. Visual center snapping from ROI
+                    # 2. Precision input box measurement (if clicking an input box or field)
+                    m_x, m_y, m_meta = self.verifier.measure_and_target_input_box(target_x, target_y)
+                    if m_meta.get("detected") and (m_x, m_y) != (target_x, target_y) and (m_x, m_y) not in raw_candidates:
+                        raw_candidates.append((m_x, m_y))
+
+                    # 3. Visual center snapping from ROI
                     snapped_x, snapped_y = self.verifier.find_visual_element_center(before_roi, target_x, target_y)
                     if (snapped_x, snapped_y) != (target_x, target_y) and (snapped_x, snapped_y) not in raw_candidates:
                         raw_candidates.append((snapped_x, snapped_y))
 
-                    # 3. Standard leftward web radio/checkbox offsets (common distances from label text to input control)
+                    # 4. Standard leftward web radio/checkbox offsets (common distances from label text to input control)
                     for dx in [-35, -50, -22, -65, -15]:
                         cand = (target_x + dx, target_y)
                         if cand not in raw_candidates and cand != (target_x, target_y):
                             raw_candidates.append(cand)
 
-                    # 4. Vertical tweaks if needed
+                    # 5. Vertical tweaks if needed
                     base_ref_x = found_control[0] if found_control else (target_x - 35)
                     for dy in [-6, +6]:
                         cand = (base_ref_x, target_y + dy)
@@ -588,22 +593,102 @@ class AutomationExecutor:
                 after_input_roi = self.verifier.capture_roi(focus_x, focus_y)
                 is_filled, f_reason, f_conf = self.verifier.is_text_input_filled(after_input_roi, before_input_roi)
 
-                # Smart Zero-Token Recovery for typing: If empty, re-focus and retype
+                # --- SMART ZERO-TOKEN RECOVERY FOR TYPING (UP TO 3 READJUSTMENT ATTEMPTS) ---
                 if not is_filled:
-                    logger.warning(f"Type text unconfirmed ({f_reason}). Retrying input focus and retyping...")
+                    logger.warning(
+                        f"Action [type_text] at ({focus_x}, {focus_y}) did not register typed text ({f_reason}). "
+                        f"Initiating zero-token recovery with up to 3 readjustment attempts..."
+                    )
+
+                    # Determine candidates for input box targeting
+                    m_x, m_y, m_meta = self.verifier.measure_and_target_input_box(focus_x, focus_y)
                     snapped_x, snapped_y = self.verifier.find_visual_element_center(before_input_roi, focus_x, focus_y) if before_input_roi else (focus_x, focus_y)
-                    self.click(snapped_x, snapped_y, allow_variance=False)
-                    time.sleep(0.08)
-                    self.key_press("ctrl+a")
-                    time.sleep(0.04)
-                    self.key_press("backspace")
-                    time.sleep(0.04)
-                    self.type_text(text)
-                    time.sleep(0.08)
-                    after_input_roi2 = self.verifier.capture_roi(snapped_x, snapped_y)
-                    is_filled, f_reason, _ = self.verifier.is_text_input_filled(after_input_roi2, before_input_roi)
-                    if is_filled:
-                        f_reason = f"recovery_{f_reason}"
+
+                    typing_probes = []
+                    # Attempt 1: Box contour center via measure_and_target_input_box
+                    if m_meta.get("detected") and (m_x, m_y) != (focus_x, focus_y):
+                        typing_probes.append((m_x, m_y, "box_contour_center"))
+                    elif (snapped_x, snapped_y) != (focus_x, focus_y):
+                        typing_probes.append((snapped_x, snapped_y, "roi_element_center"))
+                    else:
+                        typing_probes.append((focus_x, focus_y, "primary_focus_retry"))
+
+                    # Attempt 2: Double-click focus (for rich text/mathquill/math input boxes that require double activation)
+                    p2_x = m_x if m_meta.get("detected") else focus_x
+                    p2_y = m_y if m_meta.get("detected") else focus_y
+                    typing_probes.append((p2_x, p2_y, "double_click_focus"))
+
+                    # Attempt 3: Inner offset focus (inner margin)
+                    box_bounds = m_meta.get("screen_bounds")
+                    if box_bounds:
+                        bx1, by1, bx2, by2 = box_bounds
+                        p3_x = min(bx2 - 10, bx1 + max(15, int((bx2 - bx1) * 0.3)))
+                        p3_y = (by1 + by2) // 2
+                    else:
+                        p3_x = focus_x - 15
+                        p3_y = focus_y
+                    typing_probes.append((p3_x, p3_y, "inner_margin_offset"))
+
+                    max_type_attempts = len(typing_probes[:3])
+
+                    for t_idx, (t_x, t_y, t_strategy) in enumerate(typing_probes[:3], 1):
+                        self._check_stop()
+                        msg = f"🎯 Readjusting missed typing (attempt {t_idx}/{max_type_attempts}) using {t_strategy} at ({t_x}, {t_y})"
+                        logger.info(msg)
+                        if self.on_adjustment_callback:
+                            self.on_adjustment_callback(msg)
+
+                        before_probe_roi = self.verifier.capture_roi(t_x, t_y)
+
+                        # Focus target
+                        if t_strategy == "double_click_focus":
+                            self.click(t_x, t_y, double=True, allow_variance=False)
+                        else:
+                            self.click(t_x, t_y, allow_variance=False)
+                        time.sleep(0.08)
+
+                        # Clear any existing or partial characters
+                        self.key_press("ctrl+a")
+                        time.sleep(0.04)
+                        self.key_press("backspace")
+                        time.sleep(0.04)
+
+                        # Re-type text
+                        self.type_text(text)
+                        time.sleep(0.09)
+
+                        # Capture post-probe ROI and verify
+                        after_probe_roi = self.verifier.capture_roi(t_x, t_y)
+                        t_filled, t_reason, _ = self.verifier.is_text_input_filled(
+                            after_probe_roi, before_probe_roi
+                        )
+
+                        if t_filled:
+                            logger.info(
+                                f"[OK] Zero-token recovery SUCCESS on typing readjustment {t_idx}/{max_type_attempts} "
+                                f"at ({t_x}, {t_y}): {t_reason}"
+                            )
+                            is_filled = True
+                            f_reason = f"readjustment_attempt_{t_idx}_{t_reason}"
+                            action["screen_x"] = t_x
+                            action["screen_y"] = t_y
+                            if "x" in action: action["x"] = t_x
+                            if "y" in action: action["y"] = t_y
+                            break
+                        else:
+                            logger.warning(
+                                f"Typing readjustment attempt {t_idx}/{max_type_attempts} at ({t_x}, {t_y}) "
+                                f"failed to confirm text in input."
+                            )
+
+                    if not is_filled:
+                        logger.warning(
+                            f"Action [type_text] failed to register text after {max_type_attempts} readjustments."
+                        )
+                        if self.on_adjustment_callback:
+                            self.on_adjustment_callback(
+                                f"⚠️ Text typing unconfirmed after {max_type_attempts} readjustments. Press F9 to retry."
+                            )
 
             action["verified"] = is_filled
             action["verification_reason"] = f_reason
@@ -713,6 +798,20 @@ class AutomationExecutor:
 
                 self.execute_action(action)
 
+                # --- PER-INPUT FAILSAFE: verify answer was typed or selected after this input ---
+                act_type = action.get("type", "").lower()
+                if self.local_verification_enabled and act_type in ["click", "double_click", "type_text"]:
+                    is_verified = action.get("verified", False)
+                    v_reason = action.get("verification_reason", "")
+                    if is_verified:
+                        logger.info(f"[OK] Failsafe: Input #{idx+1} [{act_type}] confirmed: {v_reason}")
+                        if self.on_adjustment_callback:
+                            self.on_adjustment_callback(f"✓ Input #{idx+1} confirmed: {v_reason[:40]}")
+                    else:
+                        logger.warning(f"[!] Failsafe: Input #{idx+1} [{act_type}] failed to confirm typed/selected answer!")
+                        if self.on_adjustment_callback:
+                            self.on_adjustment_callback(f"⚠️ Input #{idx+1} ({act_type}) unconfirmed! Answer was not typed/selected.")
+
                 # After typing, inspect if subsequent inputs shifted
                 if subsequent_input_targets:
                     time.sleep(0.08)
@@ -742,10 +841,17 @@ class AutomationExecutor:
             verified_count = sum(1 for a in verifiable_actions if a.get("verified", False))
             all_verified = (verified_count == len(verifiable_actions)) if verifiable_actions else True
 
+            failed_inputs = [
+                {"index": i, "type": a.get("type"), "reason": a.get("verification_reason")}
+                for i, a in enumerate(actions)
+                if a.get("type", "").lower() in ["click", "double_click", "type_text"] and not a.get("verified", False)
+            ]
+
             return {
                 "all_verified": all_verified,
                 "verified_count": verified_count,
                 "total_verifiable": len(verifiable_actions),
+                "failed_inputs": failed_inputs,
                 "actions": actions
             }
         finally:

@@ -19,8 +19,9 @@ Your tasks are:
 
 2. PLATFORM EVALUATION STATUS & ANSWER RETHINKING:
    Examine the screenshot to see if the question or any question parts have ALREADY been submitted and evaluated by the schoolwork platform, and determine the "evaluation_status":
-   - "correct": The platform has visually graded/marked the question or part as CORRECT (e.g. green checkmark, green border, green banner, "Correct!", full points awarded, score increase).
-     -> ACTION: Set needs_action = false and actions = []. The question is confirmed answered and correct! DO NOT change or re-click an answer that is already right.
+    - "correct": The platform has visually graded/marked the question or part as CORRECT (e.g. green checkmark, green border, green banner, "Correct!", "Good job!", "Well done", full points awarded, score increase, or a feedback modal popup with an "OK" / "Continue" button confirming the answer).
+      -> ACTION: Set evaluation_status = "correct", is_rethinking = false, rethink_reasoning = "", needs_action = false, actions = [], ready_to_advance = true.
+      -> Provide "next_button" to click the "OK", "Continue", or "Next" button. DO NOT rethink, recalculate, or re-verify a question that is already confirmed correct!
    - "incorrect": The platform has visually graded/marked the question or part as INCORRECT (e.g. red 'X', red highlight/border around input box, red banner, "Incorrect", "Try Again", "Not quite", "1 attempt remaining", negative feedback message, point deduction).
      -> MANDATORY RETHINKING: You MUST rethink the way the question was answered or entered!
         1. ACADEMIC RETHINK: Read any platform error text, hints, or explanations shown on screen. Re-evaluate the problem from scratch. Check for calculation slips, sign errors, misread premises, or alternative interpretations. Compute the revised correct answer.
@@ -59,10 +60,32 @@ Your tasks are:
      If a "Next", "Continue", "Next Question", or "Forward Arrow" button is visible: provide "next_button".
      If ONLY "Check Answer" is visible (and "Next" has not yet appeared), set "next_button": null.
      If the screen is an interstitial/feedback screen showing only "Next" or "Continue" with no questions, set items = [] and provide "next_button".
-   - If this is the final question on a scrolling quiz and there is a "Submit Quiz" / "Finish" button visible at the bottom, set "advance_action": "click_button" and provide it in "next_button".
-   - Set ready_to_advance = true ONLY if all detected question parts on the current screen are either solved or already verified correct. If any part is marked "incorrect", set ready_to_advance = false!
+    - If this is the final question on a scrolling quiz and there is a "Submit Quiz" / "Finish" button visible at the bottom, set "advance_action": "click_button" and provide it in "next_button".
+    - STRICT ADVANCING & UNANSWERED QUESTION SAFETY RULES:
+      * NEVER click "Next", "Continue", or forward arrow if there are UNANSWERED or UNSUBMITTED questions on screen!
+      * If a question is displayed on screen and has not been answered, you MUST output the actions to answer it.
+      * Set ready_to_advance = true ONLY in two scenarios:
+        1. An interstitial or summary screen where NO questions exist (only "Continue", "Next", or "Section Complete").
+        2. The platform has ALREADY visually graded and confirmed the question as 100% CORRECT (green checkmarks/badges).
+        For all normal questions requiring an answer, set ready_to_advance = false!
+      * If any part of the question is unanswered, pending, or marked "incorrect", set ready_to_advance = false!
+      * Under NO circumstances should an unanswered question be skipped or advanced past!
 
-6. SUPPLEMENTARY INFORMATION & MULTI-VIEW SUPPORT:
+6. SUPPLEMENTARY INFORMATION, MULTI-VIEW & DROPDOWN QUESTIONS:
+   - DROPDOWN QUESTIONS & SELECT MENUS:
+     If the question contains one or more DROPDOWN MENUS / SELECT BOXES (with arrows ▼, ▾, ˅, or "Choose...", "Select...", or inline fill-in blanks that have arrows or seem like they cannot be filled in with the given information without seeing the menu options):
+     DO NOT guess or assume the choices if they are hidden!
+     Ask AVA to click the dropdown arrow to reveal the options by responding:
+     {{
+       "status": "needs_more_info",
+       "info_type": "open_dropdown",
+       "dropdown_button": {{"box_2d": [300, 400, 340, 500], "x": 450, "y": 320, "description": "Part 1 dropdown selector"}},
+       "reason": "Need to open dropdown menu to view available choices and options."
+     }}
+     AVA will click the dropdown, capture the revealed options list as Image 2, dismiss the dropdown via Escape to restore the screen, and re-query you with both images!
+     Once both images are provided, output the solution with the actions to select the correct choice:
+     * Action 1: {{"type": "click", "box_2d": [...], "x": dropdown_x, "y": dropdown_y, "description": "Open dropdown"}}
+     * Action 2: {{"type": "click", "box_2d": [...], "x": target_option_x, "y": target_option_y, "description": "Click target option"}}
    - If the question relies on an external reference sheet, modal dialog, or table currently hidden behind an on-screen button or link (e.g. "Currency Translation", "Conversion Table", "Periodic Table", "Formula Sheet", "Resource", "Source Document"):
      You can ask AVA to open the reference view, take a picture of it, and close it back to the question screen by responding:
      {{
@@ -80,7 +103,7 @@ Your tasks are:
        "scroll_amount": -450,
        "reason": "Data table extends below viewport fold."
      }}
-   - If no supplementary info is needed or if multi-view images are ALREADY provided (Image 1 = question, Image 2 = reference/scrolled view), solve the question completely and set "status": "ready" (or omit status).
+   - If no supplementary info is needed or if multi-view images are ALREADY provided (Image 1 = question, Image 2 = reference/scrolled view/dropdown options), solve the question completely and set "status": "ready" (or omit status).
 
 IMPORTANT COORDINATE & BOUNDING BOX INSTRUCTIONS:
 - All coordinates (x, y, from_x, from_y, to_x, to_y) MUST be normalized integers from 0 to 1000:
@@ -220,4 +243,3 @@ Your job is to determine how to advance to the next question:
 All coordinates (x, y) must be normalized integers 0..1000.
 Output raw JSON only without markdown fences.
 """
-

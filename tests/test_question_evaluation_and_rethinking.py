@@ -303,6 +303,108 @@ class TestQuestionEvaluationAndRethinking(unittest.TestCase):
         # Must fall back to discover_and_click_next_button!
         self.engine._discover_and_click_next_button.assert_called_once()
 
+    def test_unanswered_question_with_zero_actions_blocks_auto_advance(self):
+        """
+        CRITICAL BUG FIX VERIFICATION:
+        When a question is displayed on screen, but actions is empty and question is unsubmitted,
+        AVA must NEVER advance or click the Next button!
+        """
+        self.engine.config_manager.config.autonomous_mode = True
+        self.engine.config_manager.config.auto_next = True
+
+        self.engine.last_result = {
+            "question": "What is the capital of France?",
+            "answer": "Paris",
+            "evaluation_status": "unsubmitted",
+            "ready_to_advance": True,  # Model hallucinated ready to advance despite 0 actions
+            "actions": [],             # Zero actions generated
+            "next_button": {"screen_x": 880, "screen_y": 920}
+        }
+
+        self.engine.trigger_next_button = MagicMock()
+        self.engine._discover_and_click_next_button = MagicMock()
+        self.engine.trigger_solve = MagicMock()
+
+        self.engine.execute_current_solution()
+
+        # Invariant 1: ready_to_advance MUST be forced to False
+        self.assertFalse(self.engine.last_result["ready_to_advance"])
+        # Invariant 2: Next button MUST NOT be clicked!
+        self.engine.trigger_next_button.assert_not_called()
+        self.engine._discover_and_click_next_button.assert_not_called()
+        # Invariant 3: Engine must NOT advance
+        self.assertEqual(self.engine.state, EngineState.WAITING_CONFIRMATION)
+
+    def test_multipart_pending_items_blocks_auto_advance(self):
+        """
+        Verifies that when a multi-part question has completed Part 1,
+        but Part 2 still needs action, ready_to_advance is forced to False
+        and the Next button is NOT clicked.
+        """
+        self.engine.config_manager.config.autonomous_mode = True
+        self.engine.config_manager.config.auto_next = True
+        self.engine.config_manager.config.chain_multi_parts = False
+
+        self.engine.last_result = {
+            "is_multi_part": True,
+            "ready_to_advance": True,
+            "actions": [{"type": "click", "screen_x": 400, "screen_y": 400, "verified": True}],
+            "items": [
+                {"part_id": "Part 1", "needs_action": True, "actions": [{"type": "click", "screen_x": 400, "screen_y": 400}]},
+                {"part_id": "Part 2", "needs_action": True, "actions": []}  # Still pending!
+            ],
+            "next_button": {"screen_x": 900, "screen_y": 950}
+        }
+
+        self.engine.executor.execute_action_sequence = MagicMock(return_value={"all_verified": True})
+        self.engine.trigger_next_button = MagicMock()
+        self.engine._discover_and_click_next_button = MagicMock()
+
+        self.engine.execute_current_solution()
+
+        # Invariant: Must NOT click Next when other parts are pending!
+        self.assertFalse(self.engine.last_result["ready_to_advance"])
+        self.engine.trigger_next_button.assert_not_called()
+        self.engine._discover_and_click_next_button.assert_not_called()
+
+    def test_next_button_rapid_clicks_suppressed_by_debounce(self):
+        """
+        Verifies that calling trigger_next_button multiple times in rapid succession (<2.0s)
+        is debounced so the Next button is only clicked ONCE.
+        """
+        self.engine.config_manager.config.local_verification_enabled = False
+        self.engine.last_result = {
+            "next_button": {"screen_x": 800, "screen_y": 800}
+        }
+        self.engine.executor.click = MagicMock()
+
+        # First click
+        self.engine.trigger_next_button()
+        self.assertEqual(self.engine.executor.click.call_count, 1)
+
+        # Immediate rapid second click (within 50ms)
+        self.engine.trigger_next_button()
+        # Must be suppressed!
+        self.assertEqual(self.engine.executor.click.call_count, 1)
+
+    def test_ai_client_forces_ready_to_advance_false_on_unsubmitted_zero_actions(self):
+        """
+        Verifies that AIClient._map_coordinates strips ready_to_advance=True
+        when an unsubmitted question has 0 actions.
+        """
+        client = AIClient.__new__(AIClient)
+        raw_result = {
+            "question": "Solve the quadratic equation: x^2 - 5x + 6 = 0",
+            "answer": "x = 2, 3",
+            "evaluation_status": "unsubmitted",
+            "ready_to_advance": True,  # Erroneously set
+            "actions": []
+        }
+
+        client._map_coordinates(raw_result, 1000, 1000, 1.0, 1.0, 0, 0, 1.0, 1.0, 0, 0, "normalized")
+
+        self.assertFalse(raw_result["ready_to_advance"])
+
 
 if __name__ == "__main__":
     unittest.main()

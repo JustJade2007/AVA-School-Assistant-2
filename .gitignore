@@ -31,6 +31,7 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!AVA_School_Assistant_2.spec
 
 # Installer logs
 pip-log.txt
@@ -216,3 +217,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Application user configurations & secrets
+config.json
+*.local.json
+*.secret.json
+logs/
+*.log
+
+# Explicitly keep repository default configuration templates
+!config.default.json
+!config.example.json

@@ -81,6 +81,8 @@ def get_default_config_file_path() -> str:
     candidates.append(os.path.join(base_dir, "config.default.json"))
 
     if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            candidates.append(os.path.join(sys._MEIPASS, "config.default.json"))
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         candidates.append(os.path.join(exe_dir, "config.default.json"))
         internal_dir = os.path.join(exe_dir, "_internal")

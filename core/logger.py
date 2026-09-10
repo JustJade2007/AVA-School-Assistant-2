@@ -14,8 +14,12 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List, Callable, Dict, Any
 
-# Root directory of the AVA application
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def _resolve_app_root() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+ROOT_DIR = _resolve_app_root()
 LOG_DIR = os.path.join(ROOT_DIR, "logs")
 DEFAULT_LOG_FILE = os.path.join(LOG_DIR, "ava_assistant.log")
 

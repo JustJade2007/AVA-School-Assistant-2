@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to AVA School Assistant 2 will be documented in this file.
 
@@ -10,8 +10,19 @@ The version format is `1.2.3.a`:
 
 ---
 
-## [0.4.3.a] - 2026-09-06
-<<<<<<< HEAD
+## [1.1.3.a] - 2026-09-10
+
+### Added
+- **Standalone Executable Distribution Support (`--onefile`)**:
+  - Configured PyInstaller specification in `AVA_School_Assistant_2.spec` to build as a self-contained, standalone single-file executable (`--onefile`), eliminating dependency on an external `_internal/` folder.
+  - Added `sys._MEIPASS` path candidate resolution in `config.py` (`get_default_config_file_path`) so bundled default templates unpack and load correctly in frozen standalone mode.
+  - Updated `core/logger.py` to persist log files alongside the executable in frozen mode (`sys.executable` directory) instead of temporary extract paths.
+  - Added `build_exe.bat` for one-click compilation of the standalone portable executable with workpath routed to `%TEMP%` to avoid OneDrive sync lock collisions.
+  - Updated `Launch_AVA.bat` to detect and prioritize the standalone `dist\AVA_School_Assistant_2.exe` while preserving backwards compatibility.
+
+---
+
+## [1.1.2.a] - 2026-09-06
 
 ### Added
 - **Per-Input Failsafe Verification & 3-Stage Zero-Token Recovery**:
@@ -27,8 +38,6 @@ The version format is `1.2.3.a`:
   - Model outputs `box_2d` bounding boxes; refined contour detection snaps click targets to the center of the middle 50% horizontal span of input fields.
 - **Positive Feedback Modal Handling**:
   - Vision prompt prioritizes semantic positive feedback ("Correct!", green checkmarks) over raw pixel heuristics to prevent wasteful rethinking loops.
-=======
->>>>>>> 684e3ae5687d654aade4b1974ac96fdd75c7e719
 
 ### Fixed
 - **Next Button Duplicate Click Debouncing & Rate Limiting**:
@@ -38,9 +47,8 @@ The version format is `1.2.3.a`:
 - **Unanswered Question Advance & Skip Prevention**:
   - Enforced safety invariants across prompt rules, coordinate mapping, and solution execution — prohibiting Next when questions remain unsubmitted.
   - AIClient forces `ready_to_advance = False` whenever an unsubmitted question has 0 actions or incomplete items.
-<<<<<<< HEAD
-  - Green pixel markers cannot override AI-detected `unsubmitted` status.
-  - Multi-part questions gate advance strictly on `has_pending_items = False`.
+  - Hardened platform evaluation heuristics so local green pixel markers cannot override an AI-detected `unsubmitted` status.
+  - In multi-part questions, gating advance strictly on completion of all sub-parts (`has_pending_items = False`).
 - **Auto-Advance Recovery After Correcting Answers**:
   - Resolved issue where AVA went `IDLE` after re-entering a corrected answer or retrying a missed action.
   - Engine clears `is_rethinking`, resets `action_missed`, and restores `ready_to_advance = True` after successful corrective verification.
@@ -48,15 +56,6 @@ The version format is `1.2.3.a`:
   - `verify_screen_transition` added when clicking known `next_button` elements.
   - Falls back to dynamic navigation button discovery if the clicked Next button does not transition the screen.
   - When dynamic detection clicks Submit/Check, AVA waits for the platform to reveal Next, performs a secondary scan, and clicks it.
-
----
-
-## [0.4.0.a] - 2026-09-06
-=======
-  - Hardened platform evaluation heuristics so local green pixel markers cannot override an AI-detected `unsubmitted` status.
-  - In multi-part questions, gating advance strictly on completion of all sub-parts (`has_pending_items = False`).
-
-## [0.4.2.a] - 2026-09-06
 
 ### Added
 - **Per-Input Failsafe Verification & 3-Stage Zero-Token Recovery (`core/automation.py`, `core/local_verifier.py`, `core/assistant_engine.py`)**:

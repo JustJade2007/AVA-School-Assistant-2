@@ -100,7 +100,27 @@ Optional launch flags:
 python main.py --debug --logs
 ```
 
-### 3. Setting Up Your AI Model & API Key
+You can also run `Launch_AVA.bat` to launch the application directly without opening a terminal window.
+
+### 3. Building Standalone Executable (Distribution)
+
+To compile a single, portable `.exe` that can be moved and run independently on any Windows machine without Python installed:
+
+```bash
+# Double-click or run:
+build_exe.bat
+```
+
+Or run via PyInstaller manually:
+```bash
+pip install pyinstaller
+pyinstaller AVA_School_Assistant_2.spec --workpath "%TEMP%\ava_build" --clean --noconfirm
+```
+
+The compiled standalone executable will be saved to:
+`dist/AVA_School_Assistant_2.exe`
+
+### 4. Setting Up Your AI Model & API Key
 
 1. Click the **⚙ (Settings)** button on the top-right of the floating HUD, or launch with `--settings`.
 2. Select your AI Provider (e.g. **Google Gemini**).

@@ -297,6 +297,86 @@ class HUDOverlay(ctk.CTkToplevel):
         # Container for multi-part items / sub-question pills
         self.items_container = ctk.CTkFrame(self.qa_card, fg_color="transparent")
 
+        # Written Question Preview & Live Editor Panel (AVA 2.0)
+        self.written_card = ctk.CTkFrame(
+            self.qa_card,
+            fg_color="#0f172a",
+            corner_radius=8,
+            border_width=1,
+            border_color="#38bdf8"
+        )
+        self.written_header_frame = ctk.CTkFrame(self.written_card, fg_color="transparent")
+        self.written_header_frame.pack(fill="x", padx=6, pady=(4, 2))
+
+        self.lbl_written_title = ctk.CTkLabel(
+            self.written_header_frame,
+            text="✍️ WRITTEN DRAFT (GEMINI 3.8 FLASH)",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color="#38bdf8"
+        )
+        self.lbl_written_title.pack(side="left")
+
+        self.lbl_written_badge = ctk.CTkLabel(
+            self.written_header_frame,
+            text="0 words",
+            font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+            fg_color="#0284c7",
+            text_color="#ffffff",
+            corner_radius=4,
+            padx=6,
+            pady=1
+        )
+        self.lbl_written_badge.pack(side="right")
+
+        self.lbl_humanizer_badge = ctk.CTkLabel(
+            self.written_header_frame,
+            text="Jade's Humanizer",
+            font=ctk.CTkFont(family="Segoe UI", size=9),
+            fg_color="#064e3b",
+            text_color="#34d399",
+            corner_radius=4,
+            padx=5,
+            pady=1
+        )
+        self.lbl_humanizer_badge.pack(side="right", padx=(0, 4))
+
+        # Editable Text Box
+        self.txt_written_edit = ctk.CTkTextbox(
+            self.written_card,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#f8fafc",
+            fg_color="#1e293b",
+            height=85,
+            wrap="word",
+            border_width=1,
+            border_color="#334155"
+        )
+        self.txt_written_edit.pack(fill="x", padx=6, pady=4)
+        self.txt_written_edit.bind("<KeyRelease>", self._on_written_text_edited)
+
+        # Editor footer actions
+        self.written_footer_frame = ctk.CTkFrame(self.written_card, fg_color="transparent")
+        self.written_footer_frame.pack(fill="x", padx=6, pady=(0, 4))
+
+        self.lbl_written_hint = ctk.CTkLabel(
+            self.written_footer_frame,
+            text="✏️ Edit text above if needed, then press F9 to type.",
+            font=ctk.CTkFont(size=9),
+            text_color="#94a3b8"
+        )
+        self.lbl_written_hint.pack(side="left")
+
+        self.btn_rehumanize = ctk.CTkButton(
+            self.written_footer_frame,
+            text="✨ Re-Humanize",
+            font=ctk.CTkFont(size=9),
+            fg_color="#1e293b",
+            hover_color="#334155",
+            height=22,
+            command=self._rehumanize_written_draft
+        )
+        self.btn_rehumanize.pack(side="right")
+
         self.lbl_reasoning = ctk.CTkLabel(
             self.qa_card,
             text="",
@@ -421,6 +501,40 @@ class HUDOverlay(ctk.CTkToplevel):
             command=self._test_cloak_visibility
         )
         self.btn_test_cloak.grid(row=1, column=2, padx=3, pady=3, sticky="ew")
+
+        # Row 3 of controls: Viewport scrolling for long questions
+        self.btn_scroll_down = ctk.CTkButton(
+            self.btn_frame,
+            text="📜 Scroll Down",
+            font=ctk.CTkFont(size=10),
+            fg_color="#1e293b",
+            hover_color="#334155",
+            height=26,
+            command=self._manual_scroll_down
+        )
+        self.btn_scroll_down.grid(row=2, column=0, padx=3, pady=2, sticky="ew")
+
+        self.btn_scroll_up = ctk.CTkButton(
+            self.btn_frame,
+            text="📜 Scroll Up",
+            font=ctk.CTkFont(size=10),
+            fg_color="#1e293b",
+            hover_color="#334155",
+            height=26,
+            command=self._manual_scroll_up
+        )
+        self.btn_scroll_up.grid(row=2, column=1, padx=3, pady=2, sticky="ew")
+
+        self.btn_inspect_whole = ctk.CTkButton(
+            self.btn_frame,
+            text="🔍 Inspect Whole Q",
+            font=ctk.CTkFont(size=10),
+            fg_color="#0f766e",
+            hover_color="#115e59",
+            height=26,
+            command=self._manual_inspect_whole_question
+        )
+        self.btn_inspect_whole.grid(row=2, column=2, padx=3, pady=2, sticky="ew")
 
         self.btn_frame.grid_columnconfigure(0, weight=1)
         self.btn_frame.grid_columnconfigure(1, weight=1)
@@ -716,6 +830,40 @@ class HUDOverlay(ctk.CTkToplevel):
         else:
             self.items_container.pack_forget()
 
+        # Written Questions Card & Live Editor (AVA 2.0)
+        is_written = bool(result.get("is_written_response", False))
+        if is_written:
+            written_info = result.get("written_details", {})
+            full_text = written_info.get("text", "")
+            if not full_text:
+                full_text = ans if len(ans) > 25 else ""
+
+            word_count = written_info.get("word_count", len(re.findall(r"\b[A-Za-z0-9'-]+\b", full_text)))
+            min_w = written_info.get("min_words")
+            humanized = written_info.get("humanized", False)
+            metrics = written_info.get("humanize_metrics", {})
+            grade = metrics.get("flesch_kincaid_grade")
+
+            min_str = f" / Min: {min_w}" if min_w else ""
+            badge_color = "#10b981" if not min_w or word_count >= min_w else "#f59e0b"
+            self.lbl_written_badge.configure(text=f"{word_count} words{min_str}", fg_color=badge_color)
+
+            if humanized:
+                h_text = "Jade's Humanizer: Active" + (f" (Grade {grade:.1f})" if grade else "")
+                self.lbl_humanizer_badge.configure(text=h_text, fg_color="#064e3b", text_color="#34d399")
+            else:
+                self.lbl_humanizer_badge.configure(text="Jade's Humanizer: Off", fg_color="#1e293b", text_color="#94a3b8")
+
+            # Update editor content if different
+            curr_editor_content = self.txt_written_edit.get("1.0", "end-1c").strip()
+            if curr_editor_content != full_text:
+                self.txt_written_edit.delete("1.0", "end")
+                self.txt_written_edit.insert("1.0", full_text)
+
+            self.written_card.pack(fill="x", padx=6, pady=4, before=self.lbl_reasoning)
+        else:
+            self.written_card.pack_forget()
+
         # Update Next button label to reflect whether Check Answer or Next was detected
         check_btn = result.get("check_button")
         hk_next = self.config.hotkeys.get("next_question", "F10")
@@ -728,6 +876,40 @@ class HUDOverlay(ctk.CTkToplevel):
 
         # Draw targets on cloaked visualizer overlay
         self.visualizer.draw_actions(actions, next_btn, check_btn)
+
+    def _on_written_text_edited(self, event=None):
+        """Called live as the user types into the written response preview box."""
+        raw_text = self.txt_written_edit.get("1.0", "end-1c").strip()
+        words = len(re.findall(r"\b[A-Za-z0-9'-]+\b", raw_text))
+        min_w = None
+        if self.engine.last_result and "written_details" in self.engine.last_result:
+            min_w = self.engine.last_result["written_details"].get("min_words")
+
+        min_str = f" / Min: {min_w}" if min_w else ""
+        color = "#10b981" if not min_w or words >= min_w else "#f59e0b"
+        self.lbl_written_badge.configure(text=f"{words} words{min_str}", fg_color=color)
+
+        # Propagate edited text directly to engine
+        self.engine.update_written_text(raw_text)
+
+    def _rehumanize_written_draft(self):
+        """Re-runs Jade's AI Humanizer and spellcheck on the current text in the editor."""
+        raw_text = self.txt_written_edit.get("1.0", "end-1c").strip()
+        if not raw_text or not self.engine.written_solver:
+            return
+        try:
+            res = self.engine.written_solver.humanizer.humanize(
+                raw_text,
+                mode=self.config.humanizer_mode,
+                tone=self.config.humanizer_tone,
+                reading_level=self.config.humanizer_reading_level,
+            )
+            polished, _ = self.engine.written_solver.spellcheck.check_and_correct(res.text)
+            self.txt_written_edit.delete("1.0", "end")
+            self.txt_written_edit.insert("1.0", polished)
+            self._on_written_text_edited()
+        except Exception as e:
+            logger.warning(f"Re-humanize failed: {e}")
 
     def toggle_collapse(self):
         """Toggles between compact pill and expanded view."""
@@ -849,3 +1031,25 @@ class HUDOverlay(ctk.CTkToplevel):
         img_lbl.pack(pady=10)
 
         ctk.CTkButton(test_win, text="Close", command=test_win.destroy, width=120).pack(pady=6)
+
+    def _manual_scroll_down(self):
+        """Manually scrolls viewport down 450px to view more of the question."""
+        try:
+            self.engine.executor.scroll(-450)
+            self._show_adjustment_toast("📜 Scrolled viewport down 450px")
+        except Exception as e:
+            logger.debug(f"Manual scroll down error: {e}")
+
+    def _manual_scroll_up(self):
+        """Manually scrolls viewport up 450px to return to top."""
+        try:
+            self.engine.executor.scroll(450)
+            self._show_adjustment_toast("📜 Scrolled viewport up 450px")
+        except Exception as e:
+            logger.debug(f"Manual scroll up error: {e}")
+
+    def _manual_inspect_whole_question(self):
+        """Forces solve pipeline to inspect both upper and lower views for long questions."""
+        self._show_adjustment_toast("🔍 Inspecting whole question (Dual-View)...")
+        self.engine.trigger_solve()
+

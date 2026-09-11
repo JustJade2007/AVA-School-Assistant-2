@@ -103,6 +103,7 @@ class AutomationExecutor:
         self._stop_event = threading.Event()
         self._is_executing = False
         self._input_stream_lock = threading.Lock()
+        self._viewport_is_scrolled = False
 
     def is_input_active(self) -> bool:
         """Returns True if an automation input stream is currently active."""
@@ -313,6 +314,31 @@ class AutomationExecutor:
             self.move_mouse_humanized(x, y)
         self._check_stop()
         pyautogui.scroll(clicks)
+
+    def ensure_scrolled_view(
+        self,
+        scrolled: bool,
+        scroll_amount: int = 500,
+        center_x: Optional[int] = None,
+        center_y: Optional[int] = None
+    ):
+        """
+        Dynamically aligns the browser or window viewport:
+        If scrolled=True and viewport is currently at top, scrolls down by scroll_amount.
+        If scrolled=False and viewport is currently scrolled down, scrolls back up to top.
+        """
+        self._check_stop()
+        scroll_amt = abs(int(scroll_amount))
+        if scrolled and not self._viewport_is_scrolled:
+            logger.info(f"Viewport alignment: scrolling down {scroll_amt}px to access lower view elements...")
+            self.scroll(-scroll_amt, center_x, center_y)
+            self._viewport_is_scrolled = True
+            time.sleep(0.3)
+        elif not scrolled and self._viewport_is_scrolled:
+            logger.info(f"Viewport alignment: scrolling up {scroll_amt}px to access upper view elements...")
+            self.scroll(scroll_amt, center_x, center_y)
+            self._viewport_is_scrolled = False
+            time.sleep(0.3)
 
     def key_press(self, key: str):
         """Presses an individual key or combo (e.g. 'enter', 'tab', 'ctrl+a')."""
@@ -795,6 +821,11 @@ class AutomationExecutor:
                             if sx is not None and sy is not None:
                                 t_roi = self.verifier.capture_roi(int(sx), int(sy), radius_w=25, radius_h=15)
                                 subsequent_input_targets.append((sub_idx, int(sx), int(sy), t_roi))
+
+                # Viewport scroll alignment (Dual-View Scrolled Action Execution)
+                is_scrolled_target = bool(action.get("in_scrolled_view", False))
+                scroll_amt = abs(int(action.get("scroll_amount", 500)))
+                self.ensure_scrolled_view(is_scrolled_target, scroll_amt)
 
                 self.execute_action(action)
 

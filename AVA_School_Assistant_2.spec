@@ -3,7 +3,21 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('config.default.json', '.')]
 binaries = []
-hiddenimports = []
+hiddenimports = [
+    'core.written_solver',
+    'core.spellcheck',
+    'core.humanizer',
+    'core.humanizer.client',
+    'core.humanizer.models',
+    'core.humanizer.engine',
+    'core.humanizer.engine.deep',
+    'core.humanizer.engine.generator',
+    'core.humanizer.engine.guardrails',
+    'core.humanizer.engine.prompt',
+    'core.humanizer.engine.readability',
+    'core.humanizer.engine.thesaurus',
+    'core.humanizer.parser',
+]
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 

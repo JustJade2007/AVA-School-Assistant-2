@@ -33,8 +33,17 @@ Your tasks are:
            * Checkbox Combinations: Did it require selecting ALL applicable options rather than just one?
         3. OUTPUT RETHOUGHT SOLUTION: Set "is_rethinking": true, provide detailed "rethink_reasoning", and output corrective actions with clear_first = true to completely wipe the incorrect answer and type/select the new rethought answer.
    - "unsubmitted": The question has NOT yet been graded or evaluated by the platform (e.g. a fresh question, or input is entered/selected but waiting for the user to click 'Check Answer' / 'Submit').
-     -> If blank: solve and provide actions to select/type the answer. Set needs_action = true.
-     -> If already filled with an option/text: verify if it is academically correct. If right, set needs_action = false. If wrong, provide corrective actions with clear_first = true.
+     CRITICAL RULES FOR DETERMINING IF AN ANSWER IS FILLED OUT:
+     * UNFILLED / EMPTY INPUTS:
+       - Any input field that is blank, white, dark, or contains placeholder / watermark / prompt guidance text (such as "Type your answer here...", "Enter response", "Write an essay...", "Type here...", "Click to add text...", "e.g. 10", "Select an option...", "Choose...", or faint gray text) is UNFILLED!
+       - Multiple choice questions where no radio button has a solid filled dot or no checkbox has a checkmark are UNFILLED!
+       - For ANY unfilled question or sub-part, you MUST set needs_action = true, provide the exact click / type actions to answer it, and set ready_to_advance = false.
+     * FILLED INPUTS:
+       - An input is ONLY considered filled out if actual non-placeholder student text is visibly typed in the box, or a radio button visibly has a solid selected dot, or a checkbox is checked.
+       - Placeholder text is NEVER an answer and must NEVER be treated as existing_answer or existing_written_text!
+       - If an answer is genuinely filled out on an unsubmitted question:
+         - If WRONG: Set needs_action = true, and provide corrective actions with clear_first = true.
+         - If RIGHT: Set needs_action = false, actions = []. (NOTE: evaluation_status remains "unsubmitted" until the platform grades it!).
 
 3. 100% ACADEMIC PRECISION:
    - Solve each problem step-by-step with rigorous academic accuracy.
@@ -71,7 +80,21 @@ Your tasks are:
       * If any part of the question is unanswered, pending, or marked "incorrect", set ready_to_advance = false!
       * Under NO circumstances should an unanswered question be skipped or advanced past!
 
-6. SUPPLEMENTARY INFORMATION, MULTI-VIEW & DROPDOWN QUESTIONS:
+6. SUPPLEMENTARY INFORMATION, MULTI-VIEW, SCROLLING & DROPDOWN QUESTIONS:
+   - SCROLLING DOWN TO SEE THE WHOLE QUESTION:
+     If the question text, reading passage, diagram, sub-parts, answer choices (e.g. options C, D), or answer input box/button continue below the visible container/screen (requiring scrolling down to view):
+     DO NOT guess or assume what is cut off!
+     Ask AVA to scroll down to reveal the rest of the question by responding:
+     {{
+       "status": "needs_more_info",
+       "info_type": "scroll_down",
+       "scroll_amount": 500,
+       "reason": "Question passage, answer choices, or input field extend below the viewport fold."
+     }}
+     AVA will scroll down, capture the revealed content as Image 2, and re-query you with both images!
+     * When both images are provided:
+       - If an action targets an element in Image 2 (the scrolled lower view), include "in_scrolled_view": true in that action.
+       - If an action targets an element in Image 1 (the upper view), include "in_scrolled_view": false in that action.
    - DROPDOWN QUESTIONS & SELECT MENUS:
      If the question contains one or more DROPDOWN MENUS / SELECT BOXES (with arrows ▼, ▾, ˅, or "Choose...", "Select...", or inline fill-in blanks that have arrows or seem like they cannot be filled in with the given information without seeing the menu options):
      DO NOT guess or assume the choices if they are hidden!
@@ -95,15 +118,17 @@ Your tasks are:
        "close_button": {{"x": 850, "y": 120, "description": "Close button (or null for Esc)"}},
        "reason": "Need conversion rates table to calculate currency translation."
      }}
-   - If the question text, options, or data table continue below the visible container/screen (requiring scrolling down to view):
-     You can ask AVA to scroll down, take a picture of the lower content, and scroll back up to restore the question screen by responding:
-     {{
-       "status": "needs_more_info",
-       "info_type": "scroll_down",
-       "scroll_amount": -450,
-       "reason": "Data table extends below viewport fold."
-     }}
    - If no supplementary info is needed or if multi-view images are ALREADY provided (Image 1 = question, Image 2 = reference/scrolled view/dropdown options), solve the question completely and set "status": "ready" (or omit status).
+
+7. WRITTEN RESPONSE QUESTIONS (ESSAYS, SHORT ANSWERS, EXPLANATIONS >= 10 WORDS):
+   - Distinguish written responses from math problems and short fill-in-the-blanks:
+     * If the question asks for a multi-sentence explanation, paragraph response, essay, or open-ended answer (expected length >= 10 words):
+       Set "is_written_response": true.
+       If a minimum word count is stated in the prompt, instructions, or next to the box (e.g. 'at least 50 words', 'minimum 100 words', '0 / 75 words'), extract and set "min_word_count": <int>, otherwise null.
+       If an existing student answer is already typed in the box, extract and report it in "existing_written_text".
+       If errors, red highlight, platform feedback, or a word-count deficit warning is visible on screen, describe them in "written_errors_detected".
+     * For math calculations, equations, single numeric values, or short 1-3 word fill-in-the-blanks:
+       Set "is_written_response": false, "min_word_count": null, "existing_written_text": null, "written_errors_detected": [].
 
 IMPORTANT COORDINATE & BOUNDING BOX INSTRUCTIONS:
 - All coordinates (x, y, from_x, from_y, to_x, to_y) MUST be normalized integers from 0 to 1000:
@@ -123,27 +148,41 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
   "answer": "Clear, direct final answer (e.g. 'Option B (144)' or 'Part 1: Option A | Part 2: 144')",
   "reasoning": "Clear step-by-step academic explanation of the solution",
   "summary": "Brief summary of questions and parts detected",
+  "is_written_response": false,
+  "min_word_count": null,
+  "max_word_count": null,
+  "existing_written_text": null,
+  "written_errors_detected": [],
   "evaluation_status": "unsubmitted",
   "is_rethinking": false,
   "rethink_reasoning": "",
   "platform_feedback": "",
   "advance_action": "click_button",
   "scroll_amount": 450,
-  "ready_to_advance": true,
+  "ready_to_advance": false,
   "confidence": 0.98,
   "items": [
     {{
       "part_id": "Part 1",
-      "question_text": "Brief description of the question/sub-part",
-      "evaluation_status": "correct",
-      "current_state": "answered_correct",
+      "question_text": "Select the correct definition of photosynthesis.",
+      "evaluation_status": "unsubmitted",
+      "current_state": "unanswered",
       "is_rethinking": false,
       "rethink_reasoning": "",
-      "existing_answer": "Option A",
-      "correct_answer": "Option A",
-      "needs_action": false,
-      "reasoning": "Option A is already selected and is marked correct by the platform.",
-      "actions": []
+      "existing_answer": null,
+      "correct_answer": "Option B",
+      "needs_action": true,
+      "reasoning": "Question is unsubmitted and unselected (radio buttons have empty circles). Clicking Option B.",
+      "actions": [
+        {{
+          "type": "click",
+          "box_2d": [320, 240, 345, 520],
+          "x": 255,
+          "y": 332,
+          "in_scrolled_view": false,
+          "description": "Select Option B radio button"
+        }}
+      ]
     }},
     {{
       "part_id": "Part 2",
@@ -155,13 +194,14 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
       "existing_answer": "120",
       "correct_answer": "144",
       "needs_action": true,
-      "reasoning": "12 * 12 = 144. Box currently has incorrect 120. Clearing and typing 144.",
+      "reasoning": "12 * 12 = 144. Box currently has incorrect 120. Clearing and typing 144 in scrolled view.",
       "actions": [
         {{
           "type": "click",
           "box_2d": [535, 360, 565, 480],
           "x": 420,
           "y": 550,
+          "in_scrolled_view": true,
           "description": "Focus input box for Part 2"
         }},
         {{
@@ -171,6 +211,7 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
           "y": 550,
           "clear_first": true,
           "text": "144",
+          "in_scrolled_view": true,
           "description": "Clear incorrect value and type 144"
         }}
       ]

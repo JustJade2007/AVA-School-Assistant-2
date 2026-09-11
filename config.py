@@ -102,6 +102,7 @@ DEFAULT_CONFIG_FILE_PATH = get_default_config_file_path()
 # Available default model choices
 AVAILABLE_MODELS = {
     "gemini": [
+        "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
@@ -124,6 +125,15 @@ AVAILABLE_MODELS = {
     ]
 }
 
+AVAILABLE_QUALITY_PRESETS = [
+    "b_grade",
+    "a_grade",
+    "honors_ap",
+]
+AVAILABLE_HUMANIZER_MODES = ["budget", "deep"]
+AVAILABLE_HUMANIZER_TONES = ["academic", "casual", "neutral", "professional"]
+AVAILABLE_HUMANIZER_LEVELS = ["high_school", "middle_school", "college", "general"]
+
 
 @dataclass
 class AppConfig:
@@ -134,8 +144,21 @@ class AppConfig:
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     custom_api_key: str = ""
-    model_name: str = "gemini-3.6-flash"
+    model_name: str = "gemini-3.8-flash"
     custom_api_base: str = "https://openrouter.ai/api/v1"
+
+    # Written Questions & Jade's AI Humanizer (AVA 2.0)
+    written_model_name: str = "gemini-3.8-flash"
+    written_quality_preset: str = "a_grade"
+    written_word_buffer_pct: float = 0.15
+    written_max_word_overage: int = 20
+    auto_confirm_written_responses: bool = False
+    humanizer_enabled: bool = True
+    humanizer_mode: str = "budget"
+    humanizer_tone: str = "academic"
+    humanizer_reading_level: str = "high_school"
+    spellcheck_enabled: bool = True
+    written_verification_enabled: bool = True
 
     # Execution Behavior
     # autonomous_mode: True = acts automatically; False = asks for confirmation before clicking/typing
@@ -362,6 +385,10 @@ class ConfigManager:
         self.config = self.load()
         self._sync_logging()
         self._notify_listeners()
+        return self.config
+
+    def get(self) -> AppConfig:
+        """Returns active AppConfig."""
         return self.config
 
     def save(self) -> bool:

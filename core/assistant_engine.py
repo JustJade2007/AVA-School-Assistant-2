@@ -7,6 +7,7 @@ state transitions, and loop control.
 import time
 import random
 import threading
+import re
 from enum import Enum
 from typing import Dict, Any, Optional, Callable, List, Tuple
 from PIL import Image, ImageStat
@@ -18,6 +19,7 @@ from core.automation import AutomationExecutor, EmergencyStopException
 from core.local_verifier import LocalVisualVerifier
 from core.logger import get_logger
 from core.error_handler import create_error_diagnostic, ErrorDiagnostic
+from core.written_solver import WrittenSolver
 
 logger = get_logger("engine")
 
@@ -74,6 +76,9 @@ class AssistantEngine:
         self._last_next_click_time: float = 0.0
         self._next_click_lock = threading.Lock()
 
+        # Written question solver & humanizer (AVA 2.0)
+        self.written_solver: Optional[WrittenSolver] = None
+
         # Update executor parameters on init
         self._sync_config()
         self.config_manager.add_listener(lambda cfg: self._sync_config())
@@ -97,6 +102,30 @@ class AssistantEngine:
         self.executor.click_variance_enabled = self.config.click_variance_enabled
         self.executor.smart_typos_enabled = self.config.smart_typos_enabled
         self.executor.local_verification_enabled = self.config.local_verification_enabled
+
+        # Sync WrittenSolver with active AI credentials and user preferences
+        try:
+            ai_c = AIClient(
+                provider=self.config.ai_provider,
+                api_key=self.config.get_api_key_for_provider(self.config.ai_provider),
+                model_name=self.config.written_model_name,
+                custom_base_url=self.config.custom_api_base
+            )
+            self.written_solver = WrittenSolver(
+                ai_client=ai_c,
+                api_key=self.config.gemini_api_key or self.config.api_key,
+                model_name=self.config.written_model_name,
+                quality_preset=self.config.written_quality_preset,
+                word_buffer_pct=self.config.written_word_buffer_pct,
+                max_word_overage=self.config.written_max_word_overage,
+                humanizer_enabled=self.config.humanizer_enabled,
+                humanizer_mode=self.config.humanizer_mode,
+                humanizer_tone=self.config.humanizer_tone,
+                humanizer_reading_level=self.config.humanizer_reading_level,
+                spellcheck_enabled=self.config.spellcheck_enabled,
+            )
+        except Exception as e:
+            logger.debug(f"Could not sync WrittenSolver: {e}")
 
     def add_state_listener(self, cb: Callable[[EngineState, str], None]):
         if cb not in self._state_callbacks:
@@ -225,24 +254,33 @@ class AssistantEngine:
                 else:
                     all_items_correct = False
 
-        # Check local visual markers if screen_image is supplied
+        # Check local visual markers if screen_image is supplied (or capture active screen)
         local_markers = {"status": "unsubmitted", "detected": False, "details": ""}
-        if screen_image is not None and hasattr(self.verifier, "detect_platform_evaluation_markers"):
+        if hasattr(self.verifier, "detect_platform_evaluation_markers"):
             try:
-                local_markers = self.verifier.detect_platform_evaluation_markers(screen_image)
+                if screen_image is None and hasattr(self, "capture"):
+                    try:
+                        screen_image = self.capture.capture_screen(region=self.last_region)
+                    except Exception as e:
+                        logger.debug(f"Screen capture for local markers: {e}")
+                local_markers = self.verifier.detect_platform_evaluation_markers(screen_image) or local_markers
             except Exception as e:
                 logger.debug(f"Error checking local evaluation markers: {e}")
 
-        # Combine signals:
-        # 1. If AI explicitly marks correct, prioritize AI semantic understanding over simple pixel color count
-        if eval_status in ["correct", "right"] or (all_items_correct and not any_item_incorrect):
-            final_status = "correct"
-            is_answered = True
-            is_rethinking = False
-            details = f"marked_correct (ai={eval_status}, visual={local_markers.get('details', '')})"
+        # Check for unsubmitted cues: Check Answer / Submit button or pending actions
+        has_check_btn = bool(res.get("check_button"))
+        has_unexecuted_actions = bool(res.get("actions")) and len(res.get("actions", [])) > 0
+        has_items_needing_action = any(bool(itm.get("needs_action")) for itm in items) if isinstance(items, list) else False
 
-        # 2. If AI or visual markers indicate incorrect
-        elif eval_status in ["incorrect", "wrong"] or any_item_incorrect or (local_markers.get("detected") and local_markers.get("status") == "incorrect"):
+        # Filter out placeholder text if reported as existing answer
+        if self.written_solver:
+            existing_w = res.get("existing_written_text")
+            if existing_w and self.written_solver.is_placeholder_text(existing_w):
+                res["existing_written_text"] = None
+
+        # Combine signals:
+        # 1. If AI or visual markers indicate incorrect
+        if eval_status in ["incorrect", "wrong"] or any_item_incorrect or (local_markers.get("detected") and local_markers.get("status") == "incorrect"):
             final_status = "incorrect"
             is_answered = False  # NEVER considered answered when marked incorrect!
             is_rethinking = True
@@ -250,12 +288,26 @@ class AssistantEngine:
                 rethink_reasoning = "Question marked incorrect by platform. Rethinking problem and entry format."
             details = f"marked_incorrect (ai={eval_status}, visual={local_markers.get('details', '')})"
 
-        # 3. If visual markers explicitly indicate correct AND AI did not categorize as unsubmitted
-        elif local_markers.get("detected") and local_markers.get("status") == "correct" and eval_status != "unsubmitted":
+        # 2. If visual markers explicitly indicate correct
+        elif local_markers.get("detected") and local_markers.get("status") == "correct":
             final_status = "correct"
             is_answered = True
             is_rethinking = False
             details = f"marked_correct (visual={local_markers.get('details', '')})"
+
+        # 3. If AI explicitly marks correct, verify against unsubmitted indicators
+        elif eval_status in ["correct", "right"] or (all_items_correct and not any_item_incorrect):
+            # Guard against false positive "correct" when question is actually unsubmitted or has unexecuted actions
+            if (has_check_btn or has_unexecuted_actions or has_items_needing_action) and local_markers.get("status") != "correct":
+                final_status = "unsubmitted"
+                is_answered = False
+                is_rethinking = False
+                details = f"unsubmitted_requires_action (check_btn={has_check_btn}, actions={len(res.get('actions', []))})"
+            else:
+                final_status = "correct"
+                is_answered = True
+                is_rethinking = False
+                details = f"marked_correct (ai={eval_status}, visual={local_markers.get('details', '')})"
 
         # 4. Otherwise, unsubmitted
         else:
@@ -513,8 +565,8 @@ class AssistantEngine:
                                     logger.debug(f"Error verifying dropdown close: {e}")
 
                 elif info_type == "scroll_down":
-                    scroll_amt = int(result.get("scroll_amount", 400))
-                    scroll_amt = max(150, min(800, scroll_amt))
+                    scroll_amt = abs(int(result.get("scroll_amount", 500)))
+                    scroll_amt = max(200, min(900, scroll_amt))
                     logger.info(f"Inspecting content below viewport fold (scrolling down {scroll_amt}px)...")
                     self.set_state(EngineState.INSPECTING, f"Scrolling down {scroll_amt}px...")
                     self._handle_adjustment(f"🔍 Scrolling down {scroll_amt}px to inspect content...")
@@ -555,6 +607,7 @@ class AssistantEngine:
                     # Restore exact scroll position to align coordinate frame with top
                     logger.info(f"Restoring viewport fold scroll (scrolling up {scroll_amt}px)...")
                     self.executor.scroll(scroll_amt, center_x, center_y)
+                    self.executor._viewport_is_scrolled = False
                     time.sleep(0.4)
 
                     # Zero-token verification: verify scroll restoration matches pre-scroll baseline
@@ -593,6 +646,61 @@ class AssistantEngine:
             actions_count = len(result.get('actions', []))
             logger.info(f"AI Solution returned: Answer='{ans}', Actions={actions_count}, Question='{q_snippet}'")
 
+            # Automatic Cut-Off Question Detection:
+            # If 0 actions were found and no next button is visible, the question or its inputs/choices
+            # may be below the fold. Automatically scroll down 500px to inspect lower viewport.
+            q_text = str(result.get("question", "")).strip().lower()
+            is_interstitial = (
+                not q_text
+                or any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
+                and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation", "explain", "describe"])
+            )
+            if actions_count == 0 and not is_interstitial and not extra_images and not result.get("next_button") and not self.executor.is_stopped():
+                logger.info("No input actions detected in top view. Possible cut-off question; scrolling down 500px to inspect lower area...")
+                self.set_state(EngineState.INSPECTING, "Scrolling down to inspect lower question area...")
+                self._handle_adjustment("📜 Cut-off question check: scrolling down to view remainder...")
+
+                auto_scroll_amt = 500
+                center_x = offset_x + curr_w // 2
+                center_y = offset_y + curr_h // 2
+
+                self.executor.scroll(-auto_scroll_amt, center_x, center_y)
+                time.sleep(0.6)
+
+                scrolled_b64, _, _, _, _, _, _ = self.capture.capture_and_encode(
+                    region=region,
+                    max_dimension=self.config.max_capture_dimension
+                )
+
+                # Restore viewport to top
+                self.executor.scroll(auto_scroll_amt, center_x, center_y)
+                self.executor._viewport_is_scrolled = False
+                time.sleep(0.4)
+
+                logger.info("Re-evaluating question with both upper view and scrolled lower view...")
+                self.set_state(EngineState.THINKING, "Analyzing question with lower scrolled view...")
+                scrolled_result = ai_client.solve_screen(
+                    base64_image=base64_data,
+                    image_width=curr_w,
+                    image_height=curr_h,
+                    scale_x=scale_x,
+                    scale_y=scale_y,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                    calibration_offset_x=self.config.calibration_offset_x,
+                    calibration_offset_y=self.config.calibration_offset_y,
+                    calibration_scale_x=self.config.calibration_scale_x,
+                    calibration_scale_y=self.config.calibration_scale_y,
+                    coordinate_mode=self.config.coordinate_mode,
+                    extra_images=[scrolled_b64]
+                )
+                if scrolled_result and len(scrolled_result.get("actions", [])) > 0:
+                    logger.info(f"Lower view inspection found {len(scrolled_result.get('actions', []))} action(s)!")
+                    result = scrolled_result
+                    q_snippet = (result.get('question') or '')[:80]
+                    ans = result.get('answer')
+                    actions_count = len(result.get('actions', []))
+
             # Check question evaluation status (correct, incorrect, unsubmitted)
             eval_info = self.check_question_evaluation_status(result)
             result["evaluation_status"] = eval_info["status"]
@@ -619,12 +727,19 @@ class AssistantEngine:
             # Measure physical boundaries of input boxes on screen and snap to middle 50%
             self._refine_input_box_targets(result)
 
+            # Written Questions & Jade's AI Humanizer Pipeline (AVA 2.0)
+            self._process_written_question_if_applicable(result)
+
             self.last_result = result
             self.last_error = None
             self._notify_result(result)
 
             # If all parts are already confirmed CORRECT by platform and no actions are required
-            if eval_info["status"] == "correct" and (not result.get("needs_action") or len(result.get("actions", [])) == 0):
+            if (
+                eval_info["status"] == "correct"
+                and (not result.get("needs_action") or len(result.get("actions", [])) == 0)
+                and not result.get("check_button")
+            ):
                 logger.info("Question is already marked CORRECT by platform on screen. No input actions needed.")
                 if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
                     time.sleep(0.4)
@@ -675,12 +790,31 @@ class AssistantEngine:
                 return
 
             # Proceed to execute if autonomous mode, or if user skipped reading via F9,
-            # or if currently in an active multi-part chain
-            if self.config.autonomous_mode or self._force_execute_after_reading or (self.config.chain_multi_parts and self._multi_part_active):
+            # or if currently in an active multi-part chain.
+            # MANDATORY SAFEGUARD (AVA 2.0): Written questions (>= 10 words) ALWAYS require confirmation
+            # unless specifically opted in via auto_confirm_written_responses!
+            is_written = bool(result.get("is_written_response", False))
+            can_auto_proceed = (
+                (self.config.autonomous_mode or self._force_execute_after_reading or (self.config.chain_multi_parts and self._multi_part_active))
+                and not (is_written and not self.config.auto_confirm_written_responses)
+            )
+
+            if can_auto_proceed:
                 self._force_execute_after_reading = False
                 self.execute_current_solution()
             else:
-                self.set_state(EngineState.WAITING_CONFIRMATION)
+                self._force_execute_after_reading = False
+                if is_written:
+                    wd = result.get("written_details", {})
+                    cnt = wd.get("word_count", 0)
+                    min_w = wd.get("min_words")
+                    min_str = f" | Min: {min_w}" if min_w else ""
+                    self.set_state(
+                        EngineState.WAITING_CONFIRMATION,
+                        f"Written Response Ready ({cnt} words{min_str}) - Press F9 to Confirm"
+                    )
+                else:
+                    self.set_state(EngineState.WAITING_CONFIRMATION)
 
         except EmergencyStopException:
             logger.warning("Emergency stop halted the solve pipeline.")
@@ -846,6 +980,27 @@ class AssistantEngine:
                     f"Details: {verification.get('details', '')}"
                 )
                 self._handle_adjustment("✓ Answer verified (Zero-Token Confirmed)")
+
+                # Written response verification (AVA 2.0)
+                if self.last_result.get("is_written_response") and self.config.written_verification_enabled:
+                    written_info = self.last_result.get("written_details", {})
+                    min_w = written_info.get("min_words")
+                    typed_text = written_info.get("text", "")
+                    for act in actions:
+                        if act.get("type") == "type_text" and act.get("x") is not None:
+                            bx, by = int(act.get("x")), int(act.get("y"))
+                            after_roi = self.verifier.capture_roi(bx, by, radius_w=60, radius_h=35)
+                            v_ok, v_reason, v_metrics = self.verifier.verify_written_input_area(
+                                before_roi=None,
+                                after_roi=after_roi,
+                                expected_min_words=min_w,
+                                expected_chars=len(typed_text)
+                            )
+                            if not v_ok:
+                                logger.warning(f"Written input area verification flagged: {v_reason}")
+                                self._handle_adjustment(f"⚠️ Written input check: {v_reason}")
+                            else:
+                                logger.info(f"Written input area verified: {v_metrics}")
 
                 # If this was a retry or rethink, the corrective answer is now confirmed in place!
                 if was_rethinking:
@@ -1550,6 +1705,10 @@ class AssistantEngine:
             logger.debug("trigger_check_button: No valid check_button in last result.")
             return
 
+        is_scrolled = bool(check_btn.get("in_scrolled_view", False))
+        scroll_amt = abs(int(check_btn.get("scroll_amount", 500)))
+        self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
+
         x = check_btn.get("screen_x", check_btn.get("x"))
         y = check_btn.get("screen_y", check_btn.get("y"))
         if x is not None and y is not None:
@@ -1590,6 +1749,10 @@ class AssistantEngine:
         # Enforce navigation debounce / rate-limiting
         if not self._can_click_next(min_interval=2.0):
             return
+
+        is_scrolled = bool(next_btn.get("in_scrolled_view", False))
+        scroll_amt = abs(int(next_btn.get("scroll_amount", 500)))
+        self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
 
         x = next_btn.get("screen_x", next_btn.get("x"))
         y = next_btn.get("screen_y", next_btn.get("y"))
@@ -1667,6 +1830,95 @@ class AssistantEngine:
                 self.trigger_solve()
             else:
                 self.set_state(EngineState.IDLE)
+
+    def _process_written_question_if_applicable(self, result: Dict[str, Any]):
+        """
+        Detects if the solved question requires a written response (>=10 words).
+        If so, routes through WrittenSolver (Gemini 3.8 Flash, Jade's AI Humanizer, spellcheck, word buffer).
+        """
+        actions = result.get("actions", [])
+        type_actions = [a for a in actions if a.get("type") == "type_text"]
+
+        # Check if vision tagged is_written_response or if any typed text has >= 10 words
+        is_written = bool(result.get("is_written_response"))
+        if not is_written and type_actions:
+            for act in type_actions:
+                txt = act.get("text", "")
+                word_count = len(re.findall(r"\b[A-Za-z0-9'-]+\b", txt))
+                if word_count >= 10:
+                    is_written = True
+                    break
+
+        if not is_written:
+            result.setdefault("is_written_response", False)
+            return
+
+        result["is_written_response"] = True
+        prompt_q = result.get("question", "") or result.get("summary", "")
+        existing_text = result.get("existing_written_text")
+        errors = " | ".join(result.get("written_errors_detected", []))
+        if result.get("rethink_reasoning"):
+            errors = f"{errors} | {result.get('rethink_reasoning')}".strip(" |")
+
+        min_words = result.get("min_word_count")
+        logger.info(f"Written question detected (Min words: {min_words}). Invoking WrittenSolver...")
+
+        if not self.written_solver:
+            self._sync_config()
+
+        if self.written_solver:
+            try:
+                written_res = self.written_solver.process_solution(
+                    prompt_text=prompt_q,
+                    existing_text=existing_text,
+                    error_feedback=errors,
+                    override_min_words=min_words,
+                )
+                result["written_details"] = written_res
+                final_text = written_res.get("text", "")
+
+                # Update type_text actions with humanized text
+                for act in type_actions:
+                    act["text"] = final_text
+                    act["clear_first"] = True
+                for itm in result.get("items", []):
+                    if isinstance(itm, dict):
+                        for act in itm.get("actions", []):
+                            if act.get("type") == "type_text":
+                                act["text"] = final_text
+                                act["clear_first"] = True
+
+                result["answer"] = final_text[:120] + ("..." if len(final_text) > 120 else "")
+                logger.info(
+                    f"Written answer drafted: {written_res.get('word_count')} words "
+                    f"(Humanized={written_res.get('humanized')})"
+                )
+            except Exception as e:
+                logger.error(f"Error in written solver processing: {e}")
+
+    def update_written_text(self, new_text: str):
+        """Allows the user to edit the written answer directly from the HUD preview before confirming."""
+        if not self.last_result:
+            return
+        logger.info(f"User updated written answer text ({len(new_text.split())} words).")
+        actions = self.last_result.get("actions", [])
+        for act in actions:
+            if act.get("type") == "type_text":
+                act["text"] = new_text
+                act["clear_first"] = True
+        for itm in self.last_result.get("items", []):
+            if isinstance(itm, dict):
+                for act in itm.get("actions", []):
+                    if act.get("type") == "type_text":
+                        act["text"] = new_text
+                        act["clear_first"] = True
+        # Update written_details
+        if "written_details" in self.last_result:
+            wd = self.last_result["written_details"]
+            wd["text"] = new_text
+            wd["word_count"] = self.written_solver.count_words(new_text) if self.written_solver else len(new_text.split())
+        self.last_result["answer"] = new_text[:120] + ("..." if len(new_text) > 120 else "")
+        self._notify_result(self.last_result)
 
     def pause_resume(self):
         """Toggles pause/resume state."""

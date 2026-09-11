@@ -8,6 +8,70 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.0.2.a] - 2026-09-11
+
+### Fixed
+- **Jade's AI Humanizer Live REST Execution Pipeline**:
+  - Fixed a critical bug in `core/humanizer/engine/generator.py` where `_client is None` (due to missing `google-genai` pip package) caused synchronous and asynchronous humanization to unconditionally abort network calls and default to un-transformed offline text.
+  - Implemented direct REST API execution via standard `requests` with multi-model fallback (`self.model` -> `self.fallback_model` -> `gemini-3.8-flash` -> `gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash`), restoring 100% active live Gemini humanization for all users with configured API keys.
+- **Implemented `generate_text_response` in `AIClient`**:
+  - Added native text-only response generation to `core/ai_client.py` across Gemini, OpenAI, Anthropic, and Custom providers, resolving an `AttributeError` that previously caused written question drafting to fall back to hardcoded robotic placeholder text.
+- **Upgraded Offline Paraphraser Heuristics**:
+  - Expanded `STIFF_TRANSITIONS` and pattern sanitizers in `core/humanizer/engine/deep.py` to strip robotic AI hedging (*"Based on the provided information..."*, *"It is important to remember that..."*, *"fundamental principles underlying..."*, *"interact directly to support..."*), normalize sentence starters, and capitalize clauses cleanly.
+- **Humanizer Model Alignment & Transformation Tracking**:
+  - In `core/written_solver.py`, dynamically passed the user's selected Gemini model to `Humanizer`.
+  - Added transformation diff tracking and logging (`is_offline`, `text_changed`, `buzzwords_replaced`, readability scores) to ensure complete visibility into text changes.
+
+---
+
+## [2.0.1.a] - 2026-09-11
+
+### Added
+- **Question Viewport Scrolling & Dual-View Scrolled Action Execution**:
+  - Implemented automatic and on-demand scrolling down to reveal the entire question when question stems, reading passages, answer choices, or input fields extend below the visible viewport fold.
+  - Multi-view solving pipeline: captures Image 1 (top of question) and Image 2 (scrolled lower view), passing both to Gemini with spatial context.
+  - Added `ensure_scrolled_view` in `core/automation.py` to dynamically scroll and align the viewport before executing clicks or typing targeting lower-view elements (`in_scrolled_view: True`).
+  - Added manual viewport scroll helper buttons to the HUD (`📜 Scroll Down`, `📜 Scroll Up`, `🔍 Inspect Whole Q`).
+- **Harden Answer Filled-Out Detection & Placeholder Filtering**:
+  - Fixed false-positive detection where blank input boxes or placeholder text (*"Type your answer here..."*, *"Enter response"*, *"Write an essay..."*, *"e.g. 10"*, *"Click to add text"*) were misread as already filled out.
+  - Upgraded contrast-aware glyph detection in `is_text_input_filled` (`core/local_verifier.py`) to correctly distinguish typed ink from blank white/dark backgrounds and faint watermark text.
+  - Hardened evaluation status invariants in `core/assistant_engine.py`: unsubmitted questions showing "Check Answer" or "Submit" buttons cannot be erroneously promoted to `correct` or skipped.
+
+---
+
+## [2.0.0.a] - 2026-09-11
+
+### Added
+- **Written Questions & Essays Engine (AVA 2.0 Major Upgrade)**:
+  - Added full end-to-end support for answering written open-ended questions, short answers, paragraphs, and essays using **Gemini 3.8 Flash** (`gemini-3.8-flash`).
+  - Implemented multi-tier quality presets:
+    - `Realistic Student (B-Grade)`: Authentic student cadence, colloquial flow, realistic punctuation, and non-robotic phrasing.
+    - `Solid (A-Grade)`: Clear structured thesis, strong topic sentences, and focused academic argumentation.
+    - `Honors / AP`: Advanced analytical depth, elevated vocabulary, and nuanced synthesis.
+  - Implemented automatic extraction and enforcement of word count constraints:
+    - Parses min/max word limits (e.g. "at least 50 words", "100-150 words", "minimum of 25 words").
+    - Configurable word buffer percentage (+10%–20%) and maximum overage cap (+15–25 words) preventing overly verbose AI answers that trigger suspicion.
+    - Trims intelligently at natural sentence boundaries without leaving dangling thoughts.
+- **Embedded Jade's AI Humanizer Engine**:
+  - Bundled [Jade's AI Humanizer](https://github.com/JustJade2007/Jade-s-AI-Humanizer) directly into `core/humanizer/` as an offline client-side library requiring zero external daemons or user installs.
+  - Automated buzzword sanitization stripping stereotypical AI clichés (*delve into*, *tapestry of*, *testament to*, *beacon of*, *multifaceted*).
+  - Configurable humanizer modes (`budget` vs `deep`), tones (`academic`, `casual`, `neutral`, `professional`), and reading levels (`middle_school`, `high_school`, `college`, `general`).
+  - Added REST API fallback supporting student Google API keys without requiring `google-genai` pip dependencies.
+- **Local Offline Dictionary Spellchecker & Text Sanitizer**:
+  - Created zero-latency O(1) typo corrector in `core/spellcheck.py` covering frequent student slips, contraction repairs, accidental double-word deduplication, and punctuation spacing normalization.
+- **Mandatory User Confirmation Safeguard for Written Responses (10+ Words)**:
+  - Enforced a hard safety barrier: any written response of 10 or more words automatically pauses at `Waiting for Confirmation` so the student can inspect the draft before typing.
+  - Added `Auto-Confirm Written Responses` toggle in Settings for users who deliberately prefer autonomous typing.
+- **Live HUD Written Preview & Interactive Text Editor**:
+  - Added an expandable written question card in `ui/hud_overlay.py` with an interactive multi-line text editor (`CTkTextbox`).
+  - Allows the user to inspect, revise, tweak, or completely rewrite the drafted response before typing.
+  - Added live word count badge with color coding (green when meeting word minimum, amber if below minimum).
+  - Added `✨ Re-Humanize` button to re-run humanization and buzzword stripping on edited text with a single click.
+- **Post-Typing Area Verification**:
+  - Integrated `verify_written_input_area` in `core/local_verifier.py` to confirm text ink stroke density and visual change within the bounding box post-typing.
+- **Dedicated Settings Tab for Written Questions**:
+  - Added `✍️ Written & Humanizer` tab in `ui/settings_view.py` for full configuration of models, quality presets, word buffers, humanizer parameters, spellcheck, and confirmation safeguards.
+
 ---
 
 ## [1.1.3.a] - 2026-09-10

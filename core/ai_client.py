@@ -276,6 +276,124 @@ class AIClient:
 
         return None
 
+    def generate_text_response(
+        self,
+        prompt: str,
+        system_instruction: str = "",
+        model_override: Optional[str] = None,
+        temperature: float = 0.7,
+    ) -> str:
+        """
+        Generates a direct text response for written schoolwork, explanations, and essays
+        using the configured AI provider (Gemini, OpenAI, Anthropic, or Custom).
+        """
+        if not self.api_key:
+            raise RuntimeError("API Key is missing.")
+
+        model = (model_override or self.model_name).strip()
+        headers = {"Content-Type": "application/json"}
+
+        if self.provider == "gemini":
+            candidate_models = [model, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+            seen = set()
+            models_to_try = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
+
+            for mod in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={self.api_key}"
+                payload: Dict[str, Any] = {
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": temperature},
+                }
+                if system_instruction:
+                    payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+                try:
+                    resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            return "".join(p.get("text", "") for p in parts).strip()
+                        return ""
+                    logger.debug(f"Gemini text generation failed for model {mod} (HTTP {resp.status_code}): {resp.text}")
+                except Exception as e:
+                    logger.debug(f"Gemini text request exception on {mod}: {e}")
+                    continue
+
+            raise RuntimeError(f"All Gemini models failed to generate text response.")
+
+        elif self.provider == "openai":
+            url = f"{self.custom_base_url if self.provider == 'custom' else 'https://api.openai.com/v1'}/chat/completions"
+            oa_headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            messages = []
+            if system_instruction:
+                messages.append({"role": "system", "content": system_instruction})
+            messages.append({"role": "user", "content": prompt})
+
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            resp = requests.post(url, headers=oa_headers, json=payload, timeout=self.timeout)
+            if resp.status_code != 200:
+                err_msg = format_api_error("OpenAI", resp.status_code, resp.text)
+                raise RuntimeError(err_msg)
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+
+        elif self.provider == "anthropic":
+            url = "https://api.anthropic.com/v1/messages"
+            ant_headers = {
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "max_tokens": 2048,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+            }
+            if system_instruction:
+                payload["system"] = system_instruction
+
+            resp = requests.post(url, headers=ant_headers, json=payload, timeout=self.timeout)
+            if resp.status_code != 200:
+                err_msg = format_api_error("Anthropic", resp.status_code, resp.text)
+                raise RuntimeError(err_msg)
+            data = resp.json()
+            return data["content"][0]["text"].strip()
+
+        elif self.provider == "custom":
+            url = f"{self.custom_base_url}/chat/completions"
+            oa_headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            messages = []
+            if system_instruction:
+                messages.append({"role": "system", "content": system_instruction})
+            messages.append({"role": "user", "content": prompt})
+
+            payload = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            resp = requests.post(url, headers=oa_headers, json=payload, timeout=self.timeout)
+            if resp.status_code != 200:
+                err_msg = format_api_error("Custom", resp.status_code, resp.text)
+                raise RuntimeError(err_msg)
+            data = resp.json()
+            return data["choices"][0]["message"]["content"].strip()
+
+        raise RuntimeError(f"Unsupported provider: {self.provider}")
+
     def _call_gemini(self, base64_image: str, prompt: str, extra_images: Optional[List[str]] = None) -> str:
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent"
@@ -738,3 +856,102 @@ class AIClient:
 
         if not result.get("question"):
             result["question"] = result.get("summary") or "Question detected"
+
+    def generate_text_response(
+        self,
+        prompt: str,
+        system_instruction: str = "",
+        model_override: Optional[str] = None
+    ) -> str:
+        """
+        Sends a pure text generation query to the configured AI provider.
+        Utilizes model_override if provided (e.g. gemini-3.8-flash).
+        """
+        if not self.api_key:
+            raise ValueError("API Key is empty.")
+
+        target_model = (model_override or self.model_name).strip()
+        logger.debug(f"generate_text_response: calling provider '{self.provider}' model '{target_model}'...")
+
+        if self.provider == "gemini":
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={self.api_key}"
+            headers = {"Content-Type": "application/json"}
+            payload: Dict[str, Any] = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.7
+                }
+            }
+            if system_instruction:
+                payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+            resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+            if resp.status_code != 200:
+                err_msg = format_api_error("Gemini", resp.status_code, resp.text)
+                logger.error(f"Gemini text generation failed: {err_msg}")
+                raise RuntimeError(err_msg)
+
+            data = resp.json()
+            try:
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except (KeyError, IndexError) as e:
+                raise RuntimeError(f"Unexpected response structure from Gemini: {data}")
+
+        elif self.provider in ["openai", "custom"]:
+            base_url = self.custom_base_url if self.provider == "custom" else "https://api.openai.com/v1"
+            url = f"{base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            messages = []
+            if system_instruction:
+                messages.append({"role": "system", "content": system_instruction})
+            messages.append({"role": "user", "content": prompt})
+
+            payload = {
+                "model": target_model,
+                "messages": messages,
+                "temperature": 0.7
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+            if resp.status_code != 200:
+                err_msg = format_api_error(self.provider.title(), resp.status_code, resp.text)
+                logger.error(f"{self.provider} text generation failed: {err_msg}")
+                raise RuntimeError(err_msg)
+
+            data = resp.json()
+            try:
+                return data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError):
+                raise RuntimeError(f"Unexpected response structure from {self.provider}: {data}")
+
+        elif self.provider == "anthropic":
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": target_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1500,
+                "temperature": 0.7
+            }
+            if system_instruction:
+                payload["system"] = system_instruction
+
+            resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+            if resp.status_code != 200:
+                err_msg = format_api_error("Anthropic", resp.status_code, resp.text)
+                logger.error(f"Anthropic text generation failed: {err_msg}")
+                raise RuntimeError(err_msg)
+
+            data = resp.json()
+            try:
+                return data["content"][0]["text"]
+            except (KeyError, IndexError):
+                raise RuntimeError(f"Unexpected response structure from Anthropic: {data}")
+
+        raise ValueError(f"Unsupported AI provider: {self.provider}")

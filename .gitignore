@@ -228,3 +228,16 @@ logs/
 # Explicitly keep repository default configuration templates
 !config.default.json
 !config.example.json
+
+# Antigravity & AI IDE client artifacts
+.antigravity/
+.gemini/
+scratch/
+
+# TODO files
+TODO
+TODO.md
+TODO.txt
+todo.md
+todo.txt
+

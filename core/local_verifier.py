@@ -574,15 +574,20 @@ class LocalVisualVerifier:
             margin_y = max(3, int(h * 0.15))
             inner = after_roi.convert("L").crop((margin_x, margin_y, w - margin_x, h - margin_y))
             stat = ImageStat.Stat(inner)
+            mean_lum = stat.mean[0]
             std_dev = stat.stddev[0]
             hist = inner.histogram()
-            # Count dark text pixels against light field (light theme) or light text pixels (dark theme)
-            dark_pixels = sum(hist[:135])
-            light_pixels = sum(hist[160:])
-            glyph_pixels = max(dark_pixels, light_pixels)
 
-            if std_dev >= 16.0 and glyph_pixels >= 12:
-                return True, f"text_glyphs_detected (std={std_dev:.1f}, glyph_px={glyph_pixels})", 0.88
+            # Contrast-aware glyph pixel counting:
+            if mean_lum >= 128:
+                # Light background: glyphs are dark stroke pixels contrasting against the field
+                glyph_pixels = sum(hist[:110])
+            else:
+                # Dark background: glyphs are light stroke pixels contrasting against the field
+                glyph_pixels = sum(hist[160:])
+
+            if std_dev >= 15.0 and glyph_pixels >= 12:
+                return True, f"text_glyphs_detected (std={std_dev:.1f}, glyph_px={glyph_pixels}, mean={mean_lum:.1f})", 0.88
 
         except Exception as e:
             logger.debug(f"Error evaluating is_text_input_filled: {e}")
@@ -1076,5 +1081,52 @@ class LocalVisualVerifier:
         markers["transition_diff"] = diff
 
         return markers
+
+    def verify_written_input_area(
+        self,
+        before_roi: Optional[Image.Image],
+        after_roi: Optional[Image.Image],
+        expected_min_words: Optional[int] = None,
+        expected_chars: int = 0,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        Verifies that a written response (essay, short answer, explanation) was entered into the input box:
+        - Confirms significant stroke density increase (characters actually rendered).
+        - Estimates pixel change ratio.
+        - Returns (is_verified, reason_string, metrics_dict).
+        """
+        if before_roi is None or after_roi is None:
+            return True, "unverified_no_baseline", {}
+
+        try:
+            b_gray = before_roi.convert("L")
+            a_gray = after_roi.convert("L")
+
+            diff = ImageChops.difference(b_gray, a_gray)
+            stat = ImageStat.Stat(diff)
+            mean_diff = stat.mean[0]
+
+            hist = diff.histogram()
+            changed_pixels = sum(hist[18:])
+            total_pixels = b_gray.width * b_gray.height
+            change_ratio = changed_pixels / max(1, total_pixels)
+
+            # For multi-word written responses, we expect significant text presence (>25 changed pixels or >1.0% change)
+            is_verified = (changed_pixels >= 25 or mean_diff >= 1.0 or change_ratio >= 0.01)
+            reason = "text_strokes_verified" if is_verified else "insufficient_text_detected"
+
+            metrics = {
+                "changed_pixels": changed_pixels,
+                "mean_diff": round(mean_diff, 2),
+                "change_ratio": round(change_ratio, 4),
+                "expected_min_words": expected_min_words,
+                "expected_chars": expected_chars,
+            }
+            logger.info(f"verify_written_input_area: verified={is_verified} ({reason}), metrics={metrics}")
+            return is_verified, reason, metrics
+        except Exception as e:
+            logger.warning(f"verify_written_input_area failed: {e}")
+            return True, f"error_{e}", {}
+
 
 

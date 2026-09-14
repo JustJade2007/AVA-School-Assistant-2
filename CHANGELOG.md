@@ -8,6 +8,19 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.0.2.b] - 2026-09-14
+
+### Fixed
+- **Resolved API Key `Unexpected token 'I', "Internal S"... is not valid JSON` Crash**:
+  - Upgraded Jade's AI Humanizer default model to **Gemini 3.5 Flash Lite** (`gemini-3.5-flash-lite`) and fallback to **Gemini 3.1 Flash Lite** (`gemini-3.1-flash-lite`), resolving Google API `404 NOT_FOUND` deprecation errors for retired `gemini-2.5-flash-lite` and `gemini-2.0-flash-lite` endpoints.
+  - Hardened candidate model fallbacks across both synchronous and asynchronous execution paths (`gemini-3.5-flash-lite` -> `gemini-3.1-flash-lite` -> `gemini-3.6-flash` -> `gemini-3.8-flash` -> `gemini-2.5-flash` -> rule-based offline transform).
+  - Protected fallback streaming in `generate_stream_sync` and `generate_stream_async` with nested try/except blocks to prevent unhandled streaming exceptions from escaping into the route handler.
+  - Added robust exception handling to `/v1/humanize` in `core/humanizer/daemon/routes.py`, returning proper JSON `HTTPException` objects rather than unhandled plain-text 500 `Internal Server Error` responses.
+  - Hardened JavaScript `handleHumanize()` in `core/humanizer/daemon/ui.py` to safely inspect error responses without throwing `SyntaxError` on non-JSON payloads.
+  - Ensured logger portability across both standalone humanizer execution and bundled AVA Assistant engine.
+
+---
+
 ## [2.0.2.a] - 2026-09-11
 
 ### Fixed

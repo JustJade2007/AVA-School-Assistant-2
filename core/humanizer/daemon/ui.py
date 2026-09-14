@@ -521,7 +521,7 @@ INDEX_HTML = """<!DOCTYPE html>
           const data = await res.json();
           if (data.api_key_configured) {
             engineBadge.className = 'badge badge-online';
-            engineBadge.innerText = '🟢 Online (Gemini Flash Lite)';
+            engineBadge.innerText = '🟢 Online (Gemini 3.5 Flash Lite)';
           } else {
             engineBadge.className = 'badge badge-offline';
             engineBadge.innerText = '🟠 Offline (No API Key)';
@@ -595,8 +595,21 @@ INDEX_HTML = """<!DOCTYPE html>
         });
 
         if (!response.ok) {
-          const errData = await response.json();
-          throw new Error(errData.detail || 'Humanization failed');
+          let errorMsg = `Humanization failed (HTTP ${response.status})`;
+          try {
+            const errData = await response.json();
+            if (errData && errData.detail) {
+              errorMsg = typeof errData.detail === 'string' ? errData.detail : JSON.stringify(errData.detail);
+            }
+          } catch (_) {
+            try {
+              const rawText = await response.text();
+              if (rawText && rawText.trim()) {
+                errorMsg = rawText.trim();
+              }
+            } catch (__) {}
+          }
+          throw new Error(errorMsg);
         }
 
         const data = await response.json();
@@ -613,7 +626,7 @@ INDEX_HTML = """<!DOCTYPE html>
           mTokens.innerHTML = '<strong>0</strong> <span style="color:var(--text-muted);font-size:11px;">(Offline - 100% Free)</span>';
           offlineNotice.style.display = 'flex';
         } else {
-          mEngine.innerHTML = '<span style="color:#3fb950;">🟢 Gemini Flash Lite</span>';
+          mEngine.innerHTML = '<span style="color:#3fb950;">🟢 Gemini 3.5 Flash Lite</span>';
           mTokens.innerHTML = `<strong>${data.api_tokens_used || data.total_tokens}</strong> <span style="color:var(--text-muted);font-size:11px;">(P: ${data.prompt_tokens}, C: ${data.completion_tokens})</span>`;
           offlineNotice.style.display = 'none';
         }

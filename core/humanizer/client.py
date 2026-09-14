@@ -186,16 +186,16 @@ class Humanizer:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-flash-lite",
-        fallback_model: str = "gemini-2.0-flash-lite",
+        model: str = "gemini-3.5-flash-lite",
+        fallback_model: str = "gemini-3.1-flash-lite",
         mock_mode: bool = False,
     ) -> None:
         """Initialize the Humanizer client.
 
         Args:
             api_key: Optional Gemini API key. Defaults to GEMINI_API_KEY env var.
-            model: Primary Flash Lite model. Defaults to 'gemini-2.5-flash-lite'.
-            fallback_model: Secondary fallback model. Defaults to 'gemini-2.0-flash-lite'.
+            model: Primary Flash Lite model. Defaults to 'gemini-3.5-flash-lite'.
+            fallback_model: Secondary fallback model. Defaults to 'gemini-3.1-flash-lite'.
             mock_mode: When True, runs deterministic offline engine without network calls.
         """
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")

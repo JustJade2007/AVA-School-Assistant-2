@@ -14,7 +14,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="AVA School Assistant 2 v1.1.2.a"
+        version="AVA School Assistant 2 v2.0.2.b"
     )
     parser.add_argument(
         "--settings",

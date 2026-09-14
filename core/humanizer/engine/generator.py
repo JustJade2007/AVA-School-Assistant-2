@@ -12,9 +12,12 @@ from core.humanizer.engine.prompt import estimate_prompt_tokens
 from core.humanizer.models import UsageMetadata
 
 import logging
-from core.logger import get_logger
 
-logger = get_logger("humanizer_generator")
+try:
+    from core.logger import get_logger
+    logger = get_logger("humanizer_generator")
+except ImportError:
+    logger = logging.getLogger("humanizer_generator")
 
 try:
     from google import genai
@@ -32,8 +35,8 @@ class GeminiGenerator:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-flash-lite",
-        fallback_model: str = "gemini-2.0-flash-lite",
+        model: str = "gemini-3.5-flash-lite",
+        fallback_model: str = "gemini-3.1-flash-lite",
         mock_mode: bool = False,
     ) -> None:
         self.model = model
@@ -97,7 +100,15 @@ class GeminiGenerator:
             return output_text, usage
 
         # Candidate models to try in order
-        candidate_models = [self.model, self.fallback_model, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        candidate_models = [
+            self.model,
+            self.fallback_model,
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-3.6-flash",
+            "gemini-3.8-flash",
+            "gemini-2.5-flash",
+        ]
         seen = set()
         models_to_try = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
 
@@ -141,6 +152,8 @@ class GeminiGenerator:
                     config=config,
                 )
                 output_text = response.text or ""
+                if not output_text:
+                    raise RuntimeError(f"Empty text response from SDK for model {model_name}")
                 meta = response.usage_metadata
                 p_tokens = meta.prompt_token_count if meta else estimate_prompt_tokens(prompt + system_instruction)
                 c_tokens = meta.candidates_token_count if meta else estimate_prompt_tokens(output_text)
@@ -170,11 +183,14 @@ class GeminiGenerator:
             if resp.status_code == 200:
                 data = resp.json()
                 output_text = ""
-                candidates = data.get("candidates", [])
+                candidates = data.get("candidates") or []
                 if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    output_text = "".join(p.get("text", "") for p in parts)
-                usage_meta = data.get("usageMetadata", {})
+                    content = candidates[0].get("content") or {}
+                    parts = content.get("parts") or []
+                    output_text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+                if not output_text:
+                    raise RuntimeError(f"Gemini API returned empty text for model {model_name}")
+                usage_meta = data.get("usageMetadata") or {}
                 p_tokens = usage_meta.get("promptTokenCount", estimate_prompt_tokens(prompt + system_instruction))
                 c_tokens = usage_meta.get("candidatesTokenCount", estimate_prompt_tokens(output_text))
                 return output_text, UsageMetadata(
@@ -208,7 +224,15 @@ class GeminiGenerator:
             )
             return output_text, usage
 
-        candidate_models = [self.model, self.fallback_model, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        candidate_models = [
+            self.model,
+            self.fallback_model,
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-3.6-flash",
+            "gemini-3.8-flash",
+            "gemini-2.5-flash",
+        ]
         seen = set()
         models_to_try = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
 
@@ -301,15 +325,19 @@ class GeminiGenerator:
                     yield chunk.text
         except Exception:
             if not has_yielded and self.fallback_model and self.fallback_model != self.model:
-                fallback_stream = self._client.models.generate_content_stream(
-                    model=self.fallback_model,
-                    contents=prompt,
-                    config=config,
-                )
-                for chunk in fallback_stream:
-                    if chunk.text:
-                        yield chunk.text
-            else:
+                try:
+                    fallback_stream = self._client.models.generate_content_stream(
+                        model=self.fallback_model,
+                        contents=prompt,
+                        config=config,
+                    )
+                    for chunk in fallback_stream:
+                        if chunk.text:
+                            has_yielded = True
+                            yield chunk.text
+                except Exception:
+                    pass
+            if not has_yielded:
                 full_text, _ = self.generate_sync(prompt, system_instruction, temperature)
                 for chunk in [full_text]:
                     yield chunk
@@ -350,14 +378,18 @@ class GeminiGenerator:
                     yield chunk.text
         except Exception:
             if not has_yielded and self.fallback_model and self.fallback_model != self.model:
-                fallback_stream = await self._client.aio.models.generate_content_stream(
-                    model=self.fallback_model,
-                    contents=prompt,
-                    config=config,
-                )
-                async for chunk in fallback_stream:
-                    if chunk.text:
-                        yield chunk.text
-            else:
+                try:
+                    fallback_stream = await self._client.aio.models.generate_content_stream(
+                        model=self.fallback_model,
+                        contents=prompt,
+                        config=config,
+                    )
+                    async for chunk in fallback_stream:
+                        if chunk.text:
+                            has_yielded = True
+                            yield chunk.text
+                except Exception:
+                    pass
+            if not has_yielded:
                 full_text, _ = await self.generate_async(prompt, system_instruction, temperature)
                 yield full_text

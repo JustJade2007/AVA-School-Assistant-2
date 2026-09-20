@@ -92,14 +92,30 @@ class PlaygroundEngine:
                     )
         return criteria
 
-    def generate_outline(self, project: PlaygroundProject) -> List[SectionDraft]:
+    def generate_outline(
+        self,
+        project: PlaygroundProject,
+        customization: Optional[Dict[str, Any]] = None,
+    ) -> List[SectionDraft]:
         """
         Creates an ordered sequence of section drafts mapped to the project's rubric criteria,
-        sources, and target word count. Accurately shapes outlines for multi-question prompts (e.g. 50 words each).
+        sources, and target word count. Strictly enforces rubric word counts and normalizes
+        section goals to prevent AI over-estimation.
         """
-        # Check for multi-part or specific word requirements in prompt, title, and rubrics
-        combined_text = f"{project.title}\n{project.topic_description}\n" + "\n".join([f"{c.title} {c.description}" for c in project.rubric_criteria])
+        # Deeply inspect rubric criteria and raw text for overall & per-section word limits
+        rubric_text_full = "\n".join([f"{c.title}: {c.description}" for c in project.rubric_criteria])
+        if getattr(project, "rubric_raw_text", ""):
+            rubric_text_full += "\n" + project.rubric_raw_text
+
+        combined_text = f"{project.title}\n{project.topic_description}\n{rubric_text_full}".strip()
         constraints = WrittenSolver.extract_detailed_word_constraints(combined_text)
+
+        # Map individual criteria with specific word constraints
+        criteria_word_counts = {}
+        for c in project.rubric_criteria:
+            c_constraint = WrittenSolver.extract_detailed_word_constraints(f"{c.title}\n{c.description}")
+            if c_constraint.get("min_words"):
+                criteria_word_counts[c.id] = c_constraint["min_words"]
 
         multi_part_note = ""
         if constraints.get("is_multi_part") and constraints.get("num_items") and constraints.get("per_item_words"):
@@ -108,23 +124,45 @@ class PlaygroundEngine:
             calculated_total = per_q * num_q
             project.target_total_words = calculated_total
             multi_part_note = (
-                f"\nCRITICAL MULTI-QUESTION REQUIREMENT (BELIEVABILITY):\n"
-                f"- The prompt explicitly requires {num_q} questions/items with approximately {per_q} words each.\n"
+                f"\nCRITICAL MULTI-QUESTION REQUIREMENT (BELIEVABILITY & RUBRIC):\n"
+                f"- The rubric explicitly requires {num_q} questions/items with approximately {per_q} words each.\n"
                 f"- You MUST create exactly {num_q} sections named 'Question 1', 'Question 2', etc. (or corresponding question titles).\n"
                 f"- Each section's target_word_count MUST be exactly {per_q} words.\n"
                 f"- The total document target is {calculated_total} words (NOT 1000 words!).\n"
             )
-        elif constraints.get("target_words") and project.target_total_words == 1000:
-            project.target_total_words = constraints["target_words"]
+        elif constraints.get("total_min_words"):
+            project.target_total_words = constraints["total_min_words"]
+        elif constraints.get("min_words") and project.target_total_words in (1000, 500, 0):
+            project.target_total_words = constraints["min_words"]
+
+        # Build custom formatting and personalization guidelines if provided
+        custom_notes = ""
+        if customization:
+            c_parts = []
+            if customization.get("structure_preset") and "Auto" not in customization["structure_preset"]:
+                c_parts.append(f"- Structure Preset: {customization['structure_preset']}")
+            if customization.get("section_count") and "Auto" not in str(customization["section_count"]):
+                c_parts.append(f"- Desired Section Count: Exactly {customization['section_count']} sections")
+            if customization.get("heading_style"):
+                c_parts.append(f"- Heading Style: {customization['heading_style']}")
+            if customization.get("user_notes"):
+                c_parts.append(f"- Student Personalization Notes: {customization['user_notes'].strip()}")
+            if c_parts:
+                custom_notes = "\nSTUDENT PERSONALIZATION & FORMATTING GUIDELINES:\n" + "\n".join(c_parts) + "\n"
 
         system_prompt = (
             "You are an academic project architect. Given the document title, topic, target word count, "
             "and rubric criteria, create a coherent, comprehensive outline.\n"
             f"{multi_part_note}\n"
+            f"{custom_notes}\n"
+            "STRICT WORD COUNT RULE:\n"
+            f"- The project target word count is EXACTLY {project.target_total_words} words.\n"
+            "- The sum of 'target_word_count' across all sections MUST NOT exceed this target.\n"
+            "- Do NOT inflate or overestimate word counts beyond the student's prompt and rubric!\n\n"
             "Respond ONLY with a JSON array where each object has:\n"
             "- 'title': Section heading (e.g. 'Question 1', 'Introduction & Thesis', 'Historical Context')\n"
             "- 'goal_summary': Detailed description of what arguments, evidence, and points this section must contain\n"
-            "- 'target_word_count': Integer target word count for this specific section (must sum close to the total target)\n"
+            "- 'target_word_count': Integer target word count for this specific section (must sum to the total target)\n"
             "- 'criteria_indices': List of 0-based integer indices of the rubric criteria this section addresses\n"
             "Do NOT include markdown formatting or commentary outside the JSON array."
         )
@@ -173,6 +211,36 @@ class PlaygroundEngine:
                             )
                         )
                 if sections:
+                    # Enforce rubric-aware goal counters and normalize any AI over-estimation
+                    target_total = project.target_total_words
+
+                    # 1. Check if individual sections map to criteria with specific word constraints
+                    for sec in sections:
+                        for cid in sec.criteria_ids:
+                            if cid in criteria_word_counts:
+                                sec.target_word_count = criteria_word_counts[cid]
+                                break
+
+                    # 2. Multi-part / per-item enforcement (e.g. 5 questions at 50w each)
+                    if constraints.get("is_multi_part") and constraints.get("per_item_words"):
+                        for sec in sections:
+                            sec.target_word_count = constraints["per_item_words"]
+
+                    # 3. Proportional normalization if sum exceeds rubric target
+                    sum_words = sum(s.target_word_count for s in sections)
+                    if target_total and sum_words > int(target_total * 1.15):
+                        logger.info(
+                            f"AI outline estimated {sum_words} words, greatly exceeding rubric target {target_total}. Normalizing section goals."
+                        )
+                        allocated = 0
+                        for i, sec in enumerate(sections):
+                            if i == len(sections) - 1:
+                                sec.target_word_count = max(15, target_total - allocated)
+                            else:
+                                scaled = max(15, int((sec.target_word_count / sum_words) * target_total))
+                                sec.target_word_count = scaled
+                                allocated += scaled
+
                     return sections
         except Exception as e:
             logger.warning(f"AI outline formulation failed: {e}. Generating default academic outline.")

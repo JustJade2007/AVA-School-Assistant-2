@@ -8,6 +8,40 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.0.a] - 2026-09-20
+
+### Added & Reworked
+- **Application Command Hub (Home Page)**:
+  - Redesigned app startup to launch a dedicated Command Hub (`HomeDashboard` in `ui/home_view.py`) featuring an active AI backend status pill, anti-capture cloaking toggle, and a modular grid of assistant cards:
+    - **Automated Worker**: Floating stealth HUD overlay with screen solve, answer injection, and global hotkeys.
+    - **Playground Studio**: 4-stage document studio for essays, research papers, and reports.
+    - **Settings & Preferences**: Configuration of API keys, model backends, hotkeys, humanizer tones, reading levels, and cloaking.
+    - **Extensible Hub Slot**: Pre-wired for future modular expansion (flashcards, quiz generator, AI agents).
+  - Floating HUD overlay and global solving hotkeys are deferred until the Automated Worker is explicitly launched.
+  - Added seamless `return_to_home()` routing to safely restore the Command Hub and suspend background solving from all modules.
+  - Added CLI flags `--worker` (`-w`) and `--playground` (`-p`) in `main.py` for direct launch options.
+
+- **Playground Interactive Rubric Management**:
+  - Added `CriterionEditModal` dialog in `ui/playground/rubric_viewer.py` allowing manual addition, editing, and deletion of individual rubric criteria.
+  - Added `+ Add Criterion` header action, inline `✏️` edit buttons, and `✕` delete buttons per card with real-time sync to `project.rubric_criteria` and the Stage 2 checklist.
+
+- **Web & YouTube Ingestion & Automatic Academic Citations**:
+  - Implemented `WebSourceIngestor` in `core/playground/web_source.py` utilizing public YouTube oEmbed metadata extraction and webpage scraping with high-density academic AI summarization.
+  - Implemented `CitationGenerator` formatting formal bibliography entries in **MLA 9th Edition**, **APA 7th Edition**, and **Chicago / Standard Report** formats.
+  - Added `🌐 + Web Link` ingestion dialog in Stage 1 and integrated citations into `project.bibliography_entries` and `.docx` Works Cited export.
+  - Added automatic scanning and auto-import of embedded YouTube links from imported PDF/DOCX/TXT files, notes, and assignment prompts.
+
+- **Start Over & Recent Projects Quick-Selector**:
+  - Added `🔄 Start Over` button in Playground workspace with confirmation dialog to cleanly reset project state and return to Stage 1.
+  - Replaced single open dialog with a dynamic `📂 Open Recent ▾` dropdown listing recent `.avaproj` files from `projects/` for 1-click loading, alongside a browse disk fallback.
+
+- **Rubric-Aware Outline Word Count & Goal Counter Fix**:
+  - Deep rubric scanning in `PlaygroundEngine.generate_outline` enforcing rubric word counts across all sections and clamping `sec.target_word_count` to prevent AI over-generation (e.g., 50w prompt yields 50w target sections instead of 250w/500w).
+  - Enhanced multi-part question count detection in `WrittenSolver.extract_detailed_word_constraints` across compound prompt structures.
+  - Stage 3 goal counter accurately reflects the clamped section targets and believable margin status.
+
+---
+
 ## [2.0.3.d] - 2026-09-20
 
 ### Fixed & Improved

@@ -98,10 +98,15 @@ class WrittenSolver:
             per_w = int(m_each.group(1))
             num_q = int(m_each.group(2)) if m_each.group(2) else None
             if not num_q:
-                # Check if prompt explicitly enumerates questions like 1. 2. 3.
-                numbered = re.findall(r"(?:^|\n)\s*\d+[\.\)]\s+", t)
-                if len(numbered) >= 2:
-                    num_q = len(numbered)
+                # Check if prompt mentions a count like "5 questions" or "5 short questions" anywhere in text
+                m_count = re.search(r"(\d+)\s*(?:[a-zA-Z]+\s+)?(?:questions?|parts?|items?|prompts?)", t)
+                if m_count and int(m_count.group(1)) > 1:
+                    num_q = int(m_count.group(1))
+                else:
+                    # Check if prompt explicitly enumerates questions like 1. 2. 3.
+                    numbered = re.findall(r"(?:^|\n)\s*\d+[\.\)]\s+", t)
+                    if len(numbered) >= 2:
+                        num_q = len(numbered)
 
             if num_q:
                 total_min = per_w * num_q

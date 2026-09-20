@@ -14,7 +14,19 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="AVA School Assistant 2 v2.0.3.b"
+        version="AVA School Assistant 2 v2.1.0.a"
+    )
+    parser.add_argument(
+        "--worker",
+        "-w",
+        action="store_true",
+        help="Launch Automated Worker (HUD Mode) directly upon start"
+    )
+    parser.add_argument(
+        "--playground",
+        "-p",
+        action="store_true",
+        help="Launch Playground Studio directly upon start"
     )
     parser.add_argument(
         "--settings",
@@ -33,7 +45,13 @@ def main():
     )
     args = parser.parse_args()
 
-    app = AVASchoolAssistantApp()
+    start_mode = "home"
+    if args.worker:
+        start_mode = "worker"
+    elif args.playground:
+        start_mode = "playground"
+
+    app = AVASchoolAssistantApp(start_mode=start_mode)
     if args.debug:
         from core.logger import set_debug_mode
         set_debug_mode(True)

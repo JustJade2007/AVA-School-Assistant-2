@@ -14,7 +14,7 @@ from core.assistant_engine import AssistantEngine
 from core.hotkeys import GlobalHotkeyManager
 from ui.hud_overlay import HUDOverlay
 from ui.settings_view import SettingsWindow
-
+from ui.home_view import HomeDashboard
 
 from core.logger import get_logger
 
@@ -24,7 +24,7 @@ logger = get_logger("app")
 class AVASchoolAssistantApp:
     """Main application lifecycle controller."""
 
-    def __init__(self):
+    def __init__(self, start_mode: str = "home"):
         # Configure CustomTkinter appearance
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -33,20 +33,38 @@ class AVASchoolAssistantApp:
         self.engine = AssistantEngine(config_manager=self.config_manager)
         self.hotkey_manager = GlobalHotkeyManager()
 
-        # Root window (can stay hidden while HUD overlay floats)
+        # Root window (can stay hidden while top levels float)
         self.root = ctk.CTk()
         self.root.title("AVA School Assistant 2")
         self.root.geometry("1x1+-100+-100")
         self.root.overrideredirect(True)
         self.root.withdraw()
 
+        self.home_window: Optional[HomeDashboard] = None
         self.hud_window: Optional[HUDOverlay] = None
         self.settings_window: Optional[SettingsWindow] = None
         self.playground_window = None
         self.snipping_tool = None
 
         self._setup_hotkeys()
-        self._setup_hud()
+
+        # Initialize Home Dashboard as central command hub
+        self.home_window = HomeDashboard(
+            master=self.root,
+            config_manager=self.config_manager,
+            on_launch_worker=self.launch_automated_worker,
+            on_launch_playground=self.open_playground,
+            on_open_settings=self.open_settings,
+            on_exit_app=self.quit_app
+        )
+
+        if start_mode == "worker":
+            self.launch_automated_worker()
+        elif start_mode == "playground":
+            self.open_playground()
+        else:
+            self.home_window.lift()
+            self.home_window.focus_force()
 
     @property
     def config(self) -> AppConfig:
@@ -100,7 +118,6 @@ class AVASchoolAssistantApp:
             hk.get("close_app", "Ctrl+Shift+Q"),
             self.quit_app
         )
-        self.hotkey_manager.start()
 
     def _setup_hud(self):
         """Creates the floating anti-capture HUD overlay."""
@@ -108,10 +125,71 @@ class AVASchoolAssistantApp:
             master=self.root,
             engine=self.engine,
             on_open_settings=self.open_settings,
-            on_close_app=self.quit_app,
+            on_close_app=self.return_to_home,
             on_snip_solve=self.start_snipping,
             on_open_playground=self.open_playground
         )
+
+    def launch_automated_worker(self):
+        """Thread-safe trigger for launching the Automated Worker overlay."""
+        try:
+            self.root.after(0, self._do_launch_automated_worker)
+        except Exception as e:
+            logger.error(f"Failed to dispatch launch_automated_worker: {e}")
+
+    def _do_launch_automated_worker(self):
+        logger.info("Launching Automated Worker (HUD Mode)...")
+        if self.home_window and self.home_window.winfo_exists():
+            self.home_window.withdraw()
+
+        if self.hud_window is None or not self.hud_window.winfo_exists():
+            self._setup_hud()
+        else:
+            self.hud_window.deiconify()
+            self.hud_window.lift()
+
+        try:
+            self.hotkey_manager.start()
+        except Exception as e:
+            logger.warning(f"Failed to start hotkeys: {e}")
+
+    def return_to_home(self):
+        """Thread-safe return to the Home Dashboard from any active module."""
+        try:
+            self.root.after(0, self._do_return_to_home)
+        except Exception as e:
+            logger.error(f"Failed to dispatch return_to_home: {e}")
+
+    def _do_return_to_home(self):
+        logger.info("Returning to AVA Command Hub Home...")
+        # 1. Hide HUD overlay
+        if self.hud_window and self.hud_window.winfo_exists():
+            self.hud_window.withdraw()
+
+        # 2. Hide or destroy Playground
+        if self.playground_window and self.playground_window.winfo_exists():
+            try:
+                self.playground_window.destroy()
+            except Exception:
+                pass
+            self.playground_window = None
+
+        # 3. Stop background hotkeys & emergency stop solving
+        try:
+            self.hotkey_manager.stop()
+        except Exception:
+            pass
+        try:
+            self.engine.emergency_stop()
+        except Exception:
+            pass
+
+        # 4. Show Home Dashboard
+        if self.home_window and self.home_window.winfo_exists():
+            self.home_window.deiconify()
+            self.home_window.lift()
+            self.home_window.focus_force()
+            self.home_window.refresh_ai_status()
 
     def open_playground(self):
         """Thread-safe trigger for opening Playground Mode in a dedicated studio window."""
@@ -140,9 +218,11 @@ class AVASchoolAssistantApp:
             except Exception:
                 pass
 
-            # 3. Hide floating HUD overlay while Playground workspace is active
+            # 3. Hide floating HUD overlay & Home window
             if self.hud_window and self.hud_window.winfo_exists():
                 self.hud_window.withdraw()
+            if self.home_window and self.home_window.winfo_exists():
+                self.home_window.withdraw()
 
             from ui.playground.workspace import PlaygroundWorkspace
 
@@ -150,13 +230,13 @@ class AVASchoolAssistantApp:
                 master=self.root,
                 ai_client=self.engine.ai_client,
                 config_manager=self.config_manager,
-                on_exit=self._on_playground_closed
+                on_exit=self.return_to_home
             )
             self.playground_window.lift()
             self.playground_window.focus_force()
         except Exception as e:
             logger.error(f"Failed to open Playground Mode: {e}", exc_info=True)
-            self._on_playground_closed()
+            self.return_to_home()
             try:
                 from tkinter import messagebox
                 messagebox.showerror(
@@ -167,19 +247,7 @@ class AVASchoolAssistantApp:
                 pass
 
     def _on_playground_closed(self):
-        """Restores HUD overlay and restarts hotkey listener when Playground is closed."""
-        logger.info("Playground Mode closed. Restoring HUD overlay and global hotkeys...")
-        try:
-            if self.hud_window and self.hud_window.winfo_exists():
-                self.hud_window.deiconify()
-                self.hud_window.lift()
-        except Exception as e:
-            logger.warning(f"Failed to restore HUD overlay: {e}")
-
-        try:
-            self.hotkey_manager.start()
-        except Exception as e:
-            logger.warning(f"Failed to restart hotkey manager: {e}")
+        self.return_to_home()
 
     def open_settings(self):
         """Opens or focuses the Settings Dashboard."""
@@ -211,6 +279,9 @@ class AVASchoolAssistantApp:
                     self.hud_window.debug_badge.pack(side="left", padx=4)
                 else:
                     self.hud_window.debug_badge.pack_forget()
+
+        if self.home_window and self.home_window.winfo_exists():
+            self.home_window.refresh_ai_status()
 
     def toggle_overlay(self):
         """Thread-safe toggle for showing/hiding the HUD overlay."""
@@ -269,6 +340,16 @@ class AVASchoolAssistantApp:
                     self.settings_window._save_and_close()
                 else:
                     self.settings_window.destroy()
+            except Exception:
+                pass
+        if self.home_window and self.home_window.winfo_exists():
+            try:
+                self.home_window.destroy()
+            except Exception:
+                pass
+        if self.playground_window and self.playground_window.winfo_exists():
+            try:
+                self.playground_window.destroy()
             except Exception:
                 pass
         if self.hud_window and self.hud_window.winfo_exists():

@@ -28,6 +28,7 @@ from core.playground.doc_io import DocumentImporter, DocumentExporter
 from core.playground.humanizer_bridge import PlaygroundHumanizerBridge
 from core.playground.engine import PlaygroundEngine
 from core.written_solver import WrittenSolver
+from core.playground.web_source import WebSourceIngestor, CitationGenerator
 from ui.playground.rubric_viewer import RubricViewer
 from ui.snipping_tool import SnippingOverlay
 
@@ -181,7 +182,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.format_menu.set(self.project.formatting_preset)
         self.format_menu.pack(side="left", padx=8)
 
-        # Right: Cloak toggle, Save/Open, and Exit
+        # Right: Cloak toggle, Start Over, Save/Open dropdown, and Return to Home
         right_box = ctk.CTkFrame(self.header_frame, fg_color="transparent")
         right_box.pack(side="right", padx=16, pady=8)
 
@@ -189,12 +190,24 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             right_box,
             text="🛡️ Cloaked",
             command=self._toggle_cloak,
-            width=105,
+            width=100,
             height=28,
             font=ctk.CTkFont(size=11, weight="bold"),
             border_width=1
         )
         self.cloak_btn.pack(side="left", padx=4)
+
+        start_over_btn = ctk.CTkButton(
+            right_box,
+            text="🔄 Start Over",
+            command=self._start_over_dialog,
+            width=90,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#27272a",
+            hover_color="#3f3f46"
+        )
+        start_over_btn.pack(side="left", padx=4)
 
         save_btn = ctk.CTkButton(
             right_box,
@@ -208,30 +221,32 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         )
         save_btn.pack(side="left", padx=4)
 
-        open_btn = ctk.CTkButton(
+        self.open_recent_menu = ctk.CTkOptionMenu(
             right_box,
-            text="📂 Open",
-            command=self._open_project_dialog,
-            width=65,
+            values=self._get_recent_projects_list(),
+            command=self._on_recent_project_selected,
+            width=140,
             height=28,
             font=ctk.CTkFont(size=11),
             fg_color="#27272a",
-            hover_color="#3f3f46"
+            button_color="#3f3f46",
+            button_hover_color="#52525b"
         )
-        open_btn.pack(side="left", padx=4)
+        self.open_recent_menu.set("📂 Open Recent ▾")
+        self.open_recent_menu.pack(side="left", padx=4)
 
         exit_btn = ctk.CTkButton(
             right_box,
-            text="✕ Return to HUD",
+            text="🏠 Home",
             command=self._on_close_requested,
-            width=110,
+            width=80,
             height=28,
             font=ctk.CTkFont(size=11, weight="bold"),
             fg_color="#991b1b",
             hover_color="#b91c1c",
             text_color="#fef2f2"
         )
-        exit_btn.pack(side="left", padx=(8, 0))
+        exit_btn.pack(side="left", padx=(6, 0))
 
     def _build_stepper(self):
         self.stepper_frame = ctk.CTkFrame(self, fg_color="#121215", corner_radius=0, height=44)
@@ -381,6 +396,18 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         s_head.pack(fill="x", padx=16, pady=(0, 6))
         ctk.CTkLabel(s_head, text="📚 Source Materials", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc").pack(side="left")
 
+        add_web_btn = ctk.CTkButton(
+            s_head,
+            text="🌐 + Web Link",
+            command=self._prompt_add_web_source,
+            width=90,
+            height=26,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1"
+        )
+        add_web_btn.pack(side="right", padx=4)
+
         add_src_btn = ctk.CTkButton(
             s_head,
             text="+ Import File",
@@ -397,7 +424,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             s_head,
             text="+ Add Notes",
             command=self._prompt_add_text_source,
-            width=90,
+            width=85,
             height=26,
             font=ctk.CTkFont(size=11),
             fg_color="#27272a",
@@ -458,7 +485,11 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         parse_btn.pack(fill="x", padx=16, pady=(0, 8))
 
         # Embedded Checklist Viewer
-        self.stage_1_rubric_viewer = RubricViewer(right_col, criteria=self.project.rubric_criteria)
+        self.stage_1_rubric_viewer = RubricViewer(
+            right_col,
+            criteria=self.project.rubric_criteria,
+            on_criteria_changed=self._on_rubric_criteria_changed
+        )
         self.stage_1_rubric_viewer.pack(fill="both", expand=True, padx=16, pady=(0, 14))
 
         # Bottom Action Bar
@@ -485,6 +516,13 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
     def _on_topic_changed(self):
         self.project.topic_description = self.topic_textbox.get("1.0", "end").strip()
         self._auto_detect_word_requirements()
+        self._auto_ingest_embedded_youtube(self.project.topic_description)
+
+    def _on_rubric_criteria_changed(self, criteria: List[RubricCriterion]):
+        self.project.rubric_criteria = criteria
+        if hasattr(self, "stage_2_rubric_viewer"):
+            self.stage_2_rubric_viewer.set_criteria(criteria)
+        logger.info(f"Rubric criteria live-synced: {len(criteria)} criteria")
 
     def _auto_detect_word_requirements(self):
         topic_text = self.topic_textbox.get("1.0", "end").strip()
@@ -533,6 +571,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             self.project.sources.append(source)
             self._render_sources_list()
             logger.info(f"Loaded source file: {name} ({len(content)} chars)")
+            self._auto_ingest_embedded_youtube(content)
         except Exception as e:
             messagebox.showerror("Import Error", f"Could not read source file:\n{e}")
 
@@ -558,10 +597,125 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 src = SourceItem(name=name, source_type="notes", content=text)
                 self.project.sources.append(src)
                 self._render_sources_list()
+                self._auto_ingest_embedded_youtube(text)
             sub_win.destroy()
 
         btn = ctk.CTkButton(sub_win, text="Save Notes Source", command=save_notes, fg_color="#2563eb")
         btn.pack(pady=(0, 16))
+
+    def _prompt_add_web_source(self):
+        sub_win = ctk.CTkToplevel(self)
+        sub_win.title("Add Web Article or YouTube Source")
+        sub_win.geometry("560x300")
+        sub_win.transient(self)
+        sub_win.grab_set()
+
+        ctk.CTkLabel(
+            sub_win,
+            text="🌐 Ingest Web Article or ▶️ YouTube Video",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#38bdf8"
+        ).pack(anchor="w", padx=20, pady=(16, 4))
+
+        ctk.CTkLabel(
+            sub_win,
+            text="Paste an article URL or YouTube link. Ava will fetch metadata, summarize the content, and generate a citation.",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8",
+            wraplength=520,
+            justify="left"
+        ).pack(anchor="w", padx=20, pady=(0, 12))
+
+        ctk.CTkLabel(sub_win, text="URL / Link:", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w", padx=20, pady=(4, 2))
+        url_entry = ctk.CTkEntry(sub_win, placeholder_text="https://www.youtube.com/watch?v=... or https://example.com/article")
+        url_entry.pack(fill="x", padx=20, pady=(0, 8))
+
+        status_lbl = ctk.CTkLabel(sub_win, text="", font=ctk.CTkFont(size=11), text_color="#38bdf8")
+        status_lbl.pack(anchor="w", padx=20, pady=(0, 6))
+
+        def fetch_task():
+            url = url_entry.get().strip()
+            if not url:
+                status_lbl.configure(text="Please enter a valid URL.", text_color="#ef4444")
+                return
+            fetch_btn.configure(state="disabled", text="⏳ Ingesting & Summarizing...")
+            status_lbl.configure(text="Fetching metadata and AI summary...", text_color="#38bdf8")
+
+            def worker():
+                try:
+                    result = WebSourceIngestor.fetch(url, ai_client=self.ai_client)
+                    if not result.get("success"):
+                        err = result.get("error", "Failed to fetch URL")
+                        self.after(0, lambda: status_lbl.configure(text=f"Error: {err}", text_color="#ef4444"))
+                        self.after(0, lambda: fetch_btn.configure(state="normal", text="Fetch & Add Source"))
+                        return
+
+                    stype = "youtube" if result.get("is_youtube") else "web"
+                    src = SourceItem(
+                        name=result.get("title", url),
+                        source_type=stype,
+                        content=result.get("summary_content", ""),
+                        file_path=url
+                    )
+                    self.project.sources.append(src)
+
+                    citation = CitationGenerator.generate(result, format_style=self.project.formatting_preset)
+                    if citation and citation not in self.project.bibliography_entries:
+                        self.project.bibliography_entries.append(citation)
+
+                    self.after(0, lambda: self._finish_web_ingest(sub_win, src))
+                except Exception as e:
+                    logger.error(f"Error fetching web source: {e}")
+                    self.after(0, lambda: status_lbl.configure(text=f"Exception: {e}", text_color="#ef4444"))
+                    self.after(0, lambda: fetch_btn.configure(state="normal", text="Fetch & Add Source"))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        fetch_btn = ctk.CTkButton(
+            sub_win,
+            text="Fetch & Add Source",
+            command=fetch_task,
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#2563eb",
+            hover_color="#1d4ed8"
+        )
+        fetch_btn.pack(fill="x", padx=20, pady=(8, 16))
+
+    def _finish_web_ingest(self, modal, src: SourceItem):
+        try:
+            modal.destroy()
+        except Exception:
+            pass
+        self._render_sources_list()
+        messagebox.showinfo("Source Ingested", f"Successfully ingested source:\n{src.name}\nType: {src.source_type.upper()}")
+
+    def _auto_ingest_embedded_youtube(self, text: str):
+        if not text:
+            return
+        yt_urls = WebSourceIngestor.extract_youtube_urls(text)
+        for url in yt_urls:
+            if any(s.file_path == url for s in self.project.sources):
+                continue
+            logger.info(f"Auto-importing embedded YouTube source: {url}")
+            def worker(u=url):
+                try:
+                    res = WebSourceIngestor.fetch(u, ai_client=self.ai_client)
+                    if res.get("success"):
+                        src = SourceItem(
+                            name=res.get("title", u),
+                            source_type="youtube",
+                            content=res.get("summary_content", ""),
+                            file_path=u
+                        )
+                        self.project.sources.append(src)
+                        cit = CitationGenerator.generate(res, format_style=self.project.formatting_preset)
+                        if cit and cit not in self.project.bibliography_entries:
+                            self.project.bibliography_entries.append(cit)
+                        self.after(0, self._render_sources_list)
+                except Exception as ex:
+                    logger.warning(f"Could not auto-import youtube link {u}: {ex}")
+            threading.Thread(target=worker, daemon=True).start()
 
     def _render_sources_list(self):
         for w in self.sources_scroll.winfo_children():
@@ -576,7 +730,14 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             row = ctk.CTkFrame(self.sources_scroll, fg_color="#18181b", corner_radius=6, border_width=1, border_color="#27272a")
             row.pack(fill="x", pady=2, padx=2)
 
-            icon = "📄" if src.source_type in ["pdf", "docx", "doc"] else "📝"
+            if src.source_type in ["youtube", "video"]:
+                icon = "▶️"
+            elif src.source_type in ["web", "url"]:
+                icon = "🌐"
+            elif src.source_type in ["pdf", "docx", "doc"]:
+                icon = "📄"
+            else:
+                icon = "📝"
             words = len(src.content.split())
             ctk.CTkLabel(row, text=f"{icon} {src.name} (~{words} words)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#f1f5f9").pack(side="left", padx=8, pady=4)
 
@@ -605,6 +766,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             self.rubric_raw_textbox.insert("1.0", content)
             self._auto_detect_word_requirements()
             self._parse_rubric_action()
+            self._auto_ingest_embedded_youtube(content)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load rubric file:\n{e}")
 
@@ -1368,6 +1530,13 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
 
         self.stage_4_format_menu.set(self.project.formatting_preset)
 
+        # Sync bibliography entries if present
+        if self.project.bibliography_entries:
+            current_bib = self.biblio_textbox.get("1.0", "end").strip()
+            if not current_bib or current_bib.startswith("Paste MLA"):
+                self.biblio_textbox.delete("1.0", "end")
+                self.biblio_textbox.insert("1.0", "\n\n".join(self.project.bibliography_entries))
+
     def _export_to_docx_action(self):
         default_name = f"{self.project.title.replace(' ', '_')}_{self.project.formatting_preset}.docx"
         output_path = filedialog.asksaveasfilename(
@@ -1409,14 +1578,85 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             messagebox.showerror("Export Failed", f"Could not create .docx document:\n{e}")
 
     # -------------------------------------------------------------------------
-    # Save & Open Project
+    # Save, Open, Recent Projects & Start Over
     # -------------------------------------------------------------------------
 
+    def _get_recent_projects_list(self) -> List[str]:
+        items = ["📂 Open Recent ▾"]
+        proj_dir = os.path.join(os.getcwd(), "projects")
+        if os.path.exists(proj_dir):
+            try:
+                files = [f for f in os.listdir(proj_dir) if f.endswith(".avaproj")]
+                files.sort(key=lambda f: os.path.getmtime(os.path.join(proj_dir, f)), reverse=True)
+                for f in files[:10]:
+                    items.append(f)
+            except Exception as e:
+                logger.warning(f"Error listing recent projects: {e}")
+        items.append("📁 Browse file from disk...")
+        return items
+
+    def _refresh_recent_projects_menu(self):
+        if hasattr(self, "open_recent_menu"):
+            vals = self._get_recent_projects_list()
+            self.open_recent_menu.configure(values=vals)
+            self.open_recent_menu.set("📂 Open Recent ▾")
+
+    def _on_recent_project_selected(self, choice: str):
+        if choice == "📁 Browse file from disk...":
+            self.open_recent_menu.set("📂 Open Recent ▾")
+            self._open_project_dialog()
+        elif choice != "📂 Open Recent ▾":
+            path = os.path.join(os.getcwd(), "projects", choice)
+            if os.path.isfile(path):
+                self._load_project_file(path)
+            self.open_recent_menu.set("📂 Open Recent ▾")
+
+    def _start_over_dialog(self):
+        confirm = messagebox.askyesno(
+            "Start Over",
+            "Are you sure you want to start over? Any unsaved progress in the current project will be lost.",
+            parent=self
+        )
+        if not confirm:
+            return
+
+        self.project = PlaygroundProject()
+        self.current_file_path = None
+        self.current_section_idx = 0
+
+        self.title_entry.delete(0, "end")
+        self.title_entry.insert(0, self.project.title)
+        self.title_display.configure(text=self.project.title)
+
+        self.topic_textbox.delete("1.0", "end")
+        self.words_entry.delete(0, "end")
+        self.words_entry.insert(0, str(self.project.target_total_words))
+        self.detected_words_label.configure(text="")
+
+        self.author_entry.delete(0, "end")
+        self.course_entry.delete(0, "end")
+        self.instructor_entry.delete(0, "end")
+
+        self.format_menu.set(self.project.formatting_preset)
+        self._render_sources_list()
+        self.stage_1_rubric_viewer.set_criteria([])
+        self.rubric_raw_textbox.delete("1.0", "end")
+        self.rubric_raw_textbox.insert("1.0", "Paste rubric text here or use Screen-Snip / Upload...")
+
+        if hasattr(self, "stage_2_rubric_viewer"):
+            self.stage_2_rubric_viewer.set_criteria([])
+        self._render_outline_list()
+
+        self.show_step(1)
+        messagebox.showinfo("New Project", "Started a new blank project.", parent=self)
+
     def _save_project_dialog(self):
+        os.makedirs("projects", exist_ok=True)
         if not self.current_file_path:
             default_name = f"{self.project.title.replace(' ', '_')}.avaproj"
             self.current_file_path = filedialog.asksaveasfilename(
                 title="Save Playground Project",
+                initialdir=os.path.join(os.getcwd(), "projects"),
                 defaultextension=".avaproj",
                 initialfile=default_name,
                 filetypes=[("AVA Project", "*.avaproj"), ("JSON File", "*.json")]
@@ -1432,19 +1672,28 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             self.project.course_name = self.course_entry.get().strip()
             self.project.instructor_name = self.instructor_entry.get().strip()
 
+            if hasattr(self, "biblio_textbox"):
+                bib_raw = self.biblio_textbox.get("1.0", "end").strip()
+                if bib_raw and not bib_raw.startswith("Paste MLA"):
+                    self.project.bibliography_entries = [l.strip() for l in bib_raw.splitlines() if l.strip()]
+
             self.project.save_to_file(path)
+            self._refresh_recent_projects_menu()
             messagebox.showinfo("Saved", f"Project saved to:\n{os.path.basename(path)}")
         except Exception as e:
             messagebox.showerror("Save Error", f"Failed to save project:\n{e}")
 
     def _open_project_dialog(self):
+        proj_dir = os.path.join(os.getcwd(), "projects")
         path = filedialog.askopenfilename(
             title="Open Playground Project",
+            initialdir=proj_dir if os.path.exists(proj_dir) else os.getcwd(),
             filetypes=[("AVA Project", "*.avaproj"), ("JSON File", "*.json")]
         )
-        if not path:
-            return
+        if path:
+            self._load_project_file(path)
 
+    def _load_project_file(self, path: str):
         try:
             self.project = PlaygroundProject.load_from_file(path)
             self.current_file_path = path
@@ -1472,6 +1721,11 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             self.format_menu.set(self.project.formatting_preset)
             self._render_sources_list()
             self.stage_1_rubric_viewer.set_criteria(self.project.rubric_criteria)
+            if hasattr(self, "stage_2_rubric_viewer"):
+                self.stage_2_rubric_viewer.set_criteria(self.project.rubric_criteria)
+
+            self._render_outline_list()
+            self._refresh_recent_projects_menu()
 
             messagebox.showinfo("Project Loaded", f"Successfully loaded project:\n{self.project.title}")
             self.show_step(1)

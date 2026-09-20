@@ -133,6 +133,7 @@ AVAILABLE_QUALITY_PRESETS = [
 AVAILABLE_HUMANIZER_MODES = ["budget", "deep"]
 AVAILABLE_HUMANIZER_TONES = ["academic", "casual", "neutral", "professional"]
 AVAILABLE_HUMANIZER_LEVELS = ["high_school", "middle_school", "college", "general"]
+AVAILABLE_PLAYGROUND_FORMATS = ["MLA", "APA", "Standard Report"]
 
 
 @dataclass
@@ -159,6 +160,11 @@ class AppConfig:
     humanizer_reading_level: str = "high_school"
     spellcheck_enabled: bool = True
     written_verification_enabled: bool = True
+
+    # Playground Mode (Long-form project writing studio)
+    playground_format: str = "MLA"
+    playground_auto_humanize: bool = True
+    playground_projects_dir: str = "projects"
 
     # Execution Behavior
     # autonomous_mode: True = acts automatically; False = asks for confirmation before clicking/typing
@@ -215,7 +221,8 @@ class AppConfig:
         "emergency_stop": "F12",
         "toggle_overlay": "F6",
         "close_app": "Ctrl+Shift+Q",
-        "snip_solve": "F4"
+        "snip_solve": "F4",
+        "open_playground": "F3"
     })
 
     def get_api_key_for_provider(self, provider: Optional[str] = None) -> str:

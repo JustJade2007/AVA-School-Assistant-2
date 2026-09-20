@@ -8,6 +8,22 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.0.3.a] - 2026-09-20
+
+### Added
+- **Playground Mode (Semi-Automated Long-Form Document Studio)**:
+  - Built a dedicated, cloaked workspace window designed for long-running schoolwork projects, essays, and research papers.
+  - **4-Stage Project Pipeline**:
+    1. *Rubrics & Sources Ingestion*: Supports screen-snipping rubrics with automatic OCR, importing files (`.pdf`, `.docx`, `.doc`, `.txt`), free-text notes, and AI parsing into structured checklist criteria.
+    2. *Outline & Criteria Checklist Mapping*: Formulates ordered section outlines mapped directly to rubric criteria with custom target word counts.
+    3. *Section-by-Section Drafting & Humanizing with Mandatory User Review*: Generates drafts with AI, auto-humanizes via **Jade's AI Humanizer**, presents side-by-side comparison, supports direct inline editing, interactive refinement prompts, and per-section review approval.
+    4. *Full Document Compilation & Academic Export*: Exports formatted Microsoft Word documents (`.docx`) according to **MLA 9th**, **APA 7th**, or **Standard Report** presets with Works Cited / Bibliography support.
+  - **Complete Background Function Isolation**: When Playground Mode is launched, default solving hotkeys (`F8`, `F4`, etc.) and autonomous solving routines are suspended to prevent typing conflicts in Word/browsers, and the HUD overlay is safely hidden until returning.
+  - **Project Auto-Save & Recovery**: Saves and loads project state (`.avaproj` / JSON) preserving all rubrics, sources, outlines, and approved drafts across sessions.
+  - **Pip & Spec Integration**: Integrated `jades-ai-humanizer`, `python-docx`, and `pypdf`, and added `F3` global hotkey.
+
+---
+
 ## [2.0.2.b] - 2026-09-14
 
 ### Fixed

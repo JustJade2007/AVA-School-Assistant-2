@@ -25,13 +25,15 @@ class HUDOverlay(ctk.CTkToplevel):
         engine: AssistantEngine,
         on_open_settings: Optional[Callable[[], None]] = None,
         on_close_app: Optional[Callable[[], None]] = None,
-        on_snip_solve: Optional[Callable[[], None]] = None
+        on_snip_solve: Optional[Callable[[], None]] = None,
+        on_open_playground: Optional[Callable[[], None]] = None
     ):
         super().__init__(master)
         self.engine = engine
         self.on_open_settings = on_open_settings
         self.on_close_app = on_close_app
         self.on_snip_solve = on_snip_solve
+        self.on_open_playground = on_open_playground
         self.config_manager = engine.config_manager
         self.visualizer = CloakedVisualizer(master=self)
 
@@ -192,6 +194,19 @@ class HUDOverlay(ctk.CTkToplevel):
                 command=self.on_snip_solve
             )
             self.btn_snip.pack(side="right", padx=2)
+
+        # Playground Studio button (F3)
+        if self.on_open_playground:
+            self.btn_playground = ctk.CTkButton(
+                self.header_frame,
+                text="📝",
+                width=28,
+                height=24,
+                fg_color="#312e81",
+                hover_color="#4338ca",
+                command=self.on_open_playground
+            )
+            self.btn_playground.pack(side="right", padx=2)
 
         # --- Status Banner ---
         self.status_frame = ctk.CTkFrame(self.main_frame, fg_color="#1f2937", corner_radius=6, height=28)
@@ -535,6 +550,19 @@ class HUDOverlay(ctk.CTkToplevel):
             command=self._manual_inspect_whole_question
         )
         self.btn_inspect_whole.grid(row=2, column=2, padx=3, pady=2, sticky="ew")
+
+        # Row 3 of controls: Playground Mode launcher
+        if self.on_open_playground:
+            self.btn_playground_launch = ctk.CTkButton(
+                self.btn_frame,
+                text="📝 Launch Playground Mode (F3)",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color="#312e81",
+                hover_color="#4338ca",
+                height=26,
+                command=self.on_open_playground
+            )
+            self.btn_playground_launch.grid(row=3, column=0, columnspan=3, padx=3, pady=(3, 2), sticky="ew")
 
         self.btn_frame.grid_columnconfigure(0, weight=1)
         self.btn_frame.grid_columnconfigure(1, weight=1)

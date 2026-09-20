@@ -17,9 +17,22 @@ hiddenimports = [
     'core.humanizer.engine.readability',
     'core.humanizer.engine.thesaurus',
     'core.humanizer.parser',
+    'core.playground',
+    'core.playground.project_model',
+    'core.playground.doc_io',
+    'core.playground.humanizer_bridge',
+    'core.playground.engine',
+    'ui.playground',
+    'ui.playground.workspace',
+    'ui.playground.rubric_viewer',
+    'humanizer',
+    'docx',
+    'pypdf',
 ]
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret2 = collect_all('docx')
+datas += tmp_ret2[0]; binaries += tmp_ret2[1]; hiddenimports += tmp_ret2[2]
 
 
 a = Analysis(

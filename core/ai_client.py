@@ -955,3 +955,22 @@ class AIClient:
                 raise RuntimeError(f"Unexpected response structure from Anthropic: {data}")
 
         raise ValueError(f"Unsupported AI provider: {self.provider}")
+
+    def extract_text_from_image(
+        self,
+        base64_image: str,
+        prompt: str = "Extract all text, rubric criteria, scoring guidelines, and assignment instructions from this image verbatim without markdown wrapping."
+    ) -> str:
+        """Extracts text content and instructions from an image for rubric ingestion."""
+        if not self.api_key:
+            raise ValueError("API Key is empty.")
+
+        if self.provider == "gemini":
+            return self._call_gemini(base64_image, prompt)
+        elif self.provider == "openai":
+            return self._call_openai(base64_image, prompt)
+        elif self.provider == "anthropic":
+            return self._call_anthropic(base64_image, prompt)
+        elif self.provider == "custom":
+            return self._call_custom(base64_image, prompt)
+        return ""

@@ -234,10 +234,15 @@ logs/
 .gemini/
 scratch/
 
-# TODO files
-TODO
-TODO.md
-TODO.txt
-todo.md
-todo.txt
+# Keys and secrets documentation
+keys.md
+keys.txt
+keys.json
+api_keys.md
+api_keys.txt
+api_keys.json
+
+# Local Playground projects
+projects/
+*.avaproj
 

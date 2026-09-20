@@ -48,7 +48,9 @@
     "debug_mode": false,
     "log_level": "INFO",
     "log_to_file": true,
-    "max_log_entries": 500,
+    "playground_format": "MLA",
+    "playground_auto_humanize": true,
+    "playground_projects_dir": "projects",
     "hotkeys": {
         "trigger_solve": "F8",
         "confirm_action": "F9",
@@ -57,6 +59,7 @@
         "emergency_stop": "F12",
         "toggle_overlay": "F6",
         "close_app": "Ctrl+Shift+Q",
-        "snip_solve": "F4"
+        "snip_solve": "F4",
+        "open_playground": "F3"
     }
 }

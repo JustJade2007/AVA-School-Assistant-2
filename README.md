@@ -52,6 +52,13 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
    - Instant fail-safe abort key (`F12` or mouse corner drag) that releases buttons and cancels all automation sequences immediately.
 11. **Global Hotkeys**:
    - Control the assistant from anywhere on your system, even while other browser or desktop windows are focused.
+12. **Playground Mode (Long-Form Project Studio)**:
+   - Dedicated semi-automated workspace designed for longer writing assignments, essays, capstone projects, and research papers.
+   - **Rubric Ingestion**: Screen-snip rubrics directly or upload files (`.pdf`, `.docx`, `.doc`, `.txt`) and free-form notes. AI automatically extracts grading criteria into an interactive checklist.
+   - **Outline & Rubric Criteria Mapping**: Formulate structured section-by-section outlines mapped to rubric goals with target word counts.
+   - **Interactive Review & Humanizing**: Section-by-section drafting with mandatory user review checkpoints, direct inline editing, prompt refinements, and auto-polishing via **Jade's AI Humanizer**.
+   - **Academic .docx Export**: Full compiled document preview and formatted Word export supporting MLA 9th, APA 7th, and Standard Technical Report presets.
+   - **Complete Isolation**: Suspends all default solving hotkeys (`F8`, etc.) and safely minimizes/hides the HUD overlay until you return.
 
 ---
 
@@ -61,6 +68,7 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
 | :---: | :---: | :--- |
 | **`F8`** | **Capture & Solve** | Takes a screenshot of the full question screen and queries the AI model |
 | **`F4`** | **Snip Box & Solve** | Drag-select any sub-box or small question area to solve directly |
+| **`F3`** | **Launch Playground** | Opens the long-form project studio window (suspends solving hotkeys & hides HUD) |
 | **`F9`** | **Confirm & Execute** | Executes the proposed clicks/typing on screen |
 | **`F10`** | **Next Question** | Clicks the identified "Next" or "Continue" button |
 | **`F7`** | **Pause / Resume** | Toggles pause on the assistant loop |

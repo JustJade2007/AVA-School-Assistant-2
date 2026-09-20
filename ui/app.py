@@ -42,6 +42,7 @@ class AVASchoolAssistantApp:
 
         self.hud_window: Optional[HUDOverlay] = None
         self.settings_window: Optional[SettingsWindow] = None
+        self.playground_window = None
         self.snipping_tool = None
 
         self._setup_hotkeys()
@@ -75,6 +76,11 @@ class AVASchoolAssistantApp:
             self.start_snipping
         )
         self.hotkey_manager.register_hotkey(
+            "open_playground",
+            hk.get("open_playground", "F3"),
+            self.open_playground
+        )
+        self.hotkey_manager.register_hotkey(
             "pause_resume",
             hk.get("pause_resume", "F7"),
             self.engine.pause_resume
@@ -103,8 +109,63 @@ class AVASchoolAssistantApp:
             engine=self.engine,
             on_open_settings=self.open_settings,
             on_close_app=self.quit_app,
-            on_snip_solve=self.start_snipping
+            on_snip_solve=self.start_snipping,
+            on_open_playground=self.open_playground
         )
+
+    def open_playground(self):
+        """Thread-safe trigger for opening Playground Mode in a dedicated studio window."""
+        try:
+            self.root.after(0, self._do_open_playground)
+        except Exception as e:
+            logger.error(f"Failed to dispatch open_playground: {e}")
+
+    def _do_open_playground(self):
+        if self.playground_window is not None and self.playground_window.winfo_exists():
+            self.playground_window.lift()
+            self.playground_window.focus_force()
+            return
+
+        logger.info("Opening Playground Mode. Isolating background solving functions and hotkeys...")
+        # 1. Temporarily stop global solving hotkeys to prevent typing conflicts in Word/browsers
+        try:
+            self.hotkey_manager.stop()
+        except Exception as e:
+            logger.debug(f"Error stopping hotkeys for Playground: {e}")
+
+        # 2. Stop any active autonomous solving engine routines
+        try:
+            self.engine.emergency_stop()
+        except Exception:
+            pass
+
+        # 3. Hide floating HUD overlay while Playground workspace is active
+        if self.hud_window and self.hud_window.winfo_exists():
+            self.hud_window.withdraw()
+
+        from ui.playground.workspace import PlaygroundWorkspace
+
+        self.playground_window = PlaygroundWorkspace(
+            master=self.root,
+            ai_client=self.engine.ai_client,
+            config_manager=self.config_manager,
+            on_exit=self._on_playground_closed
+        )
+
+    def _on_playground_closed(self):
+        """Restores HUD overlay and restarts hotkey listener when Playground is closed."""
+        logger.info("Playground Mode closed. Restoring HUD overlay and global hotkeys...")
+        try:
+            if self.hud_window and self.hud_window.winfo_exists():
+                self.hud_window.deiconify()
+                self.hud_window.lift()
+        except Exception as e:
+            logger.warning(f"Failed to restore HUD overlay: {e}")
+
+        try:
+            self.hotkey_manager.start()
+        except Exception as e:
+            logger.warning(f"Failed to restart hotkey manager: {e}")
 
     def open_settings(self):
         """Opens or focuses the Settings Dashboard."""

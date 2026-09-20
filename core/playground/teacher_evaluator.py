@@ -69,7 +69,7 @@ class TeacherEvaluator:
                 "5. Proper citation and academic formatting"
             )
 
-        sources_summary = "\n".join([f"- {s.title} ({s.source_type})" for s in project.sources])
+        sources_summary = "\n".join([f"- {getattr(s, 'name', getattr(s, 'title', 'Source'))} ({getattr(s, 'source_type', 'source')})" for s in project.sources])
         if not sources_summary:
             sources_summary = "None provided"
 

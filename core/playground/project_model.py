@@ -33,17 +33,29 @@ class RubricCriterion:
 class SourceItem:
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     name: str = ""
-    source_type: str = "text"  # "text", "pdf", "docx", "doc", "txt", "screen_snip"
+    source_type: str = "text"  # "text", "pdf", "docx", "doc", "txt", "screen_snip", "web", "youtube"
     content: str = ""
     file_path: Optional[str] = None
     created_at: float = field(default_factory=time.time)
+
+    @property
+    def title(self) -> str:
+        """Alias for name attribute to maintain compatibility."""
+        return self.name
+
+    @title.setter
+    def title(self, val: str):
+        self.name = val
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SourceItem":
-        return cls(**{k: v for k, v in data.items() if k in cls.__annotations__})
+        d = dict(data)
+        if "title" in d and "name" not in d:
+            d["name"] = d["title"]
+        return cls(**{k: v for k, v in d.items() if k in cls.__annotations__})
 
 
 @dataclass

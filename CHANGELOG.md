@@ -8,6 +8,14 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.3.c] - 2026-09-20
+
+### Fixed
+- **Teacher AI Grading `SourceItem` Attribute Fix**:
+  - Fixed `AttributeError: 'SourceItem' object has no attribute 'title'` during Teacher AI evaluation on papers with attached sources.
+  - Added a `.title` property alias (getter and setter) as well as deserialization title-to-name fallback to `SourceItem` in `core/playground/project_model.py`.
+  - Updated source list summarization in `TeacherEvaluator.grade_document` (`core/playground/teacher_evaluator.py`) to safely reference `s.name` with fallback to `s.title`.
+
 ## [2.1.3.b] - 2026-09-20
 
 ### Fixed

@@ -165,7 +165,7 @@ class AssistantEngine:
             except Exception as e:
                 logger.error(f"Error in adjustment callback: {e}")
 
-    def _can_click_next(self, min_interval: float = 2.2) -> bool:
+    def _can_click_next(self, min_interval: float = 2.5) -> bool:
         """
         Guards against duplicate/rapid Next button clicks.
         Returns True if enough time has passed since the last Next click, otherwise False.
@@ -187,6 +187,92 @@ class AssistantEngine:
         """Records timestamp of an executed Next click."""
         with self._next_click_lock:
             self._last_next_click_time = time.time()
+
+    def _wait_for_page_to_settle(
+        self,
+        region: Optional[Tuple[int, int, int, int]] = None,
+        max_wait: float = 5.0,
+        check_interval: float = 0.35,
+        min_stable_checks: int = 2
+    ):
+        """
+        Waits for a dynamic web page/quiz to finish loading and rendering before
+        initiating solving or screen analysis.
+        Monitors for:
+        1. Blank/solid loading screens (low pixel standard deviation).
+        2. Frame-to-frame stabilization (ensures progressive layout shifts, MathJax rendering,
+           and animations have ceased).
+        """
+        if not self.config.local_verification_enabled:
+            time.sleep(1.0)
+            return
+
+        start_time = time.time()
+        prev_img = None
+        consecutive_stable = 0
+
+        logger.debug("Waiting for page to settle and stabilize...")
+        while (time.time() - start_time) < max_wait:
+            if self.executor.is_stopped():
+                break
+
+            try:
+                curr_img = self.capture.capture_screen(region=region)
+            except Exception as e:
+                logger.debug(f"_wait_for_page_to_settle capture error: {e}")
+                time.sleep(check_interval)
+                continue
+
+            if curr_img is None:
+                time.sleep(check_interval)
+                continue
+
+            # Check if image is virtually blank (e.g., solid white/gray/black browser loading frame)
+            try:
+                gray = curr_img.convert("L")
+                stat = ImageStat.Stat(gray)
+                stddev = stat.stddev[0] if stat.stddev else 0.0
+                mean_val = stat.mean[0] if stat.mean else 0.0
+
+                # If standard deviation is extremely low (< 5.0) and brightness is high (> 230) or low (< 25),
+                # the browser is showing a blank loading screen.
+                if stddev < 5.0 and (mean_val > 230 or mean_val < 25):
+                    logger.debug(f"Page is blank loading screen (stddev={stddev:.1f}, mean={mean_val:.1f}), waiting...")
+                    consecutive_stable = 0
+                    time.sleep(check_interval)
+                    prev_img = curr_img
+                    continue
+            except Exception as e:
+                logger.debug(f"Blank screen check error: {e}")
+
+            if prev_img is not None:
+                try:
+                    diff_trans = self.verifier.verify_screen_transition(
+                        prev_img, curr_img, min_diff=1.2, min_changed_pixels=25
+                    )
+                    is_changing = (
+                        diff_trans.get("transitioned", False)
+                        if hasattr(diff_trans, "get")
+                        else (bool(diff_trans[0]) if isinstance(diff_trans, (tuple, list)) else bool(diff_trans))
+                    )
+                    if not is_changing:
+                        consecutive_stable += 1
+                        if consecutive_stable >= min_stable_checks:
+                            elapsed = time.time() - start_time
+                            logger.info(f"Page settled and stabilized after {elapsed:.2f}s.")
+                            return
+                    else:
+                        consecutive_stable = 0
+                        logger.debug("Page is still rendering/animating, waiting for stabilization...")
+                except Exception as e:
+                    logger.debug(f"Settling diff check error: {e}")
+                    consecutive_stable += 1
+
+            prev_img = curr_img
+            time.sleep(check_interval)
+
+        elapsed = time.time() - start_time
+        logger.info(f"Page settle wait completed (elapsed {elapsed:.2f}s).")
 
     def set_state(self, new_state: EngineState, detail: str = ""):
         with self._state_lock:
@@ -816,7 +902,11 @@ class AssistantEngine:
                         else:
                             self._discover_and_click_next_button(override_region=self.last_region)
                     if self.config.autonomous_mode and not self.executor.is_stopped():
-                        time.sleep(1.2)
+                        load_delay = max(2.5, self.config.auto_next_delay + 1.0)
+                        logger.info(f"Advancing to next question: Waiting {load_delay:.1f}s for page to render...")
+                        self._handle_adjustment("⏳ Waiting for next question to load...")
+                        time.sleep(load_delay)
+                        self._wait_for_page_to_settle(region=self.last_region)
                         self.executor._viewport_is_scrolled = False
                         self.set_state(EngineState.IDLE)
                         self.trigger_solve()
@@ -1110,7 +1200,8 @@ class AssistantEngine:
 
             # Check if auto next or multi-part continuation is applicable
             if (is_answered or is_already_answered or verification.get("all_verified", False) or verification.get("verified_count", 0) > 0) and not has_pending_items:
-                self.last_result["ready_to_advance"] = True
+                if self.last_result.get("ready_to_advance") is not False:
+                    self.last_result["ready_to_advance"] = True
             elif has_pending_items:
                 self.last_result["ready_to_advance"] = False
 
@@ -1226,22 +1317,28 @@ class AssistantEngine:
                         # Zero-token verification: verify if screen transitioned to next question
                         if self.config.local_verification_enabled and before_next_img:
                             transition_confirmed = False
-                            for attempt in range(4):
+                            for attempt in range(12):
                                 time.sleep(0.35)
                                 try:
                                     after_next_img = self.capture.capture_screen(region=self.last_region)
                                     trans = self.verifier.verify_screen_transition(before_next_img, after_next_img)
-                                    if trans.get("transitioned", False):
+                                    t_ok = (
+                                        trans.get("transitioned", False)
+                                        if hasattr(trans, "get")
+                                        else (bool(trans[0]) if isinstance(trans, (tuple, list)) else bool(trans))
+                                    )
+                                    if t_ok:
                                         transition_confirmed = True
                                         advanced = True
-                                        logger.info(f"[OK] Screen transition to next question verified on check {attempt + 1}: {trans.get('details')}")
+                                        t_details = trans.get("details", "") if hasattr(trans, "get") else ""
+                                        logger.info(f"[OK] Screen transition to next question verified on check {attempt + 1}: {t_details}")
                                         break
                                 except Exception as e:
                                     logger.debug(f"Transition check exception: {e}")
-                                    break
+                                    continue
                             if not transition_confirmed:
                                 logger.warning(
-                                    "Next button click did not transition screen after polling. "
+                                    "Next button click did not transition screen after polling (4.2s). "
                                     "Falling back to dynamic navigation button discovery..."
                                 )
                         else:
@@ -1253,10 +1350,11 @@ class AssistantEngine:
 
                 # Step 3: Multi-part continuation or autonomous loop
                 if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
-                    load_delay = max(2.0, self.config.auto_next_delay + 0.8)
+                    load_delay = max(2.5, self.config.auto_next_delay + 1.0)
                     logger.info(f"Advancing to next question: Waiting {load_delay:.1f}s for page to render...")
                     self._handle_adjustment("⏳ Waiting for next question to load...")
                     time.sleep(load_delay)
+                    self._wait_for_page_to_settle(region=self.last_region)
                     self.executor._viewport_is_scrolled = False
                     logger.info("Continuing solve pipeline for next part/question...")
                     self.set_state(EngineState.IDLE)
@@ -1438,27 +1536,15 @@ class AssistantEngine:
                 ny = detected_btn.get("screen_y", detected_btn.get("y"))
                 if nx is not None and ny is not None:
                     # Enforce navigation debounce: never click Next multiple times within minimum interval!
-                    if not self._can_click_next(min_interval=2.0):
+                    if not self._can_click_next(min_interval=2.5):
                         return False
 
                     desc = detected_btn.get("description", "Next Question")
                     logger.info(f"Auto-advance: Successfully detected '{desc}' button at ({nx}, {ny})")
                     self._handle_adjustment(f"Found Next button: ({nx}, {ny})")
-                    before_roi = None
-                    if self.config.local_verification_enabled:
-                        before_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
 
                     self.executor.click(int(nx), int(ny))
                     self._record_next_click()
-
-                    if self.config.local_verification_enabled and before_roi:
-                        time.sleep(0.15)
-                        after_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
-                        diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
-                        if not diff_ok and diff_score < 1.0:
-                            logger.warning(f"Auto-advance Next click unconfirmed (diff={diff_score:.1f}). Retrying firmly...")
-                            self.executor.click(int(nx), int(ny), allow_variance=False)
-                            self._record_next_click()
 
                     # If the clicked button was Submit/Check, the platform validates and reveals the Next button
                     b_type = str(detected_btn.get("type", "")).lower()
@@ -1560,21 +1646,14 @@ class AssistantEngine:
                     nx = detected_btn_scrolled.get("screen_x", detected_btn_scrolled.get("x"))
                     ny = detected_btn_scrolled.get("screen_y", detected_btn_scrolled.get("y"))
                     if nx is not None and ny is not None:
+                        if not self._can_click_next(min_interval=2.5):
+                            scrolled_clicked = True
+                            return True
                         logger.info(f"Auto-advance: Detected Next button below fold at ({nx}, {ny})")
                         self._handle_adjustment(f"Found Next button below fold: ({nx}, {ny})")
-                        before_roi = None
-                        if self.config.local_verification_enabled:
-                            before_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
 
                         self.executor.click(int(nx), int(ny))
-
-                        if self.config.local_verification_enabled and before_roi:
-                            time.sleep(0.15)
-                            after_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
-                            diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
-                            if not diff_ok and diff_score < 1.0:
-                                logger.warning(f"Auto-advance Next below fold click unconfirmed (diff={diff_score:.1f}). Retrying firmly...")
-                                self.executor.click(int(nx), int(ny), allow_variance=False)
+                        self._record_next_click()
                         scrolled_clicked = True
                         return True
             finally:
@@ -1825,7 +1904,7 @@ class AssistantEngine:
             return
 
         # Enforce navigation debounce / rate-limiting
-        if not self._can_click_next(min_interval=2.0):
+        if not self._can_click_next(min_interval=2.5):
             return
 
         is_scrolled = bool(next_btn.get("in_scrolled_view", False))
@@ -1844,23 +1923,8 @@ class AssistantEngine:
         if x is not None and y is not None:
             nx, ny = int(x), int(y)
             logger.info(f"Clicking Next Question button at ({nx}, {ny})")
-            before_roi = None
-            if self.config.local_verification_enabled:
-                before_roi = self.verifier.capture_roi(nx, ny, radius_w=45, radius_h=25)
-
             self.executor.click(nx, ny)
             self._record_next_click()
-
-            if self.config.local_verification_enabled and before_roi:
-                time.sleep(0.15)
-                after_roi = self.verifier.capture_roi(nx, ny, radius_w=45, radius_h=25)
-                diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
-                if not diff_ok and diff_score < 1.0:
-                    logger.warning(f"Next button click unconfirmed (diff={diff_score:.1f}). Retrying firmly without variance...")
-                    self.executor.click(nx, ny, allow_variance=False)
-                    self._record_next_click()
-                else:
-                    logger.info(f"[OK] Next button click verified (diff={diff_score:.1f})")
 
     def trigger_next_question(self):
         """User manual trigger for Next Question (F10). Supports both button advancing and scroll-down quizzes."""
@@ -1906,10 +1970,12 @@ class AssistantEngine:
 
             # If in autonomous mode or chain multi-parts is enabled on a multi-part question, continue!
             if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
-                load_delay = max(2.0, self.config.auto_next_delay + 0.8)
+                load_delay = max(2.5, self.config.auto_next_delay + 1.0)
                 logger.info(f"Manual advance: Waiting {load_delay:.1f}s for next question to render...")
                 self._handle_adjustment("⏳ Waiting for next question to load...")
                 time.sleep(load_delay)
+                self._wait_for_page_to_settle(region=self.last_region)
+                self.executor._viewport_is_scrolled = False
                 logger.info("Continuing solve pipeline for next part/question after manual advance...")
                 self.set_state(EngineState.IDLE)
                 self.trigger_solve()

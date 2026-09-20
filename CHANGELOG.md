@@ -8,6 +8,21 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.4.e] - 2026-09-20
+
+### Fixed & Improved
+- **Double Next Button Click Elimination (Mis-input Fix)**:
+  - Eliminated the 150ms micro-ROI verification click retries from `trigger_next_button` and `_discover_and_click_next_button` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py). Web page navigation does not alter button pixel values within 150ms; previously, the verifier interpreted this static state as a failed click and executed a firm retry, causing an unintentional double-click.
+  - Raised the default navigation debounce interval to 2.5s in `_can_click_next()` to strictly suppress rapid duplicate clicks across all triggers.
+  - Ensured all discovered and scrolled Next button clicks call `_record_next_click()` to guarantee debounce enforcement across all navigation pathways.
+- **Screen Transition Verification & AttributeError Fix**:
+  - Introduced `TransitionResult` in [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py), a `tuple` subclass that supports both legacy tuple-unpacking `(is_transitioned, diff)` and dictionary-style `.get('transitioned')` and `.details`.
+  - Fixed an unhandled `AttributeError` in `execute_current_solution` where `trans.get()` crashed on tuple returns, causing the engine to abort transition polling after 0.35s and immediately fall back to dynamic button discovery to click Next again.
+  - Expanded screen transition polling from 4 attempts (1.4s) to 12 attempts (~4.2s) in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), providing sufficient time for school platforms to initiate and complete page transitions.
+- **Page Loading Patience & Dynamic Settle Stabilization**:
+  - Implemented `_wait_for_page_to_settle` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), monitoring for blank loading frames (low standard deviation across pixels) and frame-to-frame visual stabilization (ensuring animations, LaTeX/MathJax rendering, and layout shifts cease) before triggering question solving.
+  - Integrated `_wait_for_page_to_settle` across automated solution execution, autonomous already-answered advances, and manual advances (F10) to prevent solving or re-clicking before the new question is completely loaded.
+
 ## [2.1.4.d] - 2026-09-20
 
 ### Fixed & Improved

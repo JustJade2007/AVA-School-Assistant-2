@@ -14,6 +14,47 @@ import mss
 logger = logging.getLogger(__name__)
 
 
+class TransitionResult(tuple):
+    """
+    Tuple subclass (is_transitioned, mean_diff) that also provides dictionary-like
+    and attribute access (.transitioned, .diff, .get('transitioned'), etc.)
+    for backward and forward compatibility.
+    """
+    def __new__(cls, transitioned: bool, diff: float, details: str = ""):
+        instance = super().__new__(cls, (bool(transitioned), float(diff)))
+        instance._details = details
+        return instance
+
+    @property
+    def transitioned(self) -> bool:
+        return self[0]
+
+    @property
+    def diff(self) -> float:
+        return self[1]
+
+    @property
+    def details(self) -> str:
+        return getattr(self, "_details", "")
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key in ("transitioned", "is_transitioned"):
+            return self[0]
+        if key in ("diff", "mean_diff"):
+            return self[1]
+        if key == "details":
+            return getattr(self, "_details", default)
+        return default
+
+    def __getitem__(self, item):
+        if isinstance(item, str):
+            val = self.get(item)
+            if val is not None:
+                return val
+            raise KeyError(item)
+        return super().__getitem__(item)
+
+
 class LocalVisualVerifier:
     """Zero-token local screen region verifier and template tracker."""
 
@@ -894,14 +935,14 @@ class LocalVisualVerifier:
         after_img: Optional[Image.Image],
         min_diff: float = 1.4,
         min_changed_pixels: int = 30
-    ) -> Tuple[bool, float]:
+    ) -> TransitionResult:
         """
         Verifies that screen transitioned or responded visually following
         a navigation action ("Check Answer", "Next", submit).
-        Returns (is_transitioned, mean_diff).
+        Returns TransitionResult(is_transitioned, mean_diff).
         """
         if before_img is None or after_img is None:
-            return True, 0.0
+            return TransitionResult(True, 0.0, details="No image provided for comparison")
 
         try:
             if before_img.size != after_img.size:
@@ -918,14 +959,14 @@ class LocalVisualVerifier:
             changed_pixels = sum(hist[16:])
 
             is_transitioned = (mean_diff >= min_diff or changed_pixels >= min_changed_pixels)
+            details = f"mean_diff={mean_diff:.2f}, changed_px={changed_pixels}"
             logger.debug(
-                f"verify_screen_transition: is_transitioned={is_transitioned}, "
-                f"mean_diff={mean_diff:.2f}, changed_px={changed_pixels}"
+                f"verify_screen_transition: is_transitioned={is_transitioned}, {details}"
             )
-            return is_transitioned, mean_diff
+            return TransitionResult(is_transitioned, mean_diff, details=details)
         except Exception as e:
             logger.warning(f"Error in verify_screen_transition: {e}")
-            return True, 0.0
+            return TransitionResult(True, 0.0, details=f"Exception: {e}")
 
     def detect_platform_evaluation_markers(
         self,

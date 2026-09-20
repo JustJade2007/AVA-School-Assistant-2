@@ -389,6 +389,8 @@ class TestAVACore(unittest.TestCase):
         engine = AssistantEngine(config_manager=cm)
         engine.trigger_next_button = MagicMock()
         engine.trigger_check_button = MagicMock()
+        engine.trigger_solve = MagicMock()
+        engine._wait_for_page_to_settle = MagicMock()
         engine.executor.execute_action_sequence = MagicMock()
 
         # 1. When ready_to_advance is False, neither button should be called
@@ -580,6 +582,7 @@ class TestAVACore(unittest.TestCase):
         engine.trigger_check_button = MagicMock()
         engine.trigger_next_button = MagicMock()
         engine.trigger_solve = MagicMock()
+        engine._wait_for_page_to_settle = MagicMock()
 
         # When a multi-part question has finished its current part actions and has a next button:
         engine.last_result = {

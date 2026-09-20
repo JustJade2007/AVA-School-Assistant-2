@@ -575,6 +575,76 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
         engine.executor.scroll.assert_called_once_with(-400, 600, 450)
         self.assertTrue(engine.executor._viewport_is_scrolled)
 
+    def test_next_button_clicks_exactly_once_without_150ms_retry(self):
+        """
+        Verifies that trigger_next_button clicks exactly ONCE and does NOT execute
+        a 150ms retry double-click, even with local_verification_enabled=True.
+        """
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config.local_verification_enabled = True
+        engine.executor.click = MagicMock()
+        engine.last_result = {
+            "advance_action": "click_button",
+            "next_button": {"x": 750, "y": 850, "screen_x": 750, "screen_y": 850}
+        }
+        engine.trigger_next_button()
+
+        # Must be clicked exactly once - no 150ms second click!
+        self.assertEqual(engine.executor.click.call_count, 1)
+        engine.executor.click.assert_called_once_with(750, 850)
+
+    def test_transition_result_backward_and_forward_compatibility(self):
+        """
+        Verifies that TransitionResult behaves as both a 2-tuple (for legacy callers)
+        and supports .get() and attribute access.
+        """
+        from core.local_verifier import TransitionResult
+        res = TransitionResult(True, 3.45, details="diff=3.45")
+
+        # 1. 2-tuple unpacking
+        is_trans, diff = res
+        self.assertTrue(is_trans)
+        self.assertAlmostEqual(diff, 3.45)
+        self.assertEqual(len(res), 2)
+        self.assertEqual(res[0], True)
+        self.assertEqual(res[1], 3.45)
+
+        # 2. Dictionary-style .get() access
+        self.assertTrue(res.get("transitioned"))
+        self.assertTrue(res.get("is_transitioned"))
+        self.assertAlmostEqual(res.get("diff"), 3.45)
+        self.assertEqual(res.get("details"), "diff=3.45")
+        self.assertIsNone(res.get("nonexistent"))
+
+        # 3. Attribute access
+        self.assertTrue(res.transitioned)
+        self.assertAlmostEqual(res.diff, 3.45)
+        self.assertEqual(res.details, "diff=3.45")
+
+    def test_wait_for_page_to_settle_waits_for_blank_screen_and_stabilization(self):
+        """
+        Verifies that _wait_for_page_to_settle detects blank loading screens
+        and waits until successive frames stabilize.
+        """
+        from PIL import Image, ImageDraw
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config.local_verification_enabled = True
+
+        # Frame 0: Solid white loading frame (stddev == 0)
+        blank_img = Image.new("RGB", (100, 100), (255, 255, 255))
+
+        # Frame 1 & 2: Stable rendered page with content
+        content_img = Image.new("RGB", (100, 100), (255, 255, 255))
+        draw = ImageDraw.Draw(content_img)
+        draw.rectangle([10, 10, 80, 80], fill=(50, 50, 50))
+
+        engine.capture.capture_screen = MagicMock(side_effect=[blank_img, content_img, content_img, content_img])
+
+        engine._wait_for_page_to_settle(max_wait=2.0, check_interval=0.05, min_stable_checks=2)
+
+        # Should have captured at least 3 frames (blank, content1, content2) before declaring settled
+        self.assertGreaterEqual(engine.capture.capture_screen.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

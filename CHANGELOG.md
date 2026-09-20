@@ -8,6 +8,19 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.2.a] - 2026-09-20
+
+### Added
+- **Outline Structure & Formatting Clarification Pop-up**:
+  - Clicking `⚡ AI Auto-Generate Outline` now opens a dedicated clarification modal (`_show_outline_clarification_dialog`) before generating section drafts.
+  - Allows students to configure and personalize:
+    - **Structure Preset**: Standard Academic, Multi-Question/Multi-Part, Scientific (IMRAD), Comparative Analysis, Argumentative/Persuasive, or Auto-Detect.
+    - **Target Section Count**: 3 through 8 sections or Auto-Detect.
+    - **Heading & Title Naming Style**: Descriptive Academic, Numbered, Question-Based, or Roman Numerals.
+    - **Total Word Count Target**: Inline verification and modification before outline formulation.
+    - **Student Focus & Personalization Notes**: Text field for specific instructions, themes, mandatory arguments, or required sections.
+  - Custom guidelines are passed to `PlaygroundEngine.generate_outline`, producing personalized outlines while maintaining rubric word count normalization.
+
 ## [2.1.1.b] - 2026-09-20
 
 ### Fixed

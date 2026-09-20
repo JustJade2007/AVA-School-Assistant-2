@@ -853,7 +853,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
 
         ctk.CTkLabel(o_header, text="📑 Document Outline & Section Plan", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc").pack(side="left")
 
-        gen_out_btn = ctk.CTkButton(
+        self.gen_out_btn = ctk.CTkButton(
             o_header,
             text="⚡ AI Auto-Generate Outline",
             command=self._generate_outline_action,
@@ -861,7 +861,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             fg_color="#3b82f6",
             hover_color="#2563eb"
         )
-        gen_out_btn.pack(side="right", padx=4)
+        self.gen_out_btn.pack(side="right", padx=4)
 
         add_sec_btn = ctk.CTkButton(
             o_header,
@@ -933,15 +933,199 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self._render_outline_list()
 
     def _generate_outline_action(self):
+        """Opens a clarification pop-up modal allowing the user to clarify structure, section count, and notes before AI generation."""
+        self._show_outline_clarification_dialog()
+
+    def _show_outline_clarification_dialog(self):
+        modal = ctk.CTkToplevel(self)
+        modal.title("Clarify Document Structure & Outline Preferences")
+        modal.geometry("620x660")
+        modal.minsize(560, 580)
+        modal.configure(fg_color="#09090b")
+        modal.transient(self)
+
+        # Apply cloaking if enabled
+        if self.is_cloaked and is_anti_capture_supported():
+            apply_anti_capture(modal)
+
+        # Header Frame
+        hdr = ctk.CTkFrame(modal, fg_color="#18181b", corner_radius=0)
+        hdr.pack(fill="x")
+
+        ctk.CTkLabel(
+            hdr,
+            text="⚡ Clarify Outline Structure & Personalization",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color="#38bdf8"
+        ).pack(anchor="w", padx=20, pady=(16, 4))
+
+        ctk.CTkLabel(
+            hdr,
+            text="Clarify how Ava should organize your sections, question breakdown, and style before generating the outline.",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8",
+            wraplength=570,
+            justify="left"
+        ).pack(anchor="w", padx=20, pady=(0, 14))
+
+        # Main scrollable content
+        content = ctk.CTkScrollableFrame(modal, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=20, pady=12)
+
+        # 1. Structure Style Preset
+        ctk.CTkLabel(content, text="Structure Style Preset:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(4, 2))
+        structure_presets = [
+            "Auto-Detect from Rubric & Topic (Recommended)",
+            "Standard Academic Essay (Intro, Body Paragraphs, Conclusion)",
+            "Multi-Question / Multi-Part Assignment (Q1, Q2, Q3...)",
+            "Scientific / IMRAD (Intro, Methods, Results, Discussion)",
+            "Comparative Analysis (Thesis, Subject A, Subject B, Synthesis)",
+            "Argumentative / Persuasive (Claim, Evidence, Counterargument, Rebuttal)",
+        ]
+        structure_menu = ctk.CTkOptionMenu(
+            content,
+            values=structure_presets,
+            fg_color="#27272a",
+            button_color="#3f3f46",
+            height=34,
+        )
+        structure_menu.set(structure_presets[0])
+        structure_menu.pack(fill="x", pady=(0, 12))
+
+        # 2. Section Count & Total Word Target Row
+        grid_row = ctk.CTkFrame(content, fg_color="transparent")
+        grid_row.pack(fill="x", pady=(0, 12))
+
+        left_sub = ctk.CTkFrame(grid_row, fg_color="transparent")
+        left_sub.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        ctk.CTkLabel(left_sub, text="Target Section Count:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(0, 2))
+        section_counts = [
+            "Auto (Decided by Rubric & Topic)",
+            "3 Sections (Short Paper / 3-Part)",
+            "4 Sections",
+            "5 Sections (Standard 5-Part / 5 Questions)",
+            "6 Sections",
+            "7 Sections",
+            "8 Sections (Comprehensive)",
+        ]
+        count_menu = ctk.CTkOptionMenu(
+            left_sub,
+            values=section_counts,
+            fg_color="#27272a",
+            button_color="#3f3f46",
+            height=34,
+        )
+        count_menu.set(section_counts[0])
+        count_menu.pack(fill="x")
+
+        right_sub = ctk.CTkFrame(grid_row, fg_color="transparent")
+        right_sub.pack(side="right", fill="x", expand=True, padx=(6, 0))
+
+        ctk.CTkLabel(right_sub, text="Total Document Target Words:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(0, 2))
+        words_entry = ctk.CTkEntry(right_sub, height=34)
+        words_entry.insert(0, str(self.project.target_total_words))
+        words_entry.pack(fill="x")
+
+        # 3. Section Heading Naming Style
+        ctk.CTkLabel(content, text="Heading & Title Style:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(4, 2))
+        heading_styles = [
+            "Descriptive Academic Titles (e.g. 'Historical Context & Evolution')",
+            "Numbered Headings (e.g. '1. Introduction', '2. Analysis')",
+            "Question Headings (e.g. 'Question 1: ...', 'Question 2: ...')",
+            "Roman Numerals (e.g. 'I. Introduction', 'II. Context')",
+        ]
+        heading_menu = ctk.CTkOptionMenu(
+            content,
+            values=heading_styles,
+            fg_color="#27272a",
+            button_color="#3f3f46",
+            height=34,
+        )
+        heading_menu.set(heading_styles[0])
+        heading_menu.pack(fill="x", pady=(0, 12))
+
+        # 4. Student Notes / Specific Guidance Textbox
+        ctk.CTkLabel(content, text="Specific Personal Instructions or Focus Areas (Optional):", font=ctk.CTkFont(size=12, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(4, 2))
+        ctk.CTkLabel(
+            content,
+            text="Clarify any specific angles, mandatory arguments, counterarguments, or questions you want covered in each section.",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8"
+        ).pack(anchor="w", pady=(0, 4))
+        notes_box = ctk.CTkTextbox(content, height=110, fg_color="#18181b", font=ctk.CTkFont(size=12))
+        notes_box.pack(fill="x", pady=(0, 10))
+
+        # Bottom Action Bar
+        btn_bar = ctk.CTkFrame(modal, fg_color="#18181b", height=56)
+        btn_bar.pack(fill="x")
+
+        cancel_btn = ctk.CTkButton(
+            btn_bar,
+            text="Cancel",
+            command=modal.destroy,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            width=100,
+            height=36,
+        )
+        cancel_btn.pack(side="left", padx=16, pady=10)
+
+        def on_confirm():
+            # Update word count if edited in modal
+            try:
+                val = int(words_entry.get().strip())
+                if val > 0:
+                    self.project.target_total_words = val
+                    self.outline_stats_bar.configure(text=f"Total Outline Words: 0 / Target: {val}")
+            except ValueError:
+                pass
+
+            customization = {
+                "structure_preset": structure_menu.get(),
+                "section_count": count_menu.get(),
+                "heading_style": heading_menu.get(),
+                "user_notes": notes_box.get("1.0", "end").strip(),
+            }
+
+            modal.destroy()
+            self._start_outline_generation(customization)
+
+        generate_btn = ctk.CTkButton(
+            btn_bar,
+            text="⚡ Generate Outline with Custom Structure",
+            command=on_confirm,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            height=36,
+        )
+        generate_btn.pack(side="right", padx=16, pady=10)
+
+    def _start_outline_generation(self, customization: Optional[Dict[str, Any]] = None):
+        if hasattr(self, "gen_out_btn") and self.gen_out_btn:
+            self.gen_out_btn.configure(text="⏳ Generating Outline...", state="disabled")
+
         def task():
-            sections = self.engine.generate_outline(self.project)
-            self.after(0, lambda: self._finish_outline_gen(sections))
+            try:
+                sections = self.engine.generate_outline(self.project, customization=customization)
+                self.after(0, lambda: self._finish_outline_gen(sections))
+            except Exception as e:
+                logger.error(f"Error generating outline: {e}", exc_info=True)
+                self.after(0, lambda: self._on_outline_gen_failed(str(e)))
 
         threading.Thread(target=task, daemon=True).start()
 
     def _finish_outline_gen(self, sections: List[SectionDraft]):
+        if hasattr(self, "gen_out_btn") and self.gen_out_btn:
+            self.gen_out_btn.configure(text="⚡ AI Auto-Generate Outline", state="normal")
         self.project.sections = sections
         self._render_outline_list()
+
+    def _on_outline_gen_failed(self, err_msg: str):
+        if hasattr(self, "gen_out_btn") and self.gen_out_btn:
+            self.gen_out_btn.configure(text="⚡ AI Auto-Generate Outline", state="normal")
+        messagebox.showerror("Outline Generation Error", f"Failed to generate outline:\n{err_msg}")
 
     def _add_manual_section(self):
         new_sec = SectionDraft(

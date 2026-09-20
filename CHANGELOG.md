@@ -40,6 +40,12 @@ The version format is `1.2.3.a`:
   - Enhanced multi-part question count detection in `WrittenSolver.extract_detailed_word_constraints` across compound prompt structures.
   - Stage 3 goal counter accurately reflects the clamped section targets and believable margin status.
 
+### Fixed
+- **WebSourceIngestor Fetch Attribute & YouTube Canonicalization**:
+  - Added `WebSourceIngestor.fetch` classmethod alias for `fetch_source`.
+  - Added automatic URL canonicalization for short links (`youtu.be`) and embed links to `https://www.youtube.com/watch?v=...` before querying oEmbed.
+  - Added robust fallback handling for deleted, private, or unavailable videos preventing unhandled HTTP 404 errors.
+
 ---
 
 ## [2.0.3.d] - 2026-09-20

@@ -55,29 +55,63 @@ class WebSourceIngestor:
         return bool(cls.YOUTUBE_REGEX.search(url))
 
     @classmethod
+    def fetch(cls, url: str, ai_client=None) -> Dict[str, Any]:
+        """Convenience alias for fetch_source."""
+        return cls.fetch_source(url, ai_client)
+
+    @classmethod
     def fetch_source(cls, url: str, ai_client=None) -> Dict[str, Any]:
         """
         Fetches web page or YouTube video details, extracts key metadata,
         and generates an academic research summary.
         """
         url = url.strip()
-        if cls.is_youtube_url(url):
-            return cls._fetch_youtube(url, ai_client)
-        return cls._fetch_webpage(url, ai_client)
+        try:
+            if cls.is_youtube_url(url):
+                res = cls._fetch_youtube(url, ai_client)
+            else:
+                res = cls._fetch_webpage(url, ai_client)
+
+            res["success"] = True
+            res["is_youtube"] = (res.get("source_type") == "youtube")
+            if "summary_content" not in res:
+                res["summary_content"] = res.get("content", "")
+            return res
+        except Exception as e:
+            logger.error(f"Error fetching source for {url}: {e}", exc_info=True)
+            is_yt = cls.is_youtube_url(url)
+            return {
+                "success": False,
+                "error": str(e),
+                "url": url,
+                "is_youtube": is_yt,
+                "source_type": "youtube" if is_yt else "web",
+                "title": url,
+                "author": "",
+                "site_name": "YouTube" if is_yt else "Web",
+                "content": f"Source URL: {url}",
+                "summary_content": f"Source URL: {url}",
+            }
 
     @classmethod
     def _fetch_youtube(cls, url: str, ai_client=None) -> Dict[str, Any]:
         """Fetches YouTube video metadata via public oEmbed API and page scrape."""
         logger.info(f"Fetching YouTube metadata for: {url}")
-        title = "YouTube Video"
-        author = "YouTube Creator"
+        
+        # Canonicalize YouTube URL to watch?v= format
+        m_vid = cls.YOUTUBE_REGEX.search(url)
+        vid = m_vid.group(1) if m_vid else ""
+        canonical_url = f"https://www.youtube.com/watch?v={vid}" if vid else url
+
+        title = f"YouTube Video ({vid})" if vid else "YouTube Video"
+        author = "YouTube Channel"
         site_name = "YouTube"
         publish_date = datetime.date.today().strftime("%d %b %Y")
         description = ""
 
         # 1. Query official public YouTube oEmbed endpoint (no API key required)
         try:
-            oembed_url = f"https://www.youtube.com/oembed?url={urllib.parse.quote(url)}&format=json"
+            oembed_url = f"https://www.youtube.com/oembed?url={urllib.parse.quote(canonical_url)}&format=json"
             req = urllib.request.Request(
                 oembed_url,
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -89,24 +123,27 @@ class WebSourceIngestor:
                 provider = data.get("provider_name", "YouTube")
                 site_name = provider
         except Exception as e:
-            logger.warning(f"YouTube oEmbed lookup failed: {e}")
+            logger.warning(f"YouTube oEmbed lookup failed for {canonical_url}: {e}")
 
-        # 2. Scrape raw page meta tags for description
+        # 2. Scrape raw page meta tags for description and title if oEmbed didn't provide
         try:
             req = urllib.request.Request(
-                url,
+                canonical_url,
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             )
             with urllib.request.urlopen(req, timeout=10) as response:
                 html = response.read().decode("utf-8", errors="ignore")
-                m_desc = re.search(r'<meta name="description" content="([^"]+)"', html, re.IGNORECASE)
-                if m_desc:
+                m_desc = re.search(r'<meta\s+(?:name|property)="description"\s+content="([^"]+)"', html, re.IGNORECASE)
+                if m_desc and m_desc.group(1).strip():
                     description = m_desc.group(1).strip()
+                m_og_title = re.search(r'<meta\s+property="og:title"\s+content="([^"]+)"', html, re.IGNORECASE)
+                if m_og_title and m_og_title.group(1).strip() and title.startswith("YouTube Video ("):
+                    title = m_og_title.group(1).strip()
         except Exception as e:
             logger.debug(f"YouTube page scrape failed: {e}")
 
         # 3. AI synthesis of summary
-        content_text = f"Title: {title}\nChannel: {author}\nDescription: {description if description else 'No description available.'}\nURL: {url}"
+        content_text = f"Title: {title}\nChannel: {author}\nDescription: {description if description else 'No description available.'}\nURL: {canonical_url}"
         if ai_client:
             try:
                 prompt = (
@@ -127,13 +164,16 @@ class WebSourceIngestor:
                 logger.warning(f"AI video summarization failed: {e}")
 
         return {
+            "success": True,
             "title": title,
             "author": author,
             "site_name": site_name,
             "publish_date": publish_date,
             "content": content_text,
-            "url": url,
+            "summary_content": content_text,
+            "url": canonical_url,
             "source_type": "youtube",
+            "is_youtube": True,
         }
 
     @classmethod

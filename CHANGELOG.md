@@ -8,6 +8,17 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.0.3.c] - 2026-09-20
+
+### Fixed
+- **Playground Mode Window Launch Crash & Process Orphaning**:
+  - Added `@property def ai_client(self) -> AIClient` to `AssistantEngine`, resolving `AttributeError: 'AssistantEngine' object has no attribute 'ai_client'` when launching Playground Mode.
+  - Fixed Tkinter `TclError: bad option "-width"` in `ui/playground/workspace.py` by properly configuring frame widths on `CTkFrame` rather than inside `.pack(..., width=...)`.
+  - Added automatic `.lift()` and `.focus_force()` to `PlaygroundWorkspace` to ensure it always raises above background applications immediately.
+  - Wrapped `_do_open_playground` in `ui/app.py` in a robust try-except error handler that immediately restores the HUD overlay and global hotkeys and displays an error dialog if launch ever fails, preventing the application from hanging as an invisible orphaned background process.
+
+---
+
 ## [2.0.3.b] - 2026-09-20
 
 ### Improved

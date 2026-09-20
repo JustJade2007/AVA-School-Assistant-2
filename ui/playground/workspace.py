@@ -87,6 +87,8 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.minsize(980, 640)
         self.configure(fg_color="#09090b")
         self.attributes("-topmost", False)
+        self.lift()
+        self.focus_force()
 
         # Protocol when closing via OS window X
         self.protocol("WM_DELETE_WINDOW", self._on_close_requested)
@@ -663,8 +665,8 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.outline_stats_bar.pack(anchor="w", padx=16, pady=(0, 12))
 
         # Right Column: Rubric Reference Viewer
-        right_col = ctk.CTkFrame(grid, fg_color="#18181b", corner_radius=10, border_width=1, border_color="#27272a")
-        right_col.pack(side="right", fill="both", width=340, padx=(8, 0))
+        right_col = ctk.CTkFrame(grid, width=340, fg_color="#18181b", corner_radius=10, border_width=1, border_color="#27272a")
+        right_col.pack(side="right", fill="both", padx=(8, 0))
 
         self.stage_2_rubric_viewer = RubricViewer(right_col, criteria=self.project.rubric_criteria)
         self.stage_2_rubric_viewer.pack(fill="both", expand=True, padx=12, pady=12)
@@ -1197,8 +1199,8 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.full_doc_preview.pack(fill="both", expand=True, padx=16, pady=(0, 14))
 
         # Right Column: Export Settings & Works Cited
-        right_col = ctk.CTkFrame(grid, fg_color="#18181b", corner_radius=10, border_width=1, border_color="#27272a")
-        right_col.pack(side="right", fill="both", width=360, padx=(8, 0))
+        right_col = ctk.CTkFrame(grid, width=360, fg_color="#18181b", corner_radius=10, border_width=1, border_color="#27272a")
+        right_col.pack(side="right", fill="both", padx=(8, 0))
 
         e_head = ctk.CTkLabel(right_col, text="⚙️ Export Configuration", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc")
         e_head.pack(anchor="w", padx=16, pady=(14, 10))

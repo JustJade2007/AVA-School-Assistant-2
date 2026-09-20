@@ -96,6 +96,16 @@ class AssistantEngine:
     def config(self) -> AppConfig:
         return self.config_manager.config
 
+    @property
+    def ai_client(self) -> AIClient:
+        """Returns an active AIClient instance configured with current provider and model settings."""
+        return AIClient(
+            provider=self.config.ai_provider,
+            api_key=self.config.get_api_key_for_provider(self.config.ai_provider),
+            model_name=self.config.written_model_name or self.config.model_name,
+            custom_base_url=self.config.custom_api_base
+        )
+
     def _sync_config(self):
         self.executor.humanize = self.config.humanize_mouse
         self.executor.speed_multiplier = self.config.mouse_speed

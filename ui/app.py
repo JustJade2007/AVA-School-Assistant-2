@@ -127,30 +127,44 @@ class AVASchoolAssistantApp:
             return
 
         logger.info("Opening Playground Mode. Isolating background solving functions and hotkeys...")
-        # 1. Temporarily stop global solving hotkeys to prevent typing conflicts in Word/browsers
         try:
-            self.hotkey_manager.stop()
+            # 1. Temporarily stop global solving hotkeys to prevent typing conflicts in Word/browsers
+            try:
+                self.hotkey_manager.stop()
+            except Exception as e:
+                logger.debug(f"Error stopping hotkeys for Playground: {e}")
+
+            # 2. Stop any active autonomous solving engine routines
+            try:
+                self.engine.emergency_stop()
+            except Exception:
+                pass
+
+            # 3. Hide floating HUD overlay while Playground workspace is active
+            if self.hud_window and self.hud_window.winfo_exists():
+                self.hud_window.withdraw()
+
+            from ui.playground.workspace import PlaygroundWorkspace
+
+            self.playground_window = PlaygroundWorkspace(
+                master=self.root,
+                ai_client=self.engine.ai_client,
+                config_manager=self.config_manager,
+                on_exit=self._on_playground_closed
+            )
+            self.playground_window.lift()
+            self.playground_window.focus_force()
         except Exception as e:
-            logger.debug(f"Error stopping hotkeys for Playground: {e}")
-
-        # 2. Stop any active autonomous solving engine routines
-        try:
-            self.engine.emergency_stop()
-        except Exception:
-            pass
-
-        # 3. Hide floating HUD overlay while Playground workspace is active
-        if self.hud_window and self.hud_window.winfo_exists():
-            self.hud_window.withdraw()
-
-        from ui.playground.workspace import PlaygroundWorkspace
-
-        self.playground_window = PlaygroundWorkspace(
-            master=self.root,
-            ai_client=self.engine.ai_client,
-            config_manager=self.config_manager,
-            on_exit=self._on_playground_closed
-        )
+            logger.error(f"Failed to open Playground Mode: {e}", exc_info=True)
+            self._on_playground_closed()
+            try:
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Playground Error",
+                    f"Failed to open Playground Mode:\n{e}"
+                )
+            except Exception:
+                pass
 
     def _on_playground_closed(self):
         """Restores HUD overlay and restarts hotkey listener when Playground is closed."""

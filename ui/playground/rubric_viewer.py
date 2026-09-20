@@ -291,8 +291,6 @@ class RubricViewer(ctk.CTkFrame):
                 border_color="#52525b",
                 corner_radius=4,
             )
-            cb.pack(side="left", fill="x", expand=True)
-
             if self.editable:
                 del_btn = ctk.CTkButton(
                     top_row,
@@ -319,6 +317,8 @@ class RubricViewer(ctk.CTkFrame):
                     text_color="#94a3b8",
                 )
                 edit_btn.pack(side="right")
+
+            cb.pack(side="left", fill="x", expand=True)
 
             if crit.target_score:
                 score_lbl = ctk.CTkLabel(

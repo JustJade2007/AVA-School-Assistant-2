@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.4.b] - 2026-09-20
+
+### Fixed
+- **Playground Source Materials Remove Button Visibility**:
+  - Fixed an issue where source materials with long names or URLs displaced or clipped the `✕` remove button out of view in the Playground Stage 1 sources list.
+  - Reordered pack geometry to pack the `✕` remove button against `side="right"` first, ensuring it remains anchored, visible, and clickable regardless of material title length or window dimensions.
+  - Implemented smart filename truncation for source items exceeding 45 characters, preserving file extensions while keeping the `(~N words)` count badge clearly readable.
+  - Added a lightweight, non-intrusive hover tooltip (`WidgetToolTip`) displaying the complete un-truncated name, material type, word count, and file path.
+  - Safeguarded preset removal buttons in the preset manager modal and action buttons in rubric criteria rows by packing right-aligned action buttons before expanding content.
+
 ## [2.1.4.a] - 2026-09-20
 
 ### Added

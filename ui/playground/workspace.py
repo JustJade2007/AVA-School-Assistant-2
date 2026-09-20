@@ -38,6 +38,54 @@ from ui.asset_loader import apply_window_icon, get_logo_ctk_image
 logger = get_logger("playground.workspace")
 
 
+class WidgetToolTip:
+    """Lightweight tooltip that displays hover text for UI widgets."""
+
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tip_win = None
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<Destroy>", self._on_leave, add="+")
+
+    def _on_enter(self, event=None):
+        if self.tip_win or not self.text:
+            return
+        try:
+            if not self.widget.winfo_exists():
+                return
+            x = self.widget.winfo_rootx() + 15
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+            self.tip_win = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tw.wm_attributes("-topmost", True)
+            lbl = tk.Label(
+                tw,
+                text=self.text,
+                justify="left",
+                background="#1e293b",
+                foreground="#f8fafc",
+                relief="solid",
+                borderwidth=1,
+                font=("Segoe UI", 9),
+                padx=8,
+                pady=4
+            )
+            lbl.pack()
+        except Exception:
+            self.tip_win = None
+
+    def _on_leave(self, event=None):
+        if self.tip_win:
+            try:
+                self.tip_win.destroy()
+            except Exception:
+                pass
+            self.tip_win = None
+
+
 class PlaygroundWorkspace(ctk.CTkToplevel):
     """Dedicated long-form writing workspace for AVA Playground Mode."""
 
@@ -870,14 +918,6 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 row = ctk.CTkFrame(scroll, fg_color="#18181b", corner_radius=6, border_width=1, border_color="#27272a")
                 row.pack(fill="x", pady=3, padx=2)
 
-                ctk.CTkLabel(
-                    row,
-                    text=itm,
-                    text_color="#f8fafc",
-                    font=ctk.CTkFont(size=12),
-                    anchor="w"
-                ).pack(side="left", padx=12, pady=8, fill="x", expand=True)
-
                 def make_del_cmd(val=itm):
                     return lambda: do_delete(val)
 
@@ -891,6 +931,14 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                     fg_color="#ef4444",
                     hover_color="#dc2626"
                 ).pack(side="right", padx=10, pady=6)
+
+                ctk.CTkLabel(
+                    row,
+                    text=itm,
+                    text_color="#f8fafc",
+                    font=ctk.CTkFont(size=12),
+                    anchor="w"
+                ).pack(side="left", padx=12, pady=8, fill="x", expand=True)
 
         def do_delete(val):
             on_delete_callback(val)
@@ -1155,6 +1203,24 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             row = ctk.CTkFrame(self.sources_scroll, fg_color="#18181b", corner_radius=6, border_width=1, border_color="#27272a")
             row.pack(fill="x", pady=2, padx=2)
 
+            def del_src(s=src):
+                self.project.sources.remove(s)
+                self._render_sources_list()
+
+            # Crucial: Pack delete button on side="right" FIRST so it is always visible and never displaced by long titles
+            del_btn = ctk.CTkButton(
+                row,
+                text="✕",
+                width=24,
+                height=20,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color="#450a0a",
+                hover_color="#7f1d1d",
+                command=del_src
+            )
+            del_btn.pack(side="right", padx=6, pady=4)
+            WidgetToolTip(del_btn, "Remove source material")
+
             if src.source_type in ["youtube", "video"]:
                 icon = "▶️"
             elif src.source_type in ["web", "url"]:
@@ -1164,14 +1230,33 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             else:
                 icon = "📝"
             words = len(src.content.split())
-            ctk.CTkLabel(row, text=f"{icon} {src.name} (~{words} words)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#f1f5f9").pack(side="left", padx=8, pady=4)
 
-            def del_src(s=src):
-                self.project.sources.remove(s)
-                self._render_sources_list()
+            # Format name cleanly so long titles don't overflow or clip word count
+            raw_name = src.name.strip()
+            max_name_len = 45
+            if len(raw_name) > max_name_len:
+                base, ext = os.path.splitext(raw_name)
+                if ext and 1 < len(ext) <= 6:
+                    avail = max(10, max_name_len - len(ext) - 3)
+                    display_name = f"{base[:avail]}...{ext}"
+                else:
+                    display_name = raw_name[:max_name_len - 3] + "..."
+            else:
+                display_name = raw_name
 
-            del_btn = ctk.CTkButton(row, text="✕", width=24, height=20, fg_color="#450a0a", hover_color="#7f1d1d", command=del_src)
-            del_btn.pack(side="right", padx=6)
+            src_lbl = ctk.CTkLabel(
+                row,
+                text=f"{icon} {display_name} (~{words} words)",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color="#f1f5f9",
+                anchor="w"
+            )
+            src_lbl.pack(side="left", fill="x", expand=True, padx=8, pady=4)
+
+            full_tooltip_text = f"{src.name}\nType: {src.source_type.upper()} | Words: {words:,}"
+            if src.file_path and src.file_path != src.name:
+                full_tooltip_text += f"\nPath: {src.file_path}"
+            WidgetToolTip(src_lbl, full_tooltip_text)
 
     def _upload_rubric_file(self):
         filetypes = [

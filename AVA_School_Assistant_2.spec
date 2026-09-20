@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('config.default.json', '.')]
+datas = [('config.default.json', '.'), ('CHANGELOG.md', '.')]
 binaries = []
 hiddenimports = [
     'core.written_solver',
@@ -28,6 +28,7 @@ hiddenimports = [
     'ui.playground.workspace',
     'ui.playground.rubric_viewer',
     'ui.home_view',
+    'ui.changelog_viewer',
     'humanizer',
     'docx',
     'pypdf',

@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.3.a] - 2026-09-20
+
+### Added
+- **Command Hub Formatted Changelog Viewer**:
+  - Added interactive `📜 Changelog` buttons to both the top navigation header and bottom footer of the Command Hub (`HomeDashboard` in `ui/home_view.py`).
+  - Implemented `ChangelogViewer` modal dialog (`ui/changelog_viewer.py`) that automatically parses `CHANGELOG.md` and renders formatted release cards with version badges, release dates, version scope pills (`MAJOR REWORK`, `FEATURE UPDATE`, `PATCH / BUG FIX`), categorized headers (`Added`, `Fixed`, `Changed`), and bullet points.
+  - Added real-time search and filter bar for instant querying across all version numbers, features, and release notes.
+  - Added a toggleable `[ 📝 Raw Markdown ]` view mode for raw text inspection.
+  - Bundled `CHANGELOG.md` directly into PyInstaller `datas` in `AVA_School_Assistant_2.spec` for standalone frozen executable support.
+
 ## [2.1.2.a] - 2026-09-20
 
 ### Added

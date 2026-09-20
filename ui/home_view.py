@@ -15,6 +15,7 @@ from typing import Optional, Callable, List
 
 from core.logger import get_logger
 from core.cloaking import apply_anti_capture
+from ui.changelog_viewer import ChangelogViewer
 
 logger = get_logger("ui.home_view")
 
@@ -148,6 +149,22 @@ class HomeDashboard(ctk.CTkToplevel):
             pady=4
         )
         self.ai_status_pill.pack(side="left", padx=(0, 10))
+
+        # Changelog Button
+        self.changelog_btn = ctk.CTkButton(
+            right_box,
+            text="📜 Changelog",
+            command=self._show_changelog_dialog,
+            width=105,
+            height=30,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            border_width=1,
+            fg_color="#18181b",
+            hover_color="#27272a",
+            text_color="#38bdf8",
+            border_color="#0284c7"
+        )
+        self.changelog_btn.pack(side="left", padx=(0, 10))
 
         # Cloak Toggle Button
         self.cloak_btn = ctk.CTkButton(
@@ -385,6 +402,19 @@ class HomeDashboard(ctk.CTkToplevel):
         right_box = ctk.CTkFrame(footer, fg_color="transparent")
         right_box.pack(side="right", padx=24, pady=10)
 
+        footer_changelog_btn = ctk.CTkButton(
+            right_box,
+            text="📜 Changelog",
+            command=self._show_changelog_dialog,
+            width=95,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#18181b",
+            hover_color="#27272a",
+            text_color="#94a3b8"
+        )
+        footer_changelog_btn.pack(side="left", padx=(0, 10))
+
         exit_btn = ctk.CTkButton(
             right_box,
             text="✕ Quit AVA",
@@ -401,6 +431,10 @@ class HomeDashboard(ctk.CTkToplevel):
     # -------------------------------------------------------------------------
     # Module Launch Handlers
     # -------------------------------------------------------------------------
+
+    def _show_changelog_dialog(self):
+        """Opens the formatted version changelog viewer dialog."""
+        ChangelogViewer(self, is_cloaked=self.is_cloaked)
 
     def _launch_worker_action(self):
         logger.info("Launching Automated Worker from Home Dashboard...")

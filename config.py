@@ -193,6 +193,8 @@ class AppConfig:
     overlay_opacity: float = 0.95
     overlay_x: int = 40
     overlay_y: int = 40
+    overlay_width: int = 490
+    header_icon_size: int = 11
 
     # Capture & Display Resolution Settings
     capture_mode: str = "fullscreen"  # "fullscreen" or "roi"

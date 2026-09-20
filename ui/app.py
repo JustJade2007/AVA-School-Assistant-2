@@ -186,6 +186,8 @@ class AVASchoolAssistantApp:
         if self.hud_window and self.hud_window.winfo_exists():
             self.hud_window.apply_cloak()
             self.hud_window.attributes("-alpha", self.config.overlay_opacity)
+            if hasattr(self.hud_window, "set_header_icon_size"):
+                self.hud_window.set_header_icon_size(getattr(self.config, "header_icon_size", 11))
             self.hud_window.refresh_hotkey_labels()
             self.hud_window.mode_badge.configure(
                 text="REVIEW MODE" if not self.config.autonomous_mode else "AUTO MODE"

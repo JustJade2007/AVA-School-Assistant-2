@@ -8,6 +8,18 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.0.3.b] - 2026-09-20
+
+### Improved
+- **HUD Overlay Header Bar Redesign & Dynamic Icon Resizing**:
+  - Redesigned all header action buttons with sleek circular / pill shapes (`corner_radius = size // 2`) and compact spacing (`padx=1`) to eliminate horizontal crowding.
+  - Compacted left branding to `⚡ AVA` and `🛡️ CLOAK` badge, freeing up over 80px of horizontal room on the header.
+  - Made the cutout / snip button (`✂️`) distinctly smaller and highlighted with an accent theme.
+  - Implemented dynamic icon resizing (`set_header_icon_size`), scalable from 8px to 18px in real time via `<Control-MouseWheel>` over the header bar or the new **Header Icon Size** slider in the Configuration Dashboard.
+  - Expanded default overlay width from 460px to 490px with configurable `overlay_width` and `header_icon_size` persistence.
+
+---
+
 ## [2.0.3.a] - 2026-09-20
 
 ### Added

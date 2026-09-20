@@ -61,10 +61,11 @@ class HUDOverlay(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.attributes("-alpha", self.config.overlay_opacity)
 
-        # Position on screen
+        # Position on screen (width supports generous room for header controls)
         x = max(10, self.config.overlay_x)
         y = max(10, self.config.overlay_y)
-        self.geometry(f"460x320+{x}+{y}")
+        w = max(480, getattr(self.config, "overlay_width", 490))
+        self.geometry(f"{w}x320+{x}+{y}")
         self.configure(fg_color="#18181b")
 
         # Draggable window bindings
@@ -77,9 +78,9 @@ class HUDOverlay(ctk.CTkToplevel):
         success = apply_anti_capture(self, enable=self.config.anti_capture_enabled)
         if hasattr(self, "cloak_badge"):
             if success and self.config.anti_capture_enabled:
-                self.cloak_badge.configure(text="🛡️ CLOAKED", text_color="#10b981")
+                self.cloak_badge.configure(text="🛡️ CLOAK", text_color="#10b981", fg_color="#064e3b")
             else:
-                self.cloak_badge.configure(text="⚠️ UNCLOAKED", text_color="#f59e0b")
+                self.cloak_badge.configure(text="⚠️ UNCLOAK", text_color="#f59e0b", fg_color="#451a03")
 
     def _build_ui(self):
         # Outer border frame
@@ -95,118 +96,167 @@ class HUDOverlay(ctk.CTkToplevel):
         # --- Top Header Bar ---
         self.header_frame = ctk.CTkFrame(self.main_frame, fg_color="#27272a", corner_radius=8, height=36)
         self.header_frame.pack(fill="x", padx=6, pady=6)
+        self.header_frame.bind("<Control-MouseWheel>", self._on_header_mousewheel)
 
-        # Drag handle / Logo
+        # Drag handle / Logo (compact text so action buttons have ample room)
         self.title_label = ctk.CTkLabel(
             self.header_frame,
-            text="⚡ AVA ASSISTANT",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text="⚡ AVA",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#60a5fa"
         )
-        self.title_label.pack(side="left", padx=8)
+        self.title_label.pack(side="left", padx=(8, 4))
+        self.title_label.bind("<Control-MouseWheel>", self._on_header_mousewheel)
 
-        # Cloak Status indicator
+        # Cloak Status indicator (compact badge)
         self.cloak_badge = ctk.CTkLabel(
             self.header_frame,
-            text="🛡️ CLOAKED",
-            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
-            text_color="#10b981"
+            text="🛡️ CLOAK",
+            font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
+            text_color="#10b981",
+            fg_color="#064e3b",
+            corner_radius=4,
+            padx=5,
+            pady=1
         )
-        self.cloak_badge.pack(side="left", padx=4)
+        self.cloak_badge.pack(side="left", padx=2)
 
         # Debug Mode badge (visible when debug mode is enabled)
         self.debug_badge = ctk.CTkLabel(
             self.header_frame,
-            text="🐞 DEBUG",
+            text="🐞",
             font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-            text_color="#38bdf8"
+            text_color="#38bdf8",
+            fg_color="#0c4a6e",
+            corner_radius=4,
+            padx=4,
+            pady=1
         )
         if self.config.debug_mode:
-            self.debug_badge.pack(side="left", padx=4)
+            self.debug_badge.pack(side="left", padx=2)
 
-        # Header action buttons (Close, Hide, Collapse, Settings, Logs)
+        # Dedicated right container for compact, circular action buttons
+        self.header_actions_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        self.header_actions_frame.pack(side="right", padx=(0, 4), pady=2)
+        self.header_actions_frame.bind("<Control-MouseWheel>", self._on_header_mousewheel)
+
+        # Calculate initial button dimensions from configurable icon size
+        self.icon_size = getattr(self.config, "header_icon_size", 11)
+        btn_wh = self.icon_size + 11
+        corner_rad = btn_wh // 2
+        btn_font = ctk.CTkFont(size=self.icon_size)
+
+        # 1. Close button (circular, rightmost)
         self.btn_close = ctk.CTkButton(
-            self.header_frame,
+            self.header_actions_frame,
             text="✕",
-            width=28,
-            height=24,
+            width=btn_wh,
+            height=btn_wh,
+            corner_radius=corner_rad,
+            font=btn_font,
             fg_color="#3f3f46",
             hover_color="#ef4444",
+            text_color="#fecdd3",
             command=self._handle_close
         )
-        self.btn_close.pack(side="right", padx=(2, 4))
+        self.btn_close.pack(side="right", padx=1)
 
+        # 2. Hide button (circular)
         self.btn_hide = ctk.CTkButton(
-            self.header_frame,
+            self.header_actions_frame,
             text="—",
-            width=28,
-            height=24,
+            width=btn_wh,
+            height=btn_wh,
+            corner_radius=corner_rad,
+            font=btn_font,
             fg_color="#3f3f46",
             hover_color="#52525b",
+            text_color="#e4e4e7",
             command=self.hide_overlay
         )
-        self.btn_hide.pack(side="right", padx=2)
+        self.btn_hide.pack(side="right", padx=1)
 
+        # 3. Collapse button (circular)
         self.btn_collapse = ctk.CTkButton(
-            self.header_frame,
+            self.header_actions_frame,
             text="▲",
-            width=28,
-            height=24,
+            width=btn_wh,
+            height=btn_wh,
+            corner_radius=corner_rad,
+            font=btn_font,
             fg_color="#3f3f46",
             hover_color="#52525b",
+            text_color="#e4e4e7",
             command=self.toggle_collapse
         )
-        self.btn_collapse.pack(side="right", padx=2)
+        self.btn_collapse.pack(side="right", padx=1)
 
+        # 4. Settings button (circular)
         if self.on_open_settings:
             self.btn_settings = ctk.CTkButton(
-                self.header_frame,
+                self.header_actions_frame,
                 text="⚙",
-                width=28,
-                height=24,
+                width=btn_wh,
+                height=btn_wh,
+                corner_radius=corner_rad,
+                font=btn_font,
                 fg_color="#3f3f46",
-                hover_color="#52525b",
+                hover_color="#2563eb",
+                text_color="#bfdbfe",
                 command=self.on_open_settings
             )
-            self.btn_settings.pack(side="right", padx=2)
+            self.btn_settings.pack(side="right", padx=1)
 
-        # Debug Console button
+        # 5. Debug Console button (circular)
         self.btn_debug = ctk.CTkButton(
-            self.header_frame,
+            self.header_actions_frame,
             text="🐞",
-            width=28,
-            height=24,
+            width=btn_wh,
+            height=btn_wh,
+            corner_radius=corner_rad,
+            font=btn_font,
             fg_color="#3f3f46",
             hover_color="#52525b",
+            text_color="#7dd3fc",
             command=self.open_debug_window
         )
-        self.btn_debug.pack(side="right", padx=2)
+        self.btn_debug.pack(side="right", padx=1)
 
-        # Quick Snip Tool button (F4)
+        # 6. Quick Snip Tool (cutout button) - SMALLER & sleek circular accent
+        snip_wh = max(18, btn_wh - 4)
+        snip_corner = snip_wh // 2
+        snip_font = ctk.CTkFont(size=max(8, self.icon_size - 2))
+
         if self.on_snip_solve:
             self.btn_snip = ctk.CTkButton(
-                self.header_frame,
+                self.header_actions_frame,
                 text="✂️",
-                width=28,
-                height=24,
-                fg_color="#3f3f46",
+                width=snip_wh,
+                height=snip_wh,
+                corner_radius=snip_corner,
+                font=snip_font,
+                fg_color="#0369a1",
                 hover_color="#0284c7",
+                text_color="#f0f9ff",
                 command=self.on_snip_solve
             )
-            self.btn_snip.pack(side="right", padx=2)
+            self.btn_snip.pack(side="right", padx=1)
 
-        # Playground Studio button (F3)
+        # 7. Playground Studio button (F3, circular)
         if self.on_open_playground:
             self.btn_playground = ctk.CTkButton(
-                self.header_frame,
+                self.header_actions_frame,
                 text="📝",
-                width=28,
-                height=24,
+                width=btn_wh,
+                height=btn_wh,
+                corner_radius=corner_rad,
+                font=btn_font,
                 fg_color="#312e81",
                 hover_color="#4338ca",
+                text_color="#c7d2fe",
                 command=self.on_open_playground
             )
-            self.btn_playground.pack(side="right", padx=2)
+            self.btn_playground.pack(side="right", padx=1)
 
         # --- Status Banner ---
         self.status_frame = ctk.CTkFrame(self.main_frame, fg_color="#1f2937", corner_radius=6, height=28)
@@ -983,6 +1033,45 @@ class HUDOverlay(ctk.CTkToplevel):
             self.on_close_app()
         else:
             self.destroy()
+
+    def set_header_icon_size(self, size: int):
+        """Dynamically resizes all header bar action icons and container buttons."""
+        self.icon_size = max(8, min(18, int(size)))
+        btn_wh = self.icon_size + 11
+        corner_rad = btn_wh // 2
+        btn_font = ctk.CTkFont(size=self.icon_size)
+
+        # Cutout button is smaller
+        snip_wh = max(18, btn_wh - 4)
+        snip_corner = snip_wh // 2
+        snip_font = ctk.CTkFont(size=max(8, self.icon_size - 2))
+
+        if hasattr(self, "btn_snip") and self.btn_snip and self.btn_snip.winfo_exists():
+            self.btn_snip.configure(width=snip_wh, height=snip_wh, corner_radius=snip_corner, font=snip_font)
+
+        standard_buttons = [
+            getattr(self, "btn_playground", None),
+            getattr(self, "btn_debug", None),
+            getattr(self, "btn_settings", None),
+            getattr(self, "btn_collapse", None),
+            getattr(self, "btn_hide", None),
+            getattr(self, "btn_close", None),
+        ]
+        for b in standard_buttons:
+            if b and b.winfo_exists():
+                b.configure(width=btn_wh, height=btn_wh, corner_radius=corner_rad, font=btn_font)
+
+        # Persist to configuration
+        try:
+            self.config_manager.update(header_icon_size=self.icon_size)
+        except Exception:
+            pass
+
+    def _on_header_mousewheel(self, event):
+        """Ctrl + MouseWheel on header bar to dynamically scale header icon size."""
+        if hasattr(event, "delta") and event.delta != 0:
+            step = 1 if event.delta > 0 else -1
+            self.set_header_icon_size(self.icon_size + step)
 
     def refresh_hotkey_labels(self):
         """Refreshes button labels to reflect updated hotkey settings."""

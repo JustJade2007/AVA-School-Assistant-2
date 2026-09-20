@@ -781,6 +781,20 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self.slider_opacity.pack(fill="x", pady=4)
 
+        # Header Icon Size slider
+        icon_size_frame = ctk.CTkFrame(f, fg_color="transparent")
+        icon_size_frame.pack(fill="x", padx=16, pady=8)
+        self.lbl_icon_size = ctk.CTkLabel(icon_size_frame, text="Header Icon Size: 11px")
+        self.lbl_icon_size.pack(anchor="w")
+        self.slider_icon_size = ctk.CTkSlider(
+            icon_size_frame,
+            from_=8,
+            to=18,
+            number_of_steps=10,
+            command=lambda v: self.lbl_icon_size.configure(text=f"Header Icon Size: {int(v)}px")
+        )
+        self.slider_icon_size.pack(fill="x", pady=4)
+
     # --- TAB: DISPLAY & CALIBRATION ---
     def _build_display_tab(self):
         f = self.tab_display
@@ -1185,6 +1199,10 @@ class SettingsWindow(ctk.CTkToplevel):
         self.slider_opacity.set(cfg.overlay_opacity)
         self.lbl_opacity.configure(text=f"HUD Opacity: {int(cfg.overlay_opacity * 100)}%")
 
+        icon_sz = getattr(cfg, "header_icon_size", 11)
+        self.slider_icon_size.set(icon_sz)
+        self.lbl_icon_size.configure(text=f"Header Icon Size: {int(icon_sz)}px")
+
         for key_id, ent in self.hotkey_entries.items():
             ent.delete(0, "end")
             ent.insert(0, cfg.hotkeys.get(key_id, ""))
@@ -1347,6 +1365,7 @@ class SettingsWindow(ctk.CTkToplevel):
             mouse_speed=float(self.slider_mouse_speed.get()),
             anti_capture_enabled=bool(self.switch_anti_capture.get()),
             overlay_opacity=float(self.slider_opacity.get()),
+            header_icon_size=int(self.slider_icon_size.get()),
             debug_mode=bool(self.switch_debug_mode.get()),
             log_to_file=bool(self.switch_log_file.get()),
             log_level=self.combo_log_level.get(),

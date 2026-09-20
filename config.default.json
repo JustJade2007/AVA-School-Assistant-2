@@ -37,6 +37,8 @@
     "overlay_opacity": 0.95,
     "overlay_x": 40,
     "overlay_y": 40,
+    "overlay_width": 490,
+    "header_icon_size": 11,
     "capture_mode": "fullscreen",
     "roi_box": null,
     "max_capture_dimension": 2880,

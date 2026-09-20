@@ -466,6 +466,130 @@ class TestQuestionEvaluationAndRethinking(unittest.TestCase):
         except UnboundLocalError as err:
             self.fail(f"_run_solve_pipeline raised UnboundLocalError: {err}")
 
+    def test_is_final_submission_button_identification(self):
+        """Verifies accurate distinction between final assessment submit vs check answer vs next."""
+        # Final submit buttons
+        self.assertTrue(self.engine._is_final_submission_button({"description": "Submit Quiz"}))
+        self.assertTrue(self.engine._is_final_submission_button({"description": "Submit Assignment"}))
+        self.assertTrue(self.engine._is_final_submission_button({"description": "Turn In"}))
+        self.assertTrue(self.engine._is_final_submission_button({"description": "Finish Test"}))
+        self.assertTrue(self.engine._is_final_submission_button({"description": "Submit"}))
+        self.assertTrue(self.engine._is_final_submission_button({"button_type": "submit"}))
+
+        # Problem-level check buttons (NOT final submit)
+        self.assertFalse(self.engine._is_final_submission_button({"description": "Check Answer"}))
+        self.assertFalse(self.engine._is_final_submission_button({"description": "Check"}))
+        self.assertFalse(self.engine._is_final_submission_button({"description": "Verify"}))
+        self.assertFalse(self.engine._is_final_submission_button({"description": "Submit Answer"}))
+        self.assertFalse(self.engine._is_final_submission_button({"button_type": "check"}))
+
+        # Navigation buttons (NOT final submit)
+        self.assertFalse(self.engine._is_final_submission_button({"description": "Next Question"}))
+        self.assertFalse(self.engine._is_final_submission_button({"description": "Continue"}))
+        self.assertFalse(self.engine._is_final_submission_button({"description": "Next"}))
+        self.assertFalse(self.engine._is_final_submission_button({"button_type": "next"}))
+        self.assertFalse(self.engine._is_final_submission_button(None))
+
+    def test_has_unfinished_work_detects_incomplete_states(self):
+        """Verifies _has_unfinished_work accurately identifies unfinished or incorrect work."""
+        # Case 1: Marked incorrect
+        self.engine.last_result = {
+            "evaluation_status": "incorrect",
+            "is_rethinking": True,
+            "actions": []
+        }
+        unfinished, reason = self.engine._has_unfinished_work()
+        self.assertTrue(unfinished)
+        self.assertIn("incorrect", reason)
+
+        # Case 2: Multi-part with pending/unanswered part
+        self.engine.last_result = {
+            "evaluation_status": "unsubmitted",
+            "items": [
+                {"part_id": "1", "current_state": "answered_correct", "needs_action": False, "actions": []},
+                {"part_id": "2", "current_state": "unanswered", "needs_action": True, "actions": []}
+            ]
+        }
+        unfinished, reason = self.engine._has_unfinished_work()
+        self.assertTrue(unfinished)
+        self.assertIn("Part '2'", reason)
+
+        # Case 3: Written response below minimum word count
+        self.engine.last_result = {
+            "evaluation_status": "unsubmitted",
+            "is_written_response": True,
+            "written_details": {"text": "Only three words", "min_words": 20},
+            "actions": [{"type": "type_text", "text": "Only three words"}]
+        }
+        unfinished, reason = self.engine._has_unfinished_work()
+        self.assertTrue(unfinished)
+        self.assertIn("words", reason)
+
+        # Case 4: Fully confirmed correct work
+        self.engine.last_result = {
+            "evaluation_status": "correct",
+            "ready_to_advance": True,
+            "items": [
+                {"part_id": "1", "current_state": "answered_correct", "needs_action": False, "evaluation_status": "correct"}
+            ],
+            "actions": []
+        }
+        unfinished, reason = self.engine._has_unfinished_work()
+        self.assertFalse(unfinished)
+
+    def test_trigger_submit_button_blocks_on_unfinished_work(self):
+        """Verifies that trigger_submit_button does NOT click submit if unfinished work exists."""
+        self.engine.last_result = {
+            "evaluation_status": "unsubmitted",
+            "ready_to_advance": False,
+            "items": [{"part_id": "Q1", "needs_action": True, "actions": []}],
+            "submit_button": {"screen_x": 800, "screen_y": 900, "description": "Submit Quiz"}
+        }
+        self.engine.executor.click = MagicMock()
+
+        self.engine.trigger_submit_button()
+        # Must NOT click submit!
+        self.engine.executor.click.assert_not_called()
+        self.assertEqual(self.engine.state, EngineState.WAITING_CONFIRMATION)
+
+    def test_trigger_submit_button_clicks_when_work_is_completed(self):
+        """Verifies that trigger_submit_button safely clicks submit when work is completed."""
+        self.engine.last_result = {
+            "evaluation_status": "correct",
+            "ready_to_advance": True,
+            "items": [{"part_id": "Q1", "needs_action": False, "evaluation_status": "correct"}],
+            "submit_button": {"screen_x": 800, "screen_y": 900, "description": "Submit Quiz"}
+        }
+        self.engine.executor.click = MagicMock()
+
+        self.engine.trigger_submit_button()
+        self.engine.executor.click.assert_called_once_with(800, 900)
+
+    @patch("core.assistant_engine.AIClient")
+    def test_discover_next_button_blocks_final_submit_on_unfinished_work(self, mock_ai_cls):
+        """Verifies that _discover_and_click_next_button will NOT click a final Submit button when work is unfinished."""
+        mock_ai_instance = MagicMock()
+        mock_ai_instance.detect_navigation_button.return_value = {
+            "screen_x": 850,
+            "screen_y": 920,
+            "description": "Submit Assignment",
+            "button_type": "submit"
+        }
+        mock_ai_cls.return_value = mock_ai_instance
+
+        self.engine.last_result = {
+            "evaluation_status": "unsubmitted",
+            "ready_to_advance": False,
+            "items": [{"part_id": "1", "needs_action": True}]
+        }
+        self.engine.capture.capture_and_encode = MagicMock(return_value=("fake_b64", 800, 600, 1.0, 1.0, 0, 0))
+        self.engine.executor.click = MagicMock()
+
+        res = self.engine._discover_and_click_next_button()
+        self.assertFalse(res)
+        self.engine.executor.click.assert_not_called()
+        self.assertEqual(self.engine.state, EngineState.WAITING_CONFIRMATION)
+
 
 if __name__ == "__main__":
     unittest.main()

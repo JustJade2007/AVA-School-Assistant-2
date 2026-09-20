@@ -422,9 +422,13 @@ class TestAVACore(unittest.TestCase):
         from config import ConfigManager
 
         cm = ConfigManager()
+        cm.update(autonomous_mode=False, chain_multi_parts=False)
         engine = AssistantEngine(config_manager=cm)
         engine.trigger_check_button = MagicMock()
         engine.trigger_next_button = MagicMock()
+        engine._discover_and_click_next_button = MagicMock()
+        engine.trigger_solve = MagicMock()
+        engine._wait_for_page_to_settle = MagicMock()
 
         # Case A: Only check_button is on screen (e.g. before next is revealed)
         engine.last_result = {

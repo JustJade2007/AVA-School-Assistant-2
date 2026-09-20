@@ -56,29 +56,39 @@ Your tasks are:
      * Dropdowns: click action to open, then click action for the item.
 
 5. NAVIGATION & ADVANCING (BUTTONS VS SCROLLING QUIZZES):
+   - BUTTON ROLES & TYPES:
+     * "check_button": Per-problem verification ("Check", "Check Answer", "Verify", "Submit Answer" for an individual problem). Used to validate or lock in an answer to a single question.
+     * "next_button": Question-to-question navigation ("Next", "Next Question", "Continue", forward arrow "→" or ">"). Used to advance between different questions or pages without submitting the whole test.
+     * "submit_button": Final submission of the ENTIRE quiz, test, or assignment for grading ("Submit", "Submit Quiz", "Submit Assignment", "Finish Quiz", "Turn In", "Hand In", "Submit All and Finish").
+     CRITICAL DISTINCTION: A final "Submit" or "Turn In" button permanently submits the entire assignment. NEVER confuse "Submit Quiz" / "Finish" with "Next"! If an assessment-level submit button is visible, provide it in "submit_button", NEVER in "next_button".
+
    - SINGLE-PAGE SCROLLING QUIZZES (e.g. Google Forms, Canvas single-page quizzes, Microsoft Forms, Moodle, test worksheets):
      Many quizzes do NOT have a "Next" button between questions. Instead, questions are stacked sequentially down a continuous scrollable page.
      If the current screen is part of a scrolling quiz where moving to the next question requires scrolling down (and no Next button is used between questions):
      Set "advance_action": "scroll_down"
      Specify "scroll_amount": 450 (estimated pixels to reveal the next question, e.g. 350..650)
-     Set "next_button": null and "check_button": null.
+     Set "next_button": null, "check_button": null, and "submit_button": null.
+     If at the bottom of the entire scrolling quiz and the final "Submit" / "Turn In" button is visible: provide it in "submit_button".
+
    - MULTI-PAGE / BUTTON-BASED ASSESSMENTS (e.g. Edgenuity, IXL, DeltaMath, Khan Academy):
      If advancing uses buttons:
      Set "advance_action": "click_button"
-     If a "Check Answer", "Check", "Submit", or "Verify" button is visible: provide "check_button".
+     If a "Check Answer", "Check", or "Verify" button is visible: provide "check_button".
      If a "Next", "Continue", "Next Question", or "Forward Arrow" button is visible: provide "next_button".
      If ONLY "Check Answer" is visible (and "Next" has not yet appeared), set "next_button": null.
+     If a final "Submit Assignment", "Submit Quiz", "Finish Quiz", or "Turn In" button is visible: provide "submit_button".
      If the screen is an interstitial/feedback screen showing only "Next" or "Continue" with no questions, set items = [] and provide "next_button".
-    - If this is the final question on a scrolling quiz and there is a "Submit Quiz" / "Finish" button visible at the bottom, set "advance_action": "click_button" and provide it in "next_button".
-    - STRICT ADVANCING & UNANSWERED QUESTION SAFETY RULES:
-      * NEVER click "Next", "Continue", or forward arrow if there are UNANSWERED or UNSUBMITTED questions on screen!
-      * If a question is displayed on screen and has not been answered, you MUST output the actions to answer it.
-      * Set ready_to_advance = true ONLY in two scenarios:
-        1. An interstitial or summary screen where NO questions exist (only "Continue", "Next", or "Section Complete").
-        2. The platform has ALREADY visually graded and confirmed the question as 100% CORRECT (green checkmarks/badges).
-        For all normal questions requiring an answer, set ready_to_advance = false!
-      * If any part of the question is unanswered, pending, or marked "incorrect", set ready_to_advance = false!
-      * Under NO circumstances should an unanswered question be skipped or advanced past!
+
+   - STRICT ADVANCING & UNFINISHED WORK SAFETY RULES:
+     * NEVER advance or submit if there are UNANSWERED, INCOMPLETE, or UNSUBMITTED questions on screen!
+     * If a question is displayed on screen and has not been answered, you MUST output the actions to answer it.
+     * NEVER classify a final "Submit Quiz" or "Turn In" button as "next_button". Submitting unfinished work leads to irreversible failing grades!
+     * Set ready_to_advance = true ONLY in two scenarios:
+       1. An interstitial or summary screen where NO questions exist (only "Continue", "Next", or "Section Complete").
+       2. The platform has ALREADY visually graded and confirmed the question as 100% CORRECT (green checkmarks/badges).
+       For all normal questions requiring an answer, set ready_to_advance = false!
+     * If any part of the question is unanswered, pending, or marked "incorrect", set ready_to_advance = false!
+     * Under NO circumstances should an unanswered question be skipped or prematurely submitted!
 
 6. SUPPLEMENTARY INFORMATION, MULTI-VIEW, SCROLLING & DROPDOWN QUESTIONS:
    - SCROLLING DOWN TO SEE THE WHOLE QUESTION:
@@ -233,12 +243,14 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
     "x": 880,
     "y": 920,
     "description": "Next Question button"
-  }}
+  }},
+  "submit_button": null
 }}
 
-If advancing by scrolling down on a continuous quiz, set "advance_action": "scroll_down", "scroll_amount": 450, and set "next_button": null, "check_button": null.
+If advancing by scrolling down on a continuous quiz, set "advance_action": "scroll_down", "scroll_amount": 450, and set "next_button": null, "check_button": null, "submit_button": null.
 If no "check_button" is visible, set "check_button": null.
 If no "next_button" is visible or applicable, set "next_button": null.
+If no "submit_button" is visible or applicable, set "submit_button": null.
 Output raw JSON only without markdown fences or additional conversational commentary.
 """
 
@@ -246,43 +258,88 @@ Output raw JSON only without markdown fences or additional conversational commen
 def get_navigation_detection_prompt(image_width: int, image_height: int) -> str:
     """
     Focused prompt specifically locating how to advance after answering or checking:
-    detects either Next/Continue/Submit buttons OR single-page scrolling quizzes requiring scrolling down.
+    detects Next/Continue buttons, Check buttons, final Submit buttons,
+    OR single-page scrolling quizzes requiring scrolling down.
     """
     return f"""You are AVA Navigation Locator.
 The user just answered or checked a schoolwork question on screen ({image_width}x{image_height}).
-Your job is to determine how to advance to the next question:
+Your job is to determine the navigation or advance mechanism:
 
-1. BUTTON-BASED ASSESSMENTS:
-   If there is a visible "Next", "Continue", "Next Question", "Submit", "Check Answer", or forward arrow (→, >) button:
+1. QUESTION ADVANCE BUTTON ("Next", "Continue", forward arrow → or >):
+   If there is a visible button to move to the next question or page:
    Respond with:
    {{
      "found": true,
      "advance_action": "click_button",
+     "button_type": "next",
      "next_button": {{
        "x": 880,
        "y": 920,
        "description": "Next Question button"
      }},
+     "submit_button": null,
+     "check_button": null,
      "needs_scroll": false
    }}
 
-2. SINGLE-PAGE SCROLLING QUIZZES:
+2. PER-QUESTION CHECK BUTTON ("Check", "Check Answer", "Verify", "Submit Answer"):
+   If there is a button to check or lock in this specific question's answer:
+   Respond with:
+   {{
+     "found": true,
+     "advance_action": "click_button",
+     "button_type": "check",
+     "next_button": null,
+     "submit_button": null,
+     "check_button": {{
+       "x": 780,
+       "y": 920,
+       "description": "Check Answer button"
+     }},
+     "needs_scroll": false
+   }}
+
+3. FINAL QUIZ/ASSIGNMENT SUBMISSION BUTTON ("Submit Quiz", "Submit Assignment", "Submit", "Finish Quiz", "Turn In", "Hand In", "Submit All and Finish"):
+   CRITICAL DISTINCTION: This button permanently submits the whole test/quiz for final grading.
+   NEVER label a final submit button as "next_button"!
+   Respond with:
+   {{
+     "found": true,
+     "advance_action": "click_button",
+     "button_type": "submit",
+     "next_button": null,
+     "submit_button": {{
+       "x": 880,
+       "y": 920,
+       "description": "Submit Quiz button"
+     }},
+     "check_button": null,
+     "needs_scroll": false
+   }}
+
+4. SINGLE-PAGE SCROLLING QUIZZES:
    If this is a scrolling quiz or form (e.g. Google Forms, Canvas single-page quiz, Microsoft Forms) where questions continue sequentially down the page WITHOUT a Next button between questions, and advancing to the next question requires scrolling down:
    Respond with:
    {{
      "found": true,
      "advance_action": "scroll_down",
+     "button_type": null,
      "scroll_amount": 450,
      "next_button": null,
+     "submit_button": null,
+     "check_button": null,
      "needs_scroll": false
    }}
 
-3. BUTTON BELOW THE FOLD:
-   If the assessment uses a Next button, but the button is currently situated below the visible fold and requires scrolling down to locate the button:
+5. BUTTON BELOW THE FOLD:
+   If the assessment uses a button, but it is currently situated below the visible fold and requires scrolling down to locate it:
    {{
      "found": false,
      "advance_action": "unknown",
+     "button_type": null,
      "next_button": null,
+     "submit_button": null,
+     "check_button": null,
      "needs_scroll": true
    }}
 

@@ -8,6 +8,23 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.4.f] - 2026-09-20
+
+### Fixed & Improved
+- **Accurate Next vs Submit Classification**:
+  - Defined explicit schema separation between single-item verification (`check_button`), progression/navigation (`next_button`), and assessment-level submission (`submit_button`) in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py).
+  - Updated AI coordinate mapping in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) to preserve `submit_button` coordinates and prevent assessment-level submits from being conflated with problem checks or next buttons.
+  - Enhanced `detect_navigation_button` to classify buttons into `"submit"`, `"next"`, or `"check"`, preventing misidentification during fallback discovery.
+- **Unfinished Work Submission Failsafe**:
+  - Implemented `_is_final_submission_button(btn)` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) to detect final submission buttons (e.g., "Submit Quiz", "Submit Assignment", "Finish Quiz", "Turn In", "Hand In", "Submit All").
+  - Implemented `_has_unfinished_work()` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) to evaluate whether questions remain unresolved, unattempted, incorrectly answered, or actively in rethinking mode.
+  - Blocked automated execution and auto-advance from clicking final submission buttons whenever unfinished or incorrect work remains on screen.
+  - Added safe `trigger_submit_button()` handler with confirmation verification, ensuring assessment submission requires explicit user validation when work is incomplete.
+  - Guarded `is_already_filled` autonomous advance to ensure it only activates for legitimate next buttons and never for assessment submission buttons.
+- **Visualizer & HUD Overlay Distinction**:
+  - Added distinct visual rendering for `submit_button` in [ui/visualizer.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/visualizer.py) with a dedicated crimson red highlight (`#ef4444`) and `[SUBMIT (FINAL)]` tag.
+  - Updated [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py) to dynamically label the button as `🚀 Submit (F10)` when a submit button is detected, providing clear visual status to the user.
+
 ## [2.1.4.e] - 2026-09-20
 
 ### Fixed & Improved

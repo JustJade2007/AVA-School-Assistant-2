@@ -457,6 +457,108 @@ class AssistantEngine:
             "details": details
         }
 
+    def _is_final_submission_button(self, btn: Optional[Dict[str, Any]]) -> bool:
+        """
+        Determines whether a button represents a final quiz/assignment submission
+        (e.g., 'Submit Quiz', 'Submit Assignment', 'Turn In', 'Finish Quiz', 'Hand In', 'Submit All'),
+        as opposed to a single-question verification ('Check', 'Check Answer', 'Submit Answer')
+        or a navigation button ('Next', 'Continue').
+        """
+        if not btn or not isinstance(btn, dict):
+            return False
+
+        btn_type = str(btn.get("button_type", btn.get("type", ""))).lower().strip()
+        if btn_type == "submit":
+            return True
+
+        desc = str(btn.get("description", "")).lower().strip()
+
+        # Problem-level check answer buttons should NOT be treated as final assessment submit
+        if any(c in desc for c in ["check answer", "check", "verify", "submit answer"]):
+            return False
+
+        # Assessment-level / final submission keywords
+        final_keywords = [
+            "submit quiz", "submit assignment", "finish quiz", "finish test",
+            "turn in", "hand in", "submit all", "complete quiz", "complete test",
+            "end test", "end quiz", "submit exam", "finish exam"
+        ]
+        if any(k in desc for k in final_keywords):
+            return True
+
+        # Pure "submit" or "finish" or "turn in" without "answer" qualifier
+        if desc in ["submit", "finish", "turn in", "hand in"]:
+            return True
+
+        return False
+
+    def _has_unfinished_work(self) -> Tuple[bool, str]:
+        """
+        Safety guard: checks whether there is unfinished, unverified, or incorrect work
+        on the current question or assessment page that must NOT be submitted.
+        Returns (has_unfinished: bool, reason: str).
+        """
+        if not self.last_result:
+            return True, "No question result available"
+
+        eval_status = str(self.last_result.get("evaluation_status", "")).lower()
+
+        # 1. Platform evaluation: question marked incorrect or currently rethinking
+        if eval_status in ["incorrect", "wrong"]:
+            return True, f"Question marked incorrect by platform (status='{eval_status}')"
+        if bool(self.last_result.get("is_rethinking")):
+            return True, "Question solution is actively being rethought"
+
+        # 2. If explicitly marked ready_to_advance = False (unless confirmed correct)
+        if self.last_result.get("ready_to_advance") is False and eval_status != "correct":
+            return True, "ready_to_advance is False"
+
+        # 3. Check multi-part items for incomplete/unanswered/incorrect parts
+        items = self.last_result.get("items", [])
+        if isinstance(items, list) and items:
+            for item in items:
+                part_id = item.get("part_id", "part")
+                if item.get("needs_action") is True:
+                    # Check if action was provided and executed
+                    item_actions = item.get("actions", [])
+                    if not item_actions:
+                        return True, f"Part '{part_id}' requires action but has no actions"
+                item_state = str(item.get("current_state", "")).lower()
+                if item_state in ["unanswered", "answered_incorrect", "wrong", "pending"]:
+                    return True, f"Part '{part_id}' state is '{item_state}'"
+                item_eval = str(item.get("evaluation_status", "")).lower()
+                if item_eval in ["incorrect", "wrong"]:
+                    return True, f"Part '{part_id}' is marked incorrect"
+
+        # 4. Check top-level actions for unsubmitted question
+        actions = self.last_result.get("actions", [])
+        is_correct = eval_status == "correct"
+        needs_act = self.last_result.get("needs_action", True)
+        if not is_correct and not actions and needs_act:
+            # Check if this is an interstitial screen
+            q_text = str(self.last_result.get("question", "")).strip().lower()
+            is_interstitial = (
+                not q_text
+                or any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
+                and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation"])
+            )
+            if not is_interstitial:
+                return True, "Question is unsubmitted and requires actions, but 0 actions were provided"
+
+        # 5. Written response checks
+        if self.last_result.get("is_written_response"):
+            written_details = self.last_result.get("written_details", {})
+            min_words = written_details.get("min_words")
+            txt = written_details.get("text", "")
+            if not txt:
+                return True, "Written response text is empty"
+            if min_words:
+                words = len(re.findall(r"\b[A-Za-z0-9'-]+\b", txt))
+                if words < min_words:
+                    return True, f"Written response has {words} words (minimum required is {min_words})"
+
+        return False, ""
+
     def trigger_solve(self, region: Optional[Tuple[int, int, int, int]] = None):
         """Initiates screen capture and AI solution resolution, optionally for a specific region."""
         with self._action_gate_lock:
@@ -821,7 +923,7 @@ class AssistantEngine:
                                     act["in_scrolled_view"] = True
                                 if "scroll_amount" not in act:
                                     act["scroll_amount"] = auto_scroll_amt
-                    for btn_name in ["check_button", "next_button"]:
+                    for btn_name in ["check_button", "next_button", "submit_button"]:
                         btn = result.get(btn_name)
                         if btn and isinstance(btn, dict):
                             if "in_scrolled_view" not in btn:
@@ -877,9 +979,11 @@ class AssistantEngine:
                 result.get("needs_action") is False
                 and len(result.get("actions", [])) == 0
                 and not result.get("check_button")
+                and not result.get("submit_button")
                 and eval_info["status"] != "incorrect"
                 and not bool(result.get("is_rethinking"))
                 and bool(result.get("next_button") or str(result.get("advance_action", "")).lower() == "scroll_down")
+                and not self._is_final_submission_button(result.get("next_button"))
             )
             if (
                 (eval_info["status"] == "correct" and (not result.get("needs_action") or len(result.get("actions", [])) == 0) and not result.get("check_button"))
@@ -1200,8 +1304,7 @@ class AssistantEngine:
 
             # Check if auto next or multi-part continuation is applicable
             if (is_answered or is_already_answered or verification.get("all_verified", False) or verification.get("verified_count", 0) > 0) and not has_pending_items:
-                if self.last_result.get("ready_to_advance") is not False:
-                    self.last_result["ready_to_advance"] = True
+                self.last_result["ready_to_advance"] = True
             elif has_pending_items:
                 self.last_result["ready_to_advance"] = False
 
@@ -1269,7 +1372,7 @@ class AssistantEngine:
 
                         # If platform marked the answer as INCORRECT:
                         # Prevent softlocking continuously giving an incorrect answer by immediately halting advance and rethinking
-                        if post_eval.get("status") == "incorrect" and post_eval.get("confidence", 0) >= 0.90 and post_eval.get("red_pixels", 0) >= 1200:
+                        if post_eval.get("status") == "incorrect" and post_eval.get("confidence", 0) >= 0.85:
                             logger.warning("Post-submission evaluation: Platform marked answer as INCORRECT! Halting advance and triggering rethink loop...")
                             self._handle_adjustment("⚠️ Answer marked INCORRECT by platform! Rethinking solution & format...")
                             self.last_result["ready_to_advance"] = False
@@ -1286,7 +1389,20 @@ class AssistantEngine:
                             self._handle_adjustment("✓ Platform confirmed answer CORRECT!")
 
                     # Step 2: Click "Next" button if known, or dynamically locate the revealed button
+                    submit_btn = self.last_result.get("submit_button")
                     if not advanced and next_btn and isinstance(next_btn, dict):
+                        # Safeguard: if next_btn is actually an assessment-level submit button, check for unfinished work!
+                        if self._is_final_submission_button(next_btn):
+                            unfinished, reason = self._has_unfinished_work()
+                            if unfinished:
+                                logger.warning(
+                                    f"Auto-advance: Blocked clicking final submit button ('{next_btn.get('description')}') "
+                                    f"because unfinished work remains: {reason}"
+                                )
+                                self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                                self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                                return
+
                         logger.info("Auto-advance: Checking screen state before clicking identified 'Next' button...")
                         before_next_img = None
                         if self.config.local_verification_enabled:
@@ -1343,6 +1459,21 @@ class AssistantEngine:
                                 )
                         else:
                             advanced = True
+
+                    # Step 2b: If no Next button, but final Submit button is present
+                    elif not advanced and submit_btn and isinstance(submit_btn, dict):
+                        unfinished, reason = self._has_unfinished_work()
+                        if unfinished:
+                            logger.warning(
+                                f"Auto-advance: Final submit button ('{submit_btn.get('description')}') detected, "
+                                f"but blocked because unfinished work remains: {reason}"
+                            )
+                            self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                            self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                            return
+                        logger.info("Auto-advance: Assessment completed and verified. Submitting final work...")
+                        self.trigger_submit_button()
+                        advanced = True
 
                     if not advanced:
                         logger.info("Auto-advance: Scanning screen to detect newly revealed 'Next' / navigation button...")
@@ -1535,11 +1666,26 @@ class AssistantEngine:
                 nx = detected_btn.get("screen_x", detected_btn.get("x"))
                 ny = detected_btn.get("screen_y", detected_btn.get("y"))
                 if nx is not None and ny is not None:
+                    desc = detected_btn.get("description", "Next Question")
+
+                    # FINAL SUBMIT SAFEGUARD:
+                    # Distinguish between Next Question vs Final Assessment Submit!
+                    # Never click final submit if there is unfinished, unverified, or incorrect work!
+                    if self._is_final_submission_button(detected_btn):
+                        unfinished, reason = self._has_unfinished_work()
+                        if unfinished:
+                            logger.warning(
+                                f"Auto-advance: Refusing to click final submission button ('{desc}') at ({nx}, {ny}) "
+                                f"because unfinished work was detected: {reason}"
+                            )
+                            self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                            self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                            return False
+
                     # Enforce navigation debounce: never click Next multiple times within minimum interval!
                     if not self._can_click_next(min_interval=2.5):
                         return False
 
-                    desc = detected_btn.get("description", "Next Question")
                     logger.info(f"Auto-advance: Successfully detected '{desc}' button at ({nx}, {ny})")
                     self._handle_adjustment(f"Found Next button: ({nx}, {ny})")
 
@@ -1646,6 +1792,18 @@ class AssistantEngine:
                     nx = detected_btn_scrolled.get("screen_x", detected_btn_scrolled.get("x"))
                     ny = detected_btn_scrolled.get("screen_y", detected_btn_scrolled.get("y"))
                     if nx is not None and ny is not None:
+                        desc_s = detected_btn_scrolled.get("description", "Next Question")
+                        if self._is_final_submission_button(detected_btn_scrolled):
+                            unfinished, reason = self._has_unfinished_work()
+                            if unfinished:
+                                logger.warning(
+                                    f"Auto-advance: Refusing to click scrolled final submission button ('{desc_s}') at ({nx}, {ny}) "
+                                    f"because unfinished work was detected: {reason}"
+                                )
+                                self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                                self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                                return False
+
                         if not self._can_click_next(min_interval=2.5):
                             scrolled_clicked = True
                             return True
@@ -1903,6 +2061,18 @@ class AssistantEngine:
             logger.warning("trigger_next_button: No valid next_button in last result.")
             return
 
+        # FINAL SUBMIT SAFEGUARD:
+        # If this button is an assessment-level submit button, verify that no unfinished work remains!
+        if self._is_final_submission_button(next_btn):
+            unfinished, reason = self._has_unfinished_work()
+            if unfinished:
+                logger.warning(
+                    f"trigger_next_button: Blocked click on final submission button because unfinished work exists: {reason}"
+                )
+                self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                return
+
         # Enforce navigation debounce / rate-limiting
         if not self._can_click_next(min_interval=2.5):
             return
@@ -1926,6 +2096,41 @@ class AssistantEngine:
             self.executor.click(nx, ny)
             self._record_next_click()
 
+    def trigger_submit_button(self):
+        """Clicks the identified final 'Submit' / 'Turn In' button if known with zero-token verification, guarding against unfinished work."""
+        if not self.last_result:
+            return
+
+        submit_btn = self.last_result.get("submit_button")
+        if not submit_btn or not isinstance(submit_btn, dict):
+            logger.debug("trigger_submit_button: No valid submit_button in last result.")
+            return
+
+        # FINAL SUBMIT SAFEGUARD:
+        unfinished, reason = self._has_unfinished_work()
+        if unfinished:
+            logger.warning(f"trigger_submit_button: Blocked submitting unfinished work! Reason: {reason}")
+            self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+            self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+            return
+
+        is_scrolled = bool(submit_btn.get("in_scrolled_view", False))
+        scroll_amt = abs(int(submit_btn.get("scroll_amount", 500)))
+        btn_y = float(submit_btn.get("y", 1000))
+        if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
+            is_scrolled = True
+            submit_btn["in_scrolled_view"] = True
+        self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
+
+        x = submit_btn.get("screen_x", submit_btn.get("x"))
+        y = submit_btn.get("screen_y", submit_btn.get("y"))
+        if x is not None and y is not None:
+            sx, sy = int(x), int(y)
+            logger.info(f"Submitting assignment/quiz: Clicking final Submit button at ({sx}, {sy})")
+            self._handle_adjustment(f"Submitting assignment at ({sx}, {sy})...")
+            self.executor.click(sx, sy)
+            self._record_next_click()
+
     def trigger_next_question(self):
         """User manual trigger for Next Question (F10). Supports both button advancing and scroll-down quizzes."""
         with self._action_gate_lock:
@@ -1946,6 +2151,7 @@ class AssistantEngine:
             self.set_state(EngineState.NAVIGATING)
             check_btn = self.last_result.get("check_button") if self.last_result else None
             next_btn = self.last_result.get("next_button") if self.last_result else None
+            submit_btn = self.last_result.get("submit_button") if self.last_result else None
             is_multi_part = self.last_result.get("is_multi_part", False) if self.last_result else False
             advance_action = str(self.last_result.get("advance_action", "")).lower() if self.last_result else ""
 
@@ -1953,7 +2159,7 @@ class AssistantEngine:
                 scroll_amt = int(self.last_result.get("scroll_amount", 450)) if self.last_result else 450
                 logger.info(f"Manual advance: AI detected scrolling quiz, scrolling down {scroll_amt}px...")
                 self._advance_by_scrolling_down(scroll_amt=scroll_amt, override_region=self.last_region)
-            elif check_btn and not next_btn:
+            elif check_btn and not next_btn and not submit_btn:
                 # Platform only has Check Answer currently displayed
                 self.trigger_check_button()
                 time.sleep(1.0)
@@ -1965,6 +2171,15 @@ class AssistantEngine:
                 self.trigger_next_button()
             elif next_btn:
                 self.trigger_next_button()
+            elif submit_btn:
+                # Final quiz submission
+                unfinished, reason = self._has_unfinished_work()
+                if unfinished:
+                    logger.warning(f"Manual advance: Submit blocked due to unfinished work: {reason}")
+                    self._handle_adjustment("⚠️ Cannot Submit: Incomplete or unverified work remains!")
+                    self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                    return
+                self.trigger_submit_button()
             else:
                 self._discover_and_click_next_button(override_region=self.last_region)
 

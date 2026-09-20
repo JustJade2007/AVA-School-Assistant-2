@@ -235,19 +235,36 @@ class AIClient:
             logger.warning(f"Could not parse navigation detection JSON: {e}")
             return None
 
-        next_btn = (
-            result.get("next_button")
-            or result.get("button")
-            or result.get("continue_button")
-            or result.get("submit_button")
-            or result.get("navigation_button")
-            or result.get("action_button")
-        )
+        btn_type = str(result.get("button_type", "")).lower().strip()
 
-        if next_btn and isinstance(next_btn, dict):
+        target_btn = None
+        target_key = "next_button"
+        if result.get("submit_button"):
+            target_btn = result.get("submit_button")
+            target_key = "submit_button"
+            if not btn_type:
+                btn_type = "submit"
+        elif result.get("next_button"):
+            target_btn = result.get("next_button")
+            target_key = "next_button"
+            if not btn_type:
+                btn_type = "next"
+        elif result.get("check_button"):
+            target_btn = result.get("check_button")
+            target_key = "check_button"
+            if not btn_type:
+                btn_type = "check"
+        else:
+            for fallback_key in ["button", "continue_button", "navigation_button", "action_button"]:
+                if result.get(fallback_key):
+                    target_btn = result.get(fallback_key)
+                    target_key = fallback_key
+                    break
+
+        if target_btn and isinstance(target_btn, dict):
             # Scale coordinates back to global desktop screen space
             self._map_coordinates(
-                result={"next_button": next_btn},
+                result={target_key: target_btn},
                 scale_x=scale_x,
                 scale_y=scale_y,
                 offset_x=offset_x,
@@ -260,8 +277,21 @@ class AIClient:
                 calibration_scale_y=calibration_scale_y,
                 coordinate_mode=coordinate_mode
             )
-            next_btn["advance_action"] = result.get("advance_action", "click_button")
-            return next_btn
+            target_btn["advance_action"] = result.get("advance_action", "click_button")
+
+            # Determine / refine button_type
+            desc = str(target_btn.get("description", "")).lower()
+            if not btn_type:
+                if any(w in desc for w in ["submit quiz", "submit assignment", "turn in", "hand in", "finish quiz", "finish test", "complete test", "submit all"]):
+                    btn_type = "submit"
+                elif any(w in desc for w in ["check", "verify", "submit answer"]):
+                    btn_type = "check"
+                elif "submit" in desc:
+                    btn_type = "submit"
+                else:
+                    btn_type = "next"
+            target_btn["button_type"] = btn_type
+            return target_btn
 
         advance_action = str(result.get("advance_action", "")).lower()
         if advance_action == "scroll_down" or (result.get("found") and not next_btn and result.get("scroll_amount")):
@@ -721,12 +751,17 @@ class AIClient:
 
         # Normalize aliases if present
         if "submit_button" in result and not result.get("check_button"):
-            result["check_button"] = result["submit_button"]
+            s_btn = result["submit_button"]
+            if isinstance(s_btn, dict):
+                s_desc = str(s_btn.get("description", "")).lower()
+                is_final_submit = any(k in s_desc for k in ["quiz", "assignment", "turn in", "finish", "all", "complete"])
+                if not is_final_submit and any(k in s_desc for k in ["check", "verify", "answer"]):
+                    result["check_button"] = s_btn
         if "continue_button" in result and not result.get("next_button"):
             result["next_button"] = result["continue_button"]
 
-        # Map check_button, next_button, reference_button, close_button, and dropdown_button coordinates
-        for btn_key in ["check_button", "next_button", "reference_button", "close_button", "dropdown_button"]:
+        # Map check_button, next_button, submit_button, reference_button, close_button, and dropdown_button coordinates
+        for btn_key in ["check_button", "next_button", "submit_button", "reference_button", "close_button", "dropdown_button"]:
             btn = result.get(btn_key)
             if btn and isinstance(btn, dict):
                 if "box_2d" in btn and isinstance(btn["box_2d"], (list, tuple)) and len(btn["box_2d"]) == 4:
@@ -754,7 +789,7 @@ class AIClient:
 
         # Propagate in_scrolled_view to navigation buttons if actions or question elements target lower view
         has_scrolled_actions = any(bool(a.get("in_scrolled_view")) for a in result.get("actions", []))
-        for nav_key in ["check_button", "next_button"]:
+        for nav_key in ["check_button", "next_button", "submit_button"]:
             btn = result.get(nav_key)
             if btn and isinstance(btn, dict) and "in_scrolled_view" not in btn:
                 by = float(btn.get("y", 1000))

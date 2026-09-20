@@ -950,10 +950,13 @@ class HUDOverlay(ctk.CTkToplevel):
         else:
             self.written_card.pack_forget()
 
-        # Update Next button label to reflect whether Check Answer or Next was detected
+        # Update Next button label to reflect whether Check Answer, Next, or Submit was detected
         check_btn = result.get("check_button")
+        submit_btn = result.get("submit_button")
         hk_next = self.config.hotkeys.get("next_question", "F10")
-        if check_btn and not next_btn:
+        if submit_btn and not next_btn:
+            self.btn_next.configure(text=f"🚀 Submit ({hk_next})")
+        elif check_btn and not next_btn:
             self.btn_next.configure(text=f"✓ Check ({hk_next})")
         elif check_btn and next_btn:
             self.btn_next.configure(text=f"✓ Check & Next ({hk_next})")
@@ -961,7 +964,7 @@ class HUDOverlay(ctk.CTkToplevel):
             self.btn_next.configure(text=f"⏭ Next ({hk_next})")
 
         # Draw targets on cloaked visualizer overlay
-        self.visualizer.draw_actions(actions, next_btn, check_btn)
+        self.visualizer.draw_actions(actions, next_btn, check_btn, submit_btn)
 
     def _on_written_text_edited(self, event=None):
         """Called live as the user types into the written response preview box."""

@@ -474,6 +474,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.rubric_raw_textbox = ctk.CTkTextbox(right_col, height=90, fg_color="#09090b")
         self.rubric_raw_textbox.pack(fill="x", padx=16, pady=(0, 6))
         self.rubric_raw_textbox.insert("1.0", "Paste rubric text here or use Screen-Snip / Upload...")
+        self.rubric_raw_textbox.bind("<KeyRelease>", lambda e: self._auto_detect_word_requirements())
 
         parse_btn = ctk.CTkButton(
             right_col,
@@ -525,6 +526,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         if hasattr(self, "stage_2_rubric_viewer"):
             self.stage_2_rubric_viewer.set_criteria(criteria)
         logger.info(f"Rubric criteria live-synced: {len(criteria)} criteria")
+        self._auto_detect_word_requirements()
 
     def _auto_detect_word_requirements(self):
         topic_text = self.topic_textbox.get("1.0", "end").strip()
@@ -535,8 +537,20 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         if not combined:
             return
 
-        constraints = WrittenSolver.extract_detailed_word_constraints(combined)
-        detected_target = constraints.get("total_min_words") or constraints.get("min_words")
+        crit_count = len(self.project.rubric_criteria) if getattr(self.project, "rubric_criteria", None) else None
+        constraints = WrittenSolver.extract_detailed_word_constraints(combined, item_count=crit_count)
+        detected_target = constraints.get("total_min_words")
+        num_items = constraints.get("num_items")
+        per_item = constraints.get("per_item_words")
+
+        if not detected_target and per_item:
+            if crit_count and crit_count > 1:
+                detected_target = per_item * crit_count
+                num_items = crit_count
+
+        if not detected_target and not per_item:
+            detected_target = constraints.get("min_words")
+
         if detected_target and detected_target > 0:
             current_val = self.words_entry.get().strip()
             # If current_val is default 1000 or empty or matches current target
@@ -545,12 +559,13 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 self.words_entry.insert(0, str(detected_target))
                 self.project.target_total_words = detected_target
 
-            num_items = constraints.get("num_items")
-            per_item = constraints.get("per_item_words")
             if num_items and per_item:
-                msg = f"✨ Detected: {num_items} items × {per_item}w = {detected_target}w (Target: ~{int(per_item * 1.1)}w each)"
+                msg = f"✨ Detected: {num_items} points × {per_item}w/point = {detected_target}w total (Target: ~{int(per_item * 1.1)}w each)"
             else:
                 msg = f"✨ Detected: {detected_target}w requirement (Target: {detected_target}–{int(detected_target * 1.2)}w)"
+            self.detected_words_label.configure(text=msg)
+        elif per_item:
+            msg = f"✨ Detected: {per_item}w PER POINT (Total will be calculated once points/criteria are set)"
             self.detected_words_label.configure(text=msg)
 
     def _import_source_file(self):
@@ -835,6 +850,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
     def _finish_rubric_parse(self, criteria: List[RubricCriterion]):
         self.project.rubric_criteria = criteria
         self.stage_1_rubric_viewer.set_criteria(criteria)
+        self._auto_detect_word_requirements()
 
     # -------------------------------------------------------------------------
     # Stage 2: Outline Formulation & Plan

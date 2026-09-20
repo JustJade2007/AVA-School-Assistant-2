@@ -8,6 +8,15 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.3.b] - 2026-09-20
+
+### Fixed
+- **Rubric & Outline 'Words Per Point' Prompt & Target Count Disambiguation**:
+  - **Rubric Parser Prompt Clarification**: Updated `PlaygroundEngine.parse_rubric` system prompt with explicit instructions that statements like *"__ words per point"*, *"__ words per bullet"*, or *"__ words each"* specify requirements for individual criteria, not the total assignment length.
+  - **Outline Formulation Target Calculation**: Updated `PlaygroundEngine.generate_outline` to calculate total document word count as `(words per point) × (number of points/criteria)` and instruct the AI architect to assign each section its corresponding per-point word count rather than collapsing the entire paper to a single point's count.
+  - **Multi-Point Constraint Extraction**: Updated `WrittenSolver.extract_detailed_word_constraints` in `core/written_solver.py` with expanded keywords (`point`, `points`, `bullet`, `bullets`, `criterion`, `criteria`, `section`, `topic`) and an optional `item_count` parameter. Prevented setting `total_min_words` to a single point's limit when item count is not yet established.
+  - **Playground Auto-Detection & Live Recalculation**: Updated `_auto_detect_word_requirements` in `ui/playground/workspace.py` to auto-calculate `num_points × per_item_words = total_words`, bound real-time detection to `rubric_raw_textbox`, and re-triggered calculation upon criteria parse completion.
+
 ## [2.1.3.a] - 2026-09-20
 
 ### Added

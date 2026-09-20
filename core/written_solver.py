@@ -63,13 +63,18 @@ class WrittenSolver:
             self.humanizer = Humanizer(mock_mode=True)
 
     @classmethod
-    def extract_detailed_word_constraints(cls, prompt_text: str) -> Dict[str, Any]:
+    def extract_detailed_word_constraints(
+        cls,
+        prompt_text: str,
+        item_count: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Extracts detailed minimum and maximum word counts and multi-question specifications
         from question prompts, syllabus rubrics, or input headers.
         Examples:
           - "50 words each for the 5 questions" -> min: 250, max: 300, per_item: 50, num_items: 5
-          - "50 words each" / "50 words per question" -> min: 50, max: 60, per_item: 50, num_items: 1
+          - "50 words per point" (with 4 criteria) -> min: 200, max: 240, per_item: 50, num_items: 4
+          - "50 words each" / "50 words per question" -> min: 50, max: 60, per_item: 50
           - "Between 50 and 75 words" -> min: 50, max: 75
           - "At least 50 words" -> min: 50, max: 60 (20% over)
           - "Around 50 words" -> min: 45, max: 60
@@ -89,26 +94,62 @@ class WrittenSolver:
 
         t = prompt_text.lower()
 
-        # 1. Multi-part / per-item: '50 words each for the 5 questions', '50 words each', '50 words per question'
+        # Keywords for items / points / criteria
+        ITEM_KWS = r"(?:question|part|item|prompt|point|bullet|criterion|criteria|section|topic)"
+        ITEM_PLURALS = r"(?:questions?|parts?|items?|prompts?|points?|bullets?|criteria|criterions?|sections?|topics?)"
+
+        # 1. Multi-part / per-item:
+        # 1A: '50 words each for the 5 questions', '50 words per point', 'at least 50 words per point'
         m_each = re.search(
-            r"(\d+)\s*words?\s*(?:each|per\s+(?:question|part|item|prompt)|for\s+each\s+(?:question|part|item|prompt|one))(?:\s+(?:for|of)\s+(?:the\s+)?(\d+)\s*(?:questions?|parts?|items?))?",
+            rf"(?:at\s+least|minimum\s+of|minimum|min|around|approx(?:imately)?|roughly|~)?\s*(\d+)\s*words?\s*(?:each|per\s+{ITEM_KWS}|for\s+each\s+(?:{ITEM_KWS}|one))(?:\s+(?:for|of)\s+(?:the\s+)?(\d+)\s*{ITEM_PLURALS})?",
             t
         )
-        if m_each:
-            per_w = int(m_each.group(1))
-            num_q = int(m_each.group(2)) if m_each.group(2) else None
-            if not num_q:
-                # Check if prompt mentions a count like "5 questions" or "5 short questions" anywhere in text
-                m_count = re.search(r"(\d+)\s*(?:[a-zA-Z]+\s+)?(?:questions?|parts?|items?|prompts?)", t)
-                if m_count and int(m_count.group(1)) > 1:
-                    num_q = int(m_count.group(1))
-                else:
-                    # Check if prompt explicitly enumerates questions like 1. 2. 3.
-                    numbered = re.findall(r"(?:^|\n)\s*\d+[\.\)]\s+", t)
-                    if len(numbered) >= 2:
-                        num_q = len(numbered)
 
-            if num_q:
+        # 1B: 'each point at least 50 words', 'for each point, write at least 50 words'
+        m_each_first = None
+        if not m_each:
+            m_each_first = re.search(
+                rf"(?:for\s+)?each\s+{ITEM_KWS}[^.\n]*?(?:at\s+least|minimum\s+of|minimum|min|around|approx(?:imately)?|roughly|write(?:\s+(?:a\s+)?))?\s*(\d+)\s*words?",
+                t
+            )
+
+        # 1C: '5 questions, 50 words each', '4 points of 50 words each'
+        m_inv = None
+        if not m_each and not m_each_first:
+            m_inv = re.search(
+                rf"(\d+)\s*{ITEM_PLURALS}[^.\n]*?(\d+)\s*words?\s*(?:each|per|for\s+each)",
+                t
+            )
+
+        if m_each or m_each_first or m_inv:
+            if m_inv:
+                num_q = int(m_inv.group(1))
+                per_w = int(m_inv.group(2))
+            elif m_each_first:
+                per_w = int(m_each_first.group(1))
+                num_q = None
+            else:
+                per_w = int(m_each.group(1))
+                num_q = int(m_each.group(2)) if m_each.group(2) else None
+
+            if not num_q:
+                # If caller provided an item count (e.g. number of criteria in the rubric)
+                if item_count and item_count > 1:
+                    num_q = item_count
+                else:
+                    # Check if prompt mentions a count like "5 questions" or "4 points" anywhere in text
+                    m_count = re.search(rf"(\d+)\s*(?:[a-zA-Z]+\s+)?{ITEM_PLURALS}", t)
+                    if m_count and int(m_count.group(1)) > 1:
+                        num_q = int(m_count.group(1))
+                    else:
+                        # Check if prompt explicitly enumerates questions or bullet points
+                        numbered = re.findall(r"(?:^|\n)\s*(?:\d+[\.\)]|[-*•])\s+", t)
+                        if len(numbered) >= 2:
+                            num_q = len(numbered)
+                        elif item_count and item_count >= 1:
+                            num_q = item_count
+
+            if num_q and num_q > 1:
                 total_min = per_w * num_q
                 return {
                     "min_words": total_min,
@@ -120,34 +161,17 @@ class WrittenSolver:
                     "num_items": num_q,
                     "is_multi_part": True,
                 }
+
+            # Per-item specified, but number of items is not yet known.
+            # CRITICAL: Do NOT set total_min_words to per_w, as per_w is only for ONE point/item!
             return {
                 "min_words": per_w,
                 "max_words": int(per_w * 1.20),
                 "target_words": int(per_w * 1.10),
-                "total_min_words": per_w,
+                "total_min_words": None,
                 "max_allowed": int(per_w * 1.20),
                 "per_item_words": per_w,
-                "num_items": 1,
-                "is_multi_part": False,
-            }
-
-        # 2. '5 questions, 50 words each'
-        m_inv = re.search(
-            r"(\d+)\s*(?:questions?|parts?|items?)[^.\n]*?(\d+)\s*words?\s*(?:each|per|for\s+each)",
-            t
-        )
-        if m_inv:
-            num_q = int(m_inv.group(1))
-            per_w = int(m_inv.group(2))
-            total_min = per_w * num_q
-            return {
-                "min_words": total_min,
-                "max_words": int(total_min * 1.20),
-                "target_words": int(total_min * 1.10),
-                "total_min_words": total_min,
-                "max_allowed": int(per_w * 1.20),
-                "per_item_words": per_w,
-                "num_items": num_q,
+                "num_items": None,
                 "is_multi_part": True,
             }
 

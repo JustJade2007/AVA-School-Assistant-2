@@ -41,10 +41,15 @@ class PlaygroundEngine:
 
         system_prompt = (
             "You are an expert academic evaluator. Analyze the provided assignment rubric "
-            "and extract each distinct grading criterion into a structured JSON list.\n"
+            "and extract each distinct grading criterion into a structured JSON list.\n\n"
+            "CRITICAL WORD COUNT & 'WORDS PER POINT' INSTRUCTION:\n"
+            "- Pay careful attention to word limits: rubrics often state '__ words per point', '__ words per bullet', '__ words per question', or '__ words each'.\n"
+            "- Understand that this is a PER-POINT requirement for that specific item, NOT the total word count for the entire assignment!\n"
+            "- Explicitly include any per-point word requirements in the criterion's 'description' (e.g. 'Must provide at least 50 words for this point').\n"
+            "- Never confuse a per-point word requirement with the overall paper length.\n\n"
             "Respond ONLY with a JSON array where each item has:\n"
             "- 'title': Short descriptive name of the criterion (e.g. 'Thesis Statement', 'Evidence & Analysis', 'Mechanics & MLA')\n"
-            "- 'description': What is required to earn full marks for this criterion\n"
+            "- 'description': What is required to earn full marks for this criterion (including any per-point word count constraints)\n"
             "- 'target_score': Points or percentage if stated (e.g. '25 pts', 'Exemplary', '20%') or null\n"
             "Do NOT include any markdown code blocks or text outside the JSON array."
         )
@@ -108,31 +113,35 @@ class PlaygroundEngine:
             rubric_text_full += "\n" + project.rubric_raw_text
 
         combined_text = f"{project.title}\n{project.topic_description}\n{rubric_text_full}".strip()
-        constraints = WrittenSolver.extract_detailed_word_constraints(combined_text)
+        criteria_count = len(project.rubric_criteria) if project.rubric_criteria else None
+        constraints = WrittenSolver.extract_detailed_word_constraints(combined_text, item_count=criteria_count)
 
         # Map individual criteria with specific word constraints
         criteria_word_counts = {}
         for c in project.rubric_criteria:
             c_constraint = WrittenSolver.extract_detailed_word_constraints(f"{c.title}\n{c.description}")
-            if c_constraint.get("min_words"):
+            if c_constraint.get("per_item_words"):
+                criteria_word_counts[c.id] = c_constraint["per_item_words"]
+            elif c_constraint.get("min_words"):
                 criteria_word_counts[c.id] = c_constraint["min_words"]
 
         multi_part_note = ""
-        if constraints.get("is_multi_part") and constraints.get("num_items") and constraints.get("per_item_words"):
-            num_q = constraints["num_items"]
+        if constraints.get("is_multi_part") and constraints.get("per_item_words"):
             per_q = constraints["per_item_words"]
+            num_q = constraints.get("num_items") or criteria_count or 1
             calculated_total = per_q * num_q
             project.target_total_words = calculated_total
             multi_part_note = (
-                f"\nCRITICAL MULTI-QUESTION REQUIREMENT (BELIEVABILITY & RUBRIC):\n"
-                f"- The rubric explicitly requires {num_q} questions/items with approximately {per_q} words each.\n"
-                f"- You MUST create exactly {num_q} sections named 'Question 1', 'Question 2', etc. (or corresponding question titles).\n"
-                f"- Each section's target_word_count MUST be exactly {per_q} words.\n"
-                f"- The total document target is {calculated_total} words (NOT 1000 words!).\n"
+                f"\nCRITICAL 'WORDS PER POINT' / MULTI-ITEM REQUIREMENT:\n"
+                f"- The rubric/prompt explicitly specifies approximately {per_q} words PER POINT/CRITERION.\n"
+                f"- IMPORTANT: This means {per_q} words PER POINT, NOT {per_q} words for the total document!\n"
+                f"- With {num_q} points/criteria, the total document target is {calculated_total} words ({num_q} points × {per_q} words each).\n"
+                f"- You MUST create sections corresponding to these points, with each section having target_word_count of approximately {per_q} words.\n"
+                f"- Total document word count target is EXACTLY {calculated_total} words.\n"
             )
         elif constraints.get("total_min_words"):
             project.target_total_words = constraints["total_min_words"]
-        elif constraints.get("min_words") and project.target_total_words in (1000, 500, 0):
+        elif constraints.get("min_words") and not constraints.get("per_item_words") and project.target_total_words in (1000, 500, 0):
             project.target_total_words = constraints["min_words"]
 
         # Build custom formatting and personalization guidelines if provided
@@ -155,9 +164,11 @@ class PlaygroundEngine:
             "and rubric criteria, create a coherent, comprehensive outline.\n"
             f"{multi_part_note}\n"
             f"{custom_notes}\n"
-            "STRICT WORD COUNT RULE:\n"
+            "STRICT WORD COUNT RULES:\n"
             f"- The project target word count is EXACTLY {project.target_total_words} words.\n"
             "- The sum of 'target_word_count' across all sections MUST NOT exceed this target.\n"
+            "- 'WORDS PER POINT' RULE: When rubrics or instructions say '__ words per point', '__ words per bullet', '__ words per criterion', or '__ words each', that target applies to EACH section/point individually, NOT the entire paper. The total assignment length is (words per point) × (number of points).\n"
+            "- Never make the entire paper only as long as a single point (e.g., if it says 50 words per point for 4 points, total is 200 words, NOT 50 words).\n"
             "- Do NOT inflate or overestimate word counts beyond the student's prompt and rubric!\n\n"
             "Respond ONLY with a JSON array where each object has:\n"
             "- 'title': Section heading (e.g. 'Question 1', 'Introduction & Thesis', 'Historical Context')\n"

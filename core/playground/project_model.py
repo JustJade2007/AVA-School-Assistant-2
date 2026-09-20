@@ -83,6 +83,8 @@ class PlaygroundProject:
     formatting_preset: str = "MLA"  # "MLA", "APA", "Standard Report"
     target_total_words: int = 1000
     rubric_criteria: List[RubricCriterion] = field(default_factory=list)
+    rubric_files: List[SourceItem] = field(default_factory=list)
+    rubric_raw_text: str = ""
     sources: List[SourceItem] = field(default_factory=list)
     sections: List[SectionDraft] = field(default_factory=list)
     bibliography_entries: List[str] = field(default_factory=list)
@@ -100,6 +102,8 @@ class PlaygroundProject:
             "formatting_preset": self.formatting_preset,
             "target_total_words": self.target_total_words,
             "rubric_criteria": [c.to_dict() for c in self.rubric_criteria],
+            "rubric_files": [rf.to_dict() for rf in self.rubric_files],
+            "rubric_raw_text": self.rubric_raw_text,
             "sources": [s.to_dict() for s in self.sources],
             "sections": [sec.to_dict() for sec in self.sections],
             "bibliography_entries": self.bibliography_entries,
@@ -113,6 +117,7 @@ class PlaygroundProject:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PlaygroundProject":
         rubrics = [RubricCriterion.from_dict(c) for c in data.get("rubric_criteria", [])]
+        rubric_files = [SourceItem.from_dict(rf) for rf in data.get("rubric_files", [])]
         sources = [SourceItem.from_dict(s) for s in data.get("sources", [])]
         sections = [SectionDraft.from_dict(sec) for sec in data.get("sections", [])]
         
@@ -123,6 +128,8 @@ class PlaygroundProject:
             formatting_preset=data.get("formatting_preset", "MLA"),
             target_total_words=data.get("target_total_words", 1000),
             rubric_criteria=rubrics,
+            rubric_files=rubric_files,
+            rubric_raw_text=data.get("rubric_raw_text", ""),
             sources=sources,
             sections=sections,
             bibliography_entries=data.get("bibliography_entries", []),

@@ -1871,7 +1871,8 @@ class AssistantEngine:
             errors = f"{errors} | {result.get('rethink_reasoning')}".strip(" |")
 
         min_words = result.get("min_word_count")
-        logger.info(f"Written question detected (Min words: {min_words}). Invoking WrittenSolver...")
+        max_words = result.get("max_word_count")
+        logger.info(f"Written question detected (Min: {min_words}, Max: {max_words}). Invoking WrittenSolver...")
 
         if not self.written_solver:
             self._sync_config()
@@ -1883,6 +1884,7 @@ class AssistantEngine:
                     existing_text=existing_text,
                     error_feedback=errors,
                     override_min_words=min_words,
+                    override_max_words=max_words,
                 )
                 result["written_details"] = written_res
                 final_text = written_res.get("text", "")

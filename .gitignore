@@ -246,3 +246,9 @@ api_keys.json
 projects/
 *.avaproj
 
+# Todo documents
+TODO
+TODO.md
+todo.md
+todo.txt
+

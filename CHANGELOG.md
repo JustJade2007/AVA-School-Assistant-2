@@ -8,6 +8,26 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.0.3.d] - 2026-09-20
+
+### Fixed & Improved
+- **Believable Word Count Enforcement & Prevention of Massive LLM Over-Generation**:
+  - **Multi-Question & Complex Word Requirement Parsing**:
+    - Added `extract_detailed_word_constraints` in `core/written_solver.py` detecting multi-part patterns (e.g. *"50 words each for the 5 questions"*, *"50 words each"*, *"50 words per question"*, ranges, and approximate limits) across vision OCR prompts, assignment rubrics, and playground topics.
+    - Added automatic total and per-item word scaling (`total_min_words`, `per_item_words`, `num_items`, `max_allowed`).
+  - **Authentic Student Believability (10%–20% Error Margin)**:
+    - Replaced unconstrained generation with a strict believability principle: target length is set to ~10% above the requirement and strictly capped at 20% above the minimum (e.g. 50 words targets ~55 words and hard caps at 60 words; prevents massive 1,000-word dumps).
+    - Rewrote `apply_word_limits` as a classmethod with multi-question paragraph decomposition (`re.split(r"\n+(?=\s*\d+[\.\)]\s+)")`) and sentence-boundary trimming ensuring every sub-question stays strictly within 10%–20% of its individual target.
+    - Integrated post-generation, post-humanization, and post-spellcheck trimming across both HUD Written Question solver and Playground Mode.
+  - **Playground Mode Dynamic Scaling & Live Believability Indicator**:
+    - `PlaygroundEngine.generate_outline` dynamically detects per-question constraints, adjusting total project words (e.g. 5 questions × 50 words = 250 words total instead of default 1,000 words) and assigning 50 words per section.
+    - Added real-time prompt/rubric auto-detection in Stage 1 updating `words_entry` and displaying a detected requirement badge.
+    - Added live believable word count status (`Words: X / Y • Believable +Z%`) and a manual **✂️ Believable Trim (10-20%)** action in Stage 3 section review.
+  - **Vision OCR Prompt Guidance**:
+    - Updated `core/prompt.py` with explicit believability and 10%–20% margin rules for vision-detected written responses.
+
+---
+
 ## [2.0.3.c] - 2026-09-20
 
 ### Fixed

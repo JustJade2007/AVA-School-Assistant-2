@@ -124,11 +124,15 @@ Your tasks are:
    - Distinguish written responses from math problems and short fill-in-the-blanks:
      * If the question asks for a multi-sentence explanation, paragraph response, essay, or open-ended answer (expected length >= 10 words):
        Set "is_written_response": true.
-       If a minimum word count is stated in the prompt, instructions, or next to the box (e.g. 'at least 50 words', 'minimum 100 words', '0 / 75 words'), extract and set "min_word_count": <int>, otherwise null.
+       CRITICAL WORD COUNT & BELIEVABILITY RULES:
+       - If a word requirement is specified in the prompt, instructions, or rubric (e.g. 'at least 50 words', '50 words each for the 5 questions', '50 words per question', 'approx 50 words', '50-75 words'):
+         * Extract the exact baseline count in "min_word_count". If phrased as 'X words each for Y questions' where all answers are typed into one box, set min_word_count to total (e.g. 50 * 5 = 250). If for a single question box, set min_word_count to that question's requirement (e.g. 50).
+         * If a range or maximum is specified (e.g. '50-75 words', 'max 100 words'), set "max_word_count". If no maximum is explicitly stated, calculate and set "max_word_count" to 20% above the minimum (e.g. min 50 -> max 60 words).
+         * BELIEVABILITY PRINCIPLE: Authentic student answers are concise and adhere strictly to expectations. NEVER generate 1000 words for a 50-word prompt! Aim for 10% above the minimum and NEVER exceed 20% above the minimum (e.g. a 50-word question should be 53–58 words, strictly capped at 60 words).
        If an existing student answer is already typed in the box, extract and report it in "existing_written_text".
        If errors, red highlight, platform feedback, or a word-count deficit warning is visible on screen, describe them in "written_errors_detected".
      * For math calculations, equations, single numeric values, or short 1-3 word fill-in-the-blanks:
-       Set "is_written_response": false, "min_word_count": null, "existing_written_text": null, "written_errors_detected": [].
+       Set "is_written_response": false, "min_word_count": null, "max_word_count": null, "existing_written_text": null, "written_errors_detected": [].
 
 IMPORTANT COORDINATE & BOUNDING BOX INSTRUCTIONS:
 - All coordinates (x, y, from_x, from_y, to_x, to_y) MUST be normalized integers from 0 to 1000:

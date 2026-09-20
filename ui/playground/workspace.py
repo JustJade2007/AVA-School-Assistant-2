@@ -27,6 +27,7 @@ from core.playground.project_model import (
 from core.playground.doc_io import DocumentImporter, DocumentExporter
 from core.playground.humanizer_bridge import PlaygroundHumanizerBridge
 from core.playground.engine import PlaygroundEngine
+from core.written_solver import WrittenSolver
 from ui.playground.rubric_viewer import RubricViewer
 from ui.snipping_tool import SnippingOverlay
 
@@ -340,6 +341,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.topic_textbox = ctk.CTkTextbox(left_col, height=75, fg_color="#09090b")
         self.topic_textbox.pack(fill="x", padx=16, pady=(0, 6))
         self.topic_textbox.insert("1.0", self.project.topic_description)
+        self.topic_textbox.bind("<KeyRelease>", lambda e: self._on_topic_changed())
 
         # Target Word Count & Author Details
         meta_row = ctk.CTkFrame(left_col, fg_color="transparent")
@@ -348,6 +350,14 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.words_entry = ctk.CTkEntry(meta_row, width=80)
         self.words_entry.insert(0, str(self.project.target_total_words))
         self.words_entry.pack(side="left", padx=8)
+
+        self.detected_words_label = ctk.CTkLabel(
+            meta_row,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#38bdf8"
+        )
+        self.detected_words_label.pack(side="left", padx=4)
 
         ctk.CTkLabel(meta_row, text="Author:", text_color="#94a3b8").pack(side="left", padx=(12, 0))
         self.author_entry = ctk.CTkEntry(meta_row, width=140, placeholder_text="Your Name")
@@ -472,6 +482,37 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             self.project.title = new_title
             self.title_display.configure(text=new_title)
 
+    def _on_topic_changed(self):
+        self.project.topic_description = self.topic_textbox.get("1.0", "end").strip()
+        self._auto_detect_word_requirements()
+
+    def _auto_detect_word_requirements(self):
+        topic_text = self.topic_textbox.get("1.0", "end").strip()
+        rubric_text = self.rubric_raw_textbox.get("1.0", "end").strip()
+        if rubric_text.startswith("Paste rubric text here"):
+            rubric_text = ""
+        combined = f"{topic_text}\n{rubric_text}".strip()
+        if not combined:
+            return
+
+        constraints = WrittenSolver.extract_detailed_word_constraints(combined)
+        detected_target = constraints.get("total_min_words") or constraints.get("min_words")
+        if detected_target and detected_target > 0:
+            current_val = self.words_entry.get().strip()
+            # If current_val is default 1000 or empty or matches current target
+            if current_val in ("1000", "", str(self.project.target_total_words)):
+                self.words_entry.delete(0, "end")
+                self.words_entry.insert(0, str(detected_target))
+                self.project.target_total_words = detected_target
+
+            num_items = constraints.get("num_items")
+            per_item = constraints.get("per_item_words")
+            if num_items and per_item:
+                msg = f"✨ Detected: {num_items} items × {per_item}w = {detected_target}w (Target: ~{int(per_item * 1.1)}w each)"
+            else:
+                msg = f"✨ Detected: {detected_target}w requirement (Target: {detected_target}–{int(detected_target * 1.2)}w)"
+            self.detected_words_label.configure(text=msg)
+
     def _import_source_file(self):
         filetypes = [
             ("Supported Documents", "*.pdf *.docx *.doc *.txt *.md"),
@@ -562,6 +603,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             content = DocumentImporter.read_file(path)
             self.rubric_raw_textbox.delete("1.0", "end")
             self.rubric_raw_textbox.insert("1.0", content)
+            self._auto_detect_word_requirements()
             self._parse_rubric_action()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load rubric file:\n{e}")
@@ -598,6 +640,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
     def _apply_snipped_rubric_text(self, text: str):
         self.rubric_raw_textbox.delete("1.0", "end")
         self.rubric_raw_textbox.insert("1.0", text)
+        self._auto_detect_word_requirements()
         self._parse_rubric_action()
 
     def _parse_rubric_action(self):
@@ -699,6 +742,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
     def _sync_stage_2_data(self):
         # Update metadata from step 1 fields
         self.project.topic_description = self.topic_textbox.get("1.0", "end").strip()
+        self._auto_detect_word_requirements()
         try:
             self.project.target_total_words = int(self.words_entry.get().strip())
         except ValueError:
@@ -913,7 +957,19 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#38bdf8"
         )
-        self.sec_word_label.pack(side="right")
+        self.sec_word_label.pack(side="right", padx=(8, 0))
+
+        self.trim_btn = ctk.CTkButton(
+            self.sec_info_bar,
+            text="✂️ Believable Trim (10-20%)",
+            command=self._trim_active_section,
+            width=165,
+            height=26,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#27272a",
+            hover_color="#3f3f46"
+        )
+        self.trim_btn.pack(side="right", padx=(0, 8))
 
         # Side-by-Side Review Panels
         panels = ctk.CTkFrame(self.stage_3_frame, fg_color="transparent")
@@ -1052,8 +1108,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.final_text_box.insert("1.0", sec.get_active_text())
 
         # Update word count and approval status
-        words = len(sec.get_active_text().split()) if sec.get_active_text().strip() else 0
-        self.sec_word_label.configure(text=f"Words: {words} / {sec.target_word_count}")
+        self._update_sec_word_stats(sec, sec.get_active_text())
 
         if sec.is_approved:
             self.approval_badge.configure(
@@ -1074,8 +1129,50 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         sec = self.project.sections[self.current_section_idx]
         text = self.final_text_box.get("1.0", "end").strip()
         sec.final_text = text
-        words = len(text.split()) if text else 0
-        self.sec_word_label.configure(text=f"Words: {words} / {sec.target_word_count}")
+        self._update_sec_word_stats(sec, text)
+
+    def _update_sec_word_stats(self, sec: SectionDraft, text: str):
+        words = len(text.split()) if text.strip() else 0
+        target = sec.target_word_count or 250
+        max_allowed = int(target * 1.20)
+
+        if words == 0:
+            self.sec_word_label.configure(
+                text=f"Words: 0 / {target} (Target: {target}–{max_allowed}w)",
+                text_color="#94a3b8"
+            )
+        elif words < target:
+            self.sec_word_label.configure(
+                text=f"Words: {words} / {target} (Under min by {target - words}w)",
+                text_color="#f59e0b"
+            )
+        elif target <= words <= max_allowed:
+            pct_over = int(((words - target) / target) * 100) if target > 0 else 0
+            self.sec_word_label.configure(
+                text=f"Words: {words} / {target} (Target: {target}–{max_allowed}w • Believable +{pct_over}%)",
+                text_color="#34d399"
+            )
+        else:
+            pct_over = int(((words - target) / target) * 100) if target > 0 else 0
+            self.sec_word_label.configure(
+                text=f"Words: {words} / {target} (Max: {max_allowed}w • Over by +{words - max_allowed}w / +{pct_over}%)",
+                text_color="#ef4444"
+            )
+
+    def _trim_active_section(self):
+        if not self.project.sections or self.current_section_idx >= len(self.project.sections):
+            return
+        sec = self.project.sections[self.current_section_idx]
+        current_text = self.final_text_box.get("1.0", "end").strip()
+        if not current_text:
+            return
+        min_words = sec.target_word_count or 250
+        max_allowed = int(min_words * 1.20)
+        trimmed = WrittenSolver.apply_word_limits(current_text, min_words=min_words, max_words=max_allowed)
+        sec.final_text = trimmed
+        self.final_text_box.delete("1.0", "end")
+        self.final_text_box.insert("1.0", trimmed)
+        self._update_sec_word_stats(sec, trimmed)
 
     def _draft_active_section(self):
         if not self.project.sections:

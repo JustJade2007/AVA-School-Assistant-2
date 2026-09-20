@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('config.default.json', '.'), ('CHANGELOG.md', '.')]
+datas = [('config.default.json', '.'), ('CHANGELOG.md', '.'), ('ui/images', 'ui/images')]
 binaries = []
 hiddenimports = [
     'core.written_solver',
@@ -29,6 +29,7 @@ hiddenimports = [
     'ui.playground.rubric_viewer',
     'ui.home_view',
     'ui.changelog_viewer',
+    'ui.asset_loader',
     'humanizer',
     'docx',
     'pypdf',
@@ -73,4 +74,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['ui/images/icon.ico'],
 )

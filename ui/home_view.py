@@ -16,6 +16,7 @@ from typing import Optional, Callable, List
 from core.logger import get_logger
 from core.cloaking import apply_anti_capture
 from ui.changelog_viewer import ChangelogViewer
+from ui.asset_loader import apply_window_icon, get_logo_ctk_image
 
 logger = get_logger("ui.home_view")
 
@@ -59,6 +60,7 @@ class HomeDashboard(ctk.CTkToplevel):
         self.geometry("960x680+120+80")
         self.minsize(860, 600)
         self.configure(fg_color="#09090b")
+        apply_window_icon(self)
         self.protocol("WM_DELETE_WINDOW", self._on_close_requested)
 
     def _apply_initial_cloak(self):
@@ -102,6 +104,11 @@ class HomeDashboard(ctk.CTkToplevel):
         # Left: Brand Logo & Title
         brand_box = ctk.CTkFrame(header_frame, fg_color="transparent")
         brand_box.pack(side="left", padx=24, pady=12)
+
+        self.logo_img = get_logo_ctk_image(size=(32, 32))
+        if self.logo_img:
+            self.logo_icon_lbl = ctk.CTkLabel(brand_box, text="", image=self.logo_img)
+            self.logo_icon_lbl.pack(side="left", padx=(0, 10))
 
         logo_lbl = ctk.CTkLabel(
             brand_box,

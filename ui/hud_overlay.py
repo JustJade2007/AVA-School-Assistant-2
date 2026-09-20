@@ -14,6 +14,7 @@ from core.cloaking import apply_anti_capture, is_anti_capture_supported
 from core.assistant_engine import AssistantEngine, EngineState
 from config import AppConfig, ConfigManager
 from ui.visualizer import CloakedVisualizer
+from ui.asset_loader import apply_window_icon, get_logo_ctk_image
 
 
 class HUDOverlay(ctk.CTkToplevel):
@@ -57,6 +58,7 @@ class HUDOverlay(ctk.CTkToplevel):
 
     def _setup_window(self):
         self.title("AVA_HUD_Cloaked")
+        apply_window_icon(self)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.attributes("-alpha", self.config.overlay_opacity)
@@ -99,13 +101,19 @@ class HUDOverlay(ctk.CTkToplevel):
         self.header_frame.bind("<Control-MouseWheel>", self._on_header_mousewheel)
 
         # Drag handle / Logo (compact text so action buttons have ample room)
+        self.logo_img = get_logo_ctk_image(size=(18, 18))
+        if self.logo_img:
+            self.logo_icon_lbl = ctk.CTkLabel(self.header_frame, text="", image=self.logo_img)
+            self.logo_icon_lbl.pack(side="left", padx=(6, 2))
+            self.logo_icon_lbl.bind("<Control-MouseWheel>", self._on_header_mousewheel)
+
         self.title_label = ctk.CTkLabel(
             self.header_frame,
-            text="⚡ AVA",
+            text="AVA",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#60a5fa"
         )
-        self.title_label.pack(side="left", padx=(8, 4))
+        self.title_label.pack(side="left", padx=(4, 4))
         self.title_label.bind("<Control-MouseWheel>", self._on_header_mousewheel)
 
         # Cloak Status indicator (compact badge)

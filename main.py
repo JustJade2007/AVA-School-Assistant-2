@@ -7,9 +7,13 @@ and Anti-Screen Capture Cloaking.
 import sys
 import argparse
 from ui.app import AVASchoolAssistantApp
+from ui.asset_loader import set_windows_app_user_model_id
 
 
 def main():
+    # Set explicit AppUserModelID so Windows taskbar groups AVA under its own icon
+    set_windows_app_user_model_id()
+
     parser = argparse.ArgumentParser(description="AVA School Assistant 2")
     parser.add_argument(
         "--version",

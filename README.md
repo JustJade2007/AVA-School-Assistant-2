@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="ui/images/AVA-logo.jpeg" alt="AVA School Assistant 2 Logo" width="180" style="border-radius: 24px;" />
+</p>
+
 # ⚡ AVA School Assistant 2
 
 **AVA School Assistant 2** is a next-generation autonomous AI desktop assistant designed to solve online schoolwork, quizzes, and assignments on Windows.
@@ -185,8 +189,14 @@ AVA-School-Assistant-2/
 │   └── prompt.py                 # Multimodal vision system prompt & schemas
 ├── ui/
 │   ├── app.py                    # Main application lifecycle
+│   ├── asset_loader.py           # Cross-platform asset, icon, and taskbar AppUserModelID loader
 │   ├── debug_window.py           # Cloaked live log console & error diagnostic inspector
+│   ├── home_view.py              # Command Hub home dashboard
 │   ├── hud_overlay.py            # Anti-capture floating HUD window with error actions
+│   ├── images/                   # Application branding, window bar icons, and assets
+│   │   ├── AVA-logo.jpeg         # Master brand logo
+│   │   ├── icon.ico              # Multi-resolution Windows executable and window icon
+│   │   └── icon.png              # High-DPI icon asset
 │   ├── settings_view.py          # Configuration dashboard with Debug & Logging tab
 │   ├── snipping_tool.py          # Interactive cloaked full-screen snip box selector
 │   └── visualizer.py             # Cloaked on-screen target highlight canvas

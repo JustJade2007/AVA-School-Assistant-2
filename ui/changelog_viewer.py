@@ -13,6 +13,7 @@ import customtkinter as ctk
 
 from core.logger import get_logger
 from core.cloaking import apply_anti_capture, is_anti_capture_supported
+from ui.asset_loader import apply_window_icon
 
 logger = get_logger("ui.changelog_viewer")
 
@@ -60,6 +61,7 @@ class ChangelogViewer(ctk.CTkToplevel):
         self.geometry("820x680+150+90")
         self.minsize(700, 540)
         self.configure(fg_color="#09090b")
+        apply_window_icon(self)
         self.transient(self.master)
 
     def _load_changelog(self):

@@ -15,6 +15,7 @@ from core.hotkeys import GlobalHotkeyManager
 from ui.hud_overlay import HUDOverlay
 from ui.settings_view import SettingsWindow
 from ui.home_view import HomeDashboard
+from ui.asset_loader import apply_window_icon
 
 from core.logger import get_logger
 
@@ -39,6 +40,7 @@ class AVASchoolAssistantApp:
         self.root.geometry("1x1+-100+-100")
         self.root.overrideredirect(True)
         self.root.withdraw()
+        apply_window_icon(self.root)
 
         self.home_window: Optional[HomeDashboard] = None
         self.hud_window: Optional[HUDOverlay] = None
@@ -57,6 +59,7 @@ class AVASchoolAssistantApp:
             on_open_settings=self.open_settings,
             on_exit_app=self.quit_app
         )
+        apply_window_icon(self.home_window)
 
         if start_mode == "worker":
             self.launch_automated_worker()
@@ -129,6 +132,7 @@ class AVASchoolAssistantApp:
             on_snip_solve=self.start_snipping,
             on_open_playground=self.open_playground
         )
+        apply_window_icon(self.hud_window)
 
     def launch_automated_worker(self):
         """Thread-safe trigger for launching the Automated Worker overlay."""
@@ -232,6 +236,7 @@ class AVASchoolAssistantApp:
                 config_manager=self.config_manager,
                 on_exit=self.return_to_home
             )
+            apply_window_icon(self.playground_window)
             self.playground_window.lift()
             self.playground_window.focus_force()
         except Exception as e:
@@ -260,6 +265,7 @@ class AVASchoolAssistantApp:
             master=self.root,
             on_save_callback=self._on_settings_saved
         )
+        apply_window_icon(self.settings_window)
 
     def _on_settings_saved(self):
         """Re-applies hotkeys and UI settings when user updates configuration."""

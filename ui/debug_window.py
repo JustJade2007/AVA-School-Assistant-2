@@ -23,6 +23,7 @@ from core.logger import (
     LogEntry
 )
 from core.error_handler import ErrorDiagnostic
+from ui.asset_loader import apply_window_icon
 
 logger = get_logger("debug_ui")
 
@@ -46,6 +47,7 @@ class DebugWindow(ctk.CTkToplevel):
         self.geometry("780x620")
         self.minsize(650, 480)
         self.configure(fg_color="#18181b")
+        apply_window_icon(self)
 
         # Window configuration
         self.attributes("-topmost", True)

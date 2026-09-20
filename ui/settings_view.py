@@ -15,6 +15,7 @@ from core.cloaking import is_anti_capture_supported
 from core.ai_client import AIClient
 from core.logger import get_log_directory, get_log_file_path, clear_log_file, get_logger
 from ui.debug_window import DebugWindow
+from ui.asset_loader import apply_window_icon
 
 logger = get_logger("settings")
 
@@ -42,6 +43,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.geometry("660x740")
         self.minsize(580, 600)
         self.configure(fg_color="#18181b")
+        apply_window_icon(self)
 
         # Auto-save settings if user closes window via titlebar 'X' button
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)

@@ -33,6 +33,7 @@ from core.written_solver import WrittenSolver
 from core.playground.web_source import WebSourceIngestor, CitationGenerator
 from ui.playground.rubric_viewer import RubricViewer
 from ui.snipping_tool import SnippingOverlay
+from ui.asset_loader import apply_window_icon, get_logo_ctk_image
 
 logger = get_logger("playground.workspace")
 
@@ -92,6 +93,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.geometry("1140x740+80+60")
         self.minsize(980, 640)
         self.configure(fg_color="#09090b")
+        apply_window_icon(self)
         self.attributes("-topmost", False)
         self.lift()
         self.focus_force()
@@ -139,6 +141,11 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         # Left: App Logo & Mode Badge
         left_box = ctk.CTkFrame(self.header_frame, fg_color="transparent")
         left_box.pack(side="left", padx=16, pady=8)
+
+        self.logo_img = get_logo_ctk_image(size=(28, 28))
+        if self.logo_img:
+            self.logo_icon_lbl = ctk.CTkLabel(left_box, text="", image=self.logo_img)
+            self.logo_icon_lbl.pack(side="left", padx=(0, 8))
 
         logo_lbl = ctk.CTkLabel(
             left_box,

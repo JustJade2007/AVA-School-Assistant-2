@@ -130,9 +130,11 @@ class DocumentExporter:
         course_name: str = "",
         instructor_name: str = "",
         bibliography: Optional[List[str]] = None,
+        teacher_grade_report: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Builds and saves a .docx document applying selected layout rules (MLA, APA, Standard Report).
+        Optionally appends an unbiased Teacher Grade & Rubric Evaluation report.
         Returns the absolute path to the generated document.
         """
         if docx is None:
@@ -156,10 +158,193 @@ class DocumentExporter:
         else:
             cls._apply_report(doc, project_title, sections, author_name, course_name, instructor_name, bibliography)
 
+        if teacher_grade_report:
+            cls._append_teacher_grade_report(doc, teacher_grade_report, norm_preset)
+
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         doc.save(output_path)
         logger.info(f"Exported {preset} document to: {output_path}")
         return os.path.abspath(output_path)
+
+    @classmethod
+    def _append_teacher_grade_report(
+        cls,
+        doc: Any,
+        report: Dict[str, Any],
+        norm_preset: str,
+    ):
+        """Appends a formal academic evaluation report and rubric grading table to the document."""
+        doc.add_page_break()
+        is_report = "REPORT" in norm_preset
+        font_name = "Calibri" if is_report else "Times New Roman"
+
+        # Report Header
+        p_hdr = doc.add_paragraph()
+        if not is_report:
+            p_hdr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_hdr.paragraph_format.space_before = Pt(12)
+        p_hdr.paragraph_format.space_after = Pt(6)
+        r_hdr = p_hdr.add_run("Instructor Evaluation & Rubric Grade Report")
+        r_hdr.font.name = font_name
+        r_hdr.font.size = Pt(18 if is_report else 14)
+        r_hdr.font.bold = True
+        if is_report:
+            r_hdr.font.color.rgb = RGBColor(30, 58, 138)
+
+        # Grade banner
+        letter = report.get("letter_grade", "N/A")
+        score = report.get("numerical_score", 0)
+        max_score = report.get("max_score", 100)
+        pct = report.get("percentage", 0.0)
+
+        p_grade = doc.add_paragraph()
+        p_grade.paragraph_format.space_after = Pt(8)
+        r_glab = p_grade.add_run("Overall Grade: ")
+        r_glab.font.name = font_name
+        r_glab.font.size = Pt(12)
+        r_glab.font.bold = True
+
+        r_gval = p_grade.add_run(f"{letter} ({score} / {max_score} • {pct:.1f}%)")
+        r_gval.font.name = font_name
+        r_gval.font.size = Pt(13)
+        r_gval.font.bold = True
+        if is_report:
+            r_gval.font.color.rgb = RGBColor(16, 185, 129) if pct >= 80 else RGBColor(220, 38, 38)
+
+        # Summary
+        summary = report.get("summary", "").strip()
+        if summary:
+            p_sum = doc.add_paragraph()
+            p_sum.paragraph_format.space_after = Pt(6)
+            r_slab = p_sum.add_run("Summary: ")
+            r_slab.font.name = font_name
+            r_slab.font.size = Pt(11)
+            r_slab.font.bold = True
+            r_sval = p_sum.add_run(summary)
+            r_sval.font.name = font_name
+            r_sval.font.size = Pt(11)
+
+        # Overall Instructor Feedback
+        feedback = report.get("overall_feedback", "").strip()
+        if feedback:
+            p_fb_h = doc.add_paragraph()
+            p_fb_h.paragraph_format.space_before = Pt(8)
+            p_fb_h.paragraph_format.space_after = Pt(2)
+            r_fbh = p_fb_h.add_run("Instructor Commentary:")
+            r_fbh.font.name = font_name
+            r_fbh.font.size = Pt(11)
+            r_fbh.font.bold = True
+
+            p_fb = doc.add_paragraph()
+            p_fb.paragraph_format.space_after = Pt(8)
+            r_fb = p_fb.add_run(feedback)
+            r_fb.font.name = font_name
+            r_fb.font.size = Pt(11)
+
+        # Strengths
+        strengths = report.get("strengths", [])
+        if strengths:
+            p_st_h = doc.add_paragraph()
+            p_st_h.paragraph_format.space_before = Pt(6)
+            p_st_h.paragraph_format.space_after = Pt(2)
+            r_sth = p_st_h.add_run("Key Strengths:")
+            r_sth.font.name = font_name
+            r_sth.font.size = Pt(11)
+            r_sth.font.bold = True
+
+            for item in strengths:
+                p_item = doc.add_paragraph()
+                p_item.paragraph_format.space_after = Pt(2)
+                p_item.paragraph_format.left_indent = Inches(0.25)
+                r_item = p_item.add_run(f"✓ {item}")
+                r_item.font.name = font_name
+                r_item.font.size = Pt(10.5)
+
+        # Areas for Improvement
+        improvements = report.get("areas_for_improvement", [])
+        if improvements:
+            p_imp_h = doc.add_paragraph()
+            p_imp_h.paragraph_format.space_before = Pt(6)
+            p_imp_h.paragraph_format.space_after = Pt(2)
+            r_imph = p_imp_h.add_run("Areas for Improvement:")
+            r_imph.font.name = font_name
+            r_imph.font.size = Pt(11)
+            r_imph.font.bold = True
+
+            for item in improvements:
+                p_item = doc.add_paragraph()
+                p_item.paragraph_format.space_after = Pt(2)
+                p_item.paragraph_format.left_indent = Inches(0.25)
+                r_item = p_item.add_run(f"• {item}")
+                r_item.font.name = font_name
+                r_item.font.size = Pt(10.5)
+
+        # Criteria Evaluation Breakdown Table
+        crit_evals = report.get("criteria_evaluations", [])
+        if crit_evals:
+            p_tbl_h = doc.add_paragraph()
+            p_tbl_h.paragraph_format.space_before = Pt(12)
+            p_tbl_h.paragraph_format.space_after = Pt(4)
+            r_tblh = p_tbl_h.add_run("Rubric Criteria Breakdown:")
+            r_tblh.font.name = font_name
+            r_tblh.font.size = Pt(11)
+            r_tblh.font.bold = True
+
+            table = doc.add_table(rows=1, cols=4)
+            table.style = 'Table Grid'
+            hdr_cells = table.rows[0].cells
+            hdr_titles = ["Criterion", "Status", "Score", "Feedback"]
+            col_widths = [Inches(1.8), Inches(1.0), Inches(0.9), Inches(2.8)]
+
+            for i, title in enumerate(hdr_titles):
+                cell = hdr_cells[i]
+                cell.width = col_widths[i]
+                p = cell.paragraphs[0]
+                p.paragraph_format.space_after = Pt(2)
+                r = p.add_run(title)
+                r.font.name = font_name
+                r.font.size = Pt(10)
+                r.font.bold = True
+
+            for ev in crit_evals:
+                row_cells = table.add_row().cells
+                for i in range(4):
+                    row_cells[i].width = col_widths[i]
+
+                # Criterion title
+                p0 = row_cells[0].paragraphs[0]
+                p0.paragraph_format.space_after = Pt(2)
+                r0 = p0.add_run(ev.get("title", "Requirement"))
+                r0.font.name = font_name
+                r0.font.size = Pt(9.5)
+                r0.font.bold = True
+
+                # Status
+                p1 = row_cells[1].paragraphs[0]
+                p1.paragraph_format.space_after = Pt(2)
+                is_ful = ev.get("fulfilled", False)
+                status_text = "Fulfilled" if is_ful else "Developing"
+                r1 = p1.add_run(status_text)
+                r1.font.name = font_name
+                r1.font.size = Pt(9.5)
+
+                # Score
+                p2 = row_cells[2].paragraphs[0]
+                p2.paragraph_format.space_after = Pt(2)
+                sc = ev.get("score", "")
+                msc = ev.get("max_score", "")
+                score_display = f"{sc}/{msc}" if (sc != "" and msc != "") else str(sc)
+                r2 = p2.add_run(score_display)
+                r2.font.name = font_name
+                r2.font.size = Pt(9.5)
+
+                # Feedback
+                p3 = row_cells[3].paragraphs[0]
+                p3.paragraph_format.space_after = Pt(2)
+                r3 = p3.add_run(ev.get("feedback", "").strip())
+                r3.font.name = font_name
+                r3.font.size = Pt(9)
+
 
     @classmethod
     def _apply_mla(

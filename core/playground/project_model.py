@@ -91,6 +91,7 @@ class PlaygroundProject:
     author_name: str = ""
     course_name: str = ""
     instructor_name: str = ""
+    teacher_grade_report: Optional[Dict[str, Any]] = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -110,6 +111,7 @@ class PlaygroundProject:
             "author_name": self.author_name,
             "course_name": self.course_name,
             "instructor_name": self.instructor_name,
+            "teacher_grade_report": self.teacher_grade_report,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -136,6 +138,7 @@ class PlaygroundProject:
             author_name=data.get("author_name", ""),
             course_name=data.get("course_name", ""),
             instructor_name=data.get("instructor_name", ""),
+            teacher_grade_report=data.get("teacher_grade_report"),
             created_at=data.get("created_at", time.time()),
             updated_at=data.get("updated_at", time.time()),
         )

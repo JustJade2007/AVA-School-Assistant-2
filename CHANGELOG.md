@@ -8,6 +8,23 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.1.a] - 2026-09-20
+
+### Added
+- **Unbiased Teacher AI Grading System (`TeacherEvaluator`)**:
+  - Implemented an independent, objective academic instructor persona (`core/playground/teacher_evaluator.py`) to grade documents strictly against assignment rubrics, word count targets, and formatting guidelines.
+  - Produces complete grading profiles: letter grade (A+, A, B, etc.), numerical score (0–100), percentage, executive summary, overall commentary, key strengths, and actionable areas for improvement.
+  - Automatically reconciles and updates `project.rubric_criteria` checklist status (`fulfilled` and `notes`) in real-time based on the teacher's evaluations.
+- **Stage 4 Academic Review UI & Breakdown Inspector**:
+  - Integrated Teacher AI Grading card into Stage 4 of Playground Studio with real-time grade badges, score percentages, and critique previews.
+  - Added background-threaded grading execution via `🎓 Grade Document with Teacher AI`.
+  - Added detailed modal breakdown dialog (`_show_teacher_breakdown_dialog`) displaying comprehensive strengths, improvement areas, and criterion-by-criterion marks and feedback.
+- **Rubric Grade Report .docx Export**:
+  - Extended `DocumentExporter.export_to_docx` with `teacher_grade_report` support to append a formal "Instructor Evaluation & Rubric Grade Report" section and rubric table to exported Word documents.
+  - Added `Include Teacher Evaluation in .docx` checkbox in Stage 4.
+- **Project Model Persistence**:
+  - Added `teacher_grade_report` to `PlaygroundProject` dataclass and JSON serialization.
+
 ## [2.1.0.a] - 2026-09-20
 
 ### Added & Reworked

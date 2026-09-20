@@ -22,6 +22,7 @@ hiddenimports = [
     'core.playground.doc_io',
     'core.playground.humanizer_bridge',
     'core.playground.engine',
+    'core.playground.teacher_evaluator',
     'core.playground.web_source',
     'ui.playground',
     'ui.playground.workspace',

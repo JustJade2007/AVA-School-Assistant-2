@@ -27,6 +27,7 @@ from core.playground.project_model import (
 from core.playground.doc_io import DocumentImporter, DocumentExporter
 from core.playground.humanizer_bridge import PlaygroundHumanizerBridge
 from core.playground.engine import PlaygroundEngine
+from core.playground.teacher_evaluator import TeacherEvaluator
 from core.written_solver import WrittenSolver
 from core.playground.web_source import WebSourceIngestor, CitationGenerator
 from ui.playground.rubric_viewer import RubricViewer
@@ -59,6 +60,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             default_mode=self.config.humanizer_mode if self.config else "budget",
         )
         self.engine = PlaygroundEngine(ai_client=self.ai_client, config_manager=self.config_manager)
+        self.teacher_evaluator = TeacherEvaluator(ai_client=self.ai_client, config_manager=self.config_manager)
         self.snipping_overlay: Optional[SnippingOverlay] = None
 
         # State
@@ -1457,16 +1459,19 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.full_doc_preview = ctk.CTkTextbox(left_col, fg_color="#09090b", font=ctk.CTkFont(size=13))
         self.full_doc_preview.pack(fill="both", expand=True, padx=16, pady=(0, 14))
 
-        # Right Column: Export Settings & Works Cited
-        right_col = ctk.CTkFrame(grid, width=360, fg_color="#18181b", corner_radius=10, border_width=1, border_color="#27272a")
+        # Right Column: Export Settings, Teacher Evaluation & Works Cited
+        right_col = ctk.CTkFrame(grid, width=380, fg_color="#18181b", corner_radius=10, border_width=1, border_color="#27272a")
         right_col.pack(side="right", fill="both", padx=(8, 0))
 
-        e_head = ctk.CTkLabel(right_col, text="⚙️ Export Configuration", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc")
-        e_head.pack(anchor="w", padx=16, pady=(14, 10))
+        right_scroll = ctk.CTkScrollableFrame(right_col, fg_color="transparent")
+        right_scroll.pack(fill="both", expand=True, padx=4, pady=4)
+
+        e_head = ctk.CTkLabel(right_scroll, text="⚙️ Export & Academic Review", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc")
+        e_head.pack(anchor="w", padx=12, pady=(10, 8))
 
         # Stats summary card
-        self.export_stats_frame = ctk.CTkFrame(right_col, fg_color="#09090b", corner_radius=8)
-        self.export_stats_frame.pack(fill="x", padx=16, pady=(0, 10))
+        self.export_stats_frame = ctk.CTkFrame(right_scroll, fg_color="#09090b", corner_radius=8)
+        self.export_stats_frame.pack(fill="x", padx=12, pady=(0, 10))
 
         self.export_words_lbl = ctk.CTkLabel(self.export_stats_frame, text="Total Words: 0", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38bdf8")
         self.export_words_lbl.pack(anchor="w", padx=12, pady=(8, 2))
@@ -1474,26 +1479,89 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.export_criteria_lbl = ctk.CTkLabel(self.export_stats_frame, text="Rubric Criteria Met: 0 / 0", font=ctk.CTkFont(size=12), text_color="#34d399")
         self.export_criteria_lbl.pack(anchor="w", padx=12, pady=(0, 8))
 
+        # Teacher AI Grading Card
+        self.teacher_card = ctk.CTkFrame(right_scroll, fg_color="#0f172a", corner_radius=8, border_width=1, border_color="#312e81")
+        self.teacher_card.pack(fill="x", padx=12, pady=(0, 10))
+
+        t_header = ctk.CTkLabel(self.teacher_card, text="🎓 Unbiased Teacher Grading", font=ctk.CTkFont(size=13, weight="bold"), text_color="#a5b4fc")
+        t_header.pack(anchor="w", padx=12, pady=(10, 4))
+
+        self.teacher_grade_badge = ctk.CTkLabel(
+            self.teacher_card,
+            text="Not Graded Yet",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#94a3b8"
+        )
+        self.teacher_grade_badge.pack(anchor="w", padx=12, pady=(0, 4))
+
+        self.teacher_comment_lbl = ctk.CTkLabel(
+            self.teacher_card,
+            text="Have an independent AI teacher evaluate your paper against the rubric.",
+            font=ctk.CTkFont(size=11),
+            text_color="#cbd5e1",
+            wraplength=310,
+            justify="left"
+        )
+        self.teacher_comment_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+
+        t_btns = ctk.CTkFrame(self.teacher_card, fg_color="transparent")
+        t_btns.pack(fill="x", padx=12, pady=(0, 10))
+
+        self.grade_teacher_btn = ctk.CTkButton(
+            t_btns,
+            text="🎓 Grade with Teacher AI",
+            command=self._grade_with_teacher_action,
+            fg_color="#6366f1",
+            hover_color="#4f46e5",
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.grade_teacher_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        self.view_rubric_breakdown_btn = ctk.CTkButton(
+            t_btns,
+            text="🔍 Details",
+            command=self._show_teacher_breakdown_dialog,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            width=65,
+            height=32,
+            font=ctk.CTkFont(size=11),
+            state="disabled"
+        )
+        self.view_rubric_breakdown_btn.pack(side="right")
+
+        # Checkbox for export inclusion
+        self.include_teacher_report_cb = ctk.CTkCheckBox(
+            right_scroll,
+            text="Include Teacher Evaluation in .docx",
+            font=ctk.CTkFont(size=12),
+            fg_color="#6366f1",
+            hover_color="#4f46e5"
+        )
+        self.include_teacher_report_cb.pack(anchor="w", padx=14, pady=(2, 10))
+        self.include_teacher_report_cb.select()
+
         # Format Style selector
-        ctk.CTkLabel(right_col, text="Document Formatting Preset:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#94a3b8").pack(anchor="w", padx=16, pady=(6, 2))
+        ctk.CTkLabel(right_scroll, text="Document Formatting Preset:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#94a3b8").pack(anchor="w", padx=12, pady=(4, 2))
         self.stage_4_format_menu = ctk.CTkOptionMenu(
-            right_col,
+            right_scroll,
             values=["MLA", "APA", "Standard Report"],
             command=self._on_format_changed,
             fg_color="#27272a"
         )
         self.stage_4_format_menu.set(self.project.formatting_preset)
-        self.stage_4_format_menu.pack(fill="x", padx=16, pady=(0, 10))
+        self.stage_4_format_menu.pack(fill="x", padx=12, pady=(0, 10))
 
         # Bibliography / Works Cited entries
-        ctk.CTkLabel(right_col, text="Works Cited / References:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#94a3b8").pack(anchor="w", padx=16, pady=(6, 2))
-        self.biblio_textbox = ctk.CTkTextbox(right_col, height=120, fg_color="#09090b", font=ctk.CTkFont(size=11))
-        self.biblio_textbox.pack(fill="x", padx=16, pady=(0, 10))
+        ctk.CTkLabel(right_scroll, text="Works Cited / References:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#94a3b8").pack(anchor="w", padx=12, pady=(4, 2))
+        self.biblio_textbox = ctk.CTkTextbox(right_scroll, height=110, fg_color="#09090b", font=ctk.CTkFont(size=11))
+        self.biblio_textbox.pack(fill="x", padx=12, pady=(0, 10))
         self.biblio_textbox.insert("1.0", "Paste MLA/APA citations here (one per line)...")
 
         # Big Export Button
         export_docx_btn = ctk.CTkButton(
-            right_col,
+            right_scroll,
             text="📥 Export to Word Document (.docx)",
             command=self._export_to_docx_action,
             height=44,
@@ -1501,7 +1569,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             fg_color="#2563eb",
             hover_color="#1d4ed8"
         )
-        export_docx_btn.pack(fill="x", padx=16, pady=(10, 8))
+        export_docx_btn.pack(fill="x", padx=12, pady=(8, 12))
 
         # Bottom Bar
         bottom_bar = ctk.CTkFrame(self.stage_4_frame, fg_color="transparent")
@@ -1537,6 +1605,191 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 self.biblio_textbox.delete("1.0", "end")
                 self.biblio_textbox.insert("1.0", "\n\n".join(self.project.bibliography_entries))
 
+        # Sync teacher evaluation card
+        self._sync_teacher_grade_ui()
+
+    def _sync_teacher_grade_ui(self):
+        report = self.project.teacher_grade_report
+        if not report:
+            self.teacher_grade_badge.configure(
+                text="Not Graded Yet",
+                text_color="#94a3b8"
+            )
+            self.teacher_comment_lbl.configure(
+                text="Have an independent AI teacher evaluate your paper against the rubric."
+            )
+            self.view_rubric_breakdown_btn.configure(state="disabled")
+            return
+
+        letter = report.get("letter_grade", "N/A")
+        score = report.get("numerical_score", 0)
+        pct = report.get("percentage", float(score))
+        badge_color = "#34d399" if pct >= 80 else ("#fbbf24" if pct >= 70 else "#f87171")
+
+        self.teacher_grade_badge.configure(
+            text=f"Grade: {letter} ({score}/100 • {pct:.1f}%)",
+            text_color=badge_color
+        )
+        summary = report.get("summary", "").strip() or report.get("overall_feedback", "")[:120] + "..."
+        self.teacher_comment_lbl.configure(text=summary)
+        self.view_rubric_breakdown_btn.configure(state="normal")
+
+    def _grade_with_teacher_action(self):
+        full_text = self.project.get_full_document_text()
+        if not full_text.strip():
+            messagebox.showwarning("Empty Document", "Please write and approve section drafts before requesting a teacher grade.")
+            return
+
+        self.grade_teacher_btn.configure(text="⏳ Grading with Teacher AI...", state="disabled")
+
+        def task():
+            try:
+                report = self.teacher_evaluator.grade_document(self.project)
+                TeacherEvaluator.apply_to_project(report, self.project)
+                self.after(0, lambda: self._on_teacher_grading_finished(report))
+            except Exception as e:
+                logger.error(f"Teacher grading error: {e}", exc_info=True)
+                self.after(0, lambda: self._on_teacher_grading_failed(str(e)))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _on_teacher_grading_finished(self, report: Dict[str, Any]):
+        self.grade_teacher_btn.configure(text="🔄 Re-Grade with Teacher AI", state="normal")
+        self._sync_teacher_grade_ui()
+
+        # Update criteria counter in Stage 4
+        fulfilled = sum(1 for c in self.project.rubric_criteria if c.fulfilled)
+        self.export_criteria_lbl.configure(text=f"Rubric Criteria Met: {fulfilled} / {len(self.project.rubric_criteria)}")
+
+        letter = report.get("letter_grade", "N/A")
+        score = report.get("numerical_score", 0)
+        summary = report.get("summary", "")
+        messagebox.showinfo(
+            "Teacher Evaluation Complete",
+            f"Official Teacher Grade: {letter} ({score}%)\n\n{summary}\n\n"
+            "Click 'Details' to inspect the full rubric critique and strengths/weaknesses breakdown."
+        )
+
+    def _on_teacher_grading_failed(self, err_msg: str):
+        self.grade_teacher_btn.configure(text="🎓 Grade with Teacher AI", state="normal")
+        messagebox.showerror("Grading Error", f"Failed to complete teacher grading:\n{err_msg}")
+
+    def _show_teacher_breakdown_dialog(self):
+        report = self.project.teacher_grade_report
+        if not report:
+            messagebox.showinfo("No Grade Available", "Document has not been graded yet.")
+            return
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Teacher AI Rubric Evaluation & Critique")
+        dlg.geometry("780x620")
+        dlg.minsize(680, 500)
+        dlg.configure(fg_color="#09090b")
+        dlg.transient(self)
+
+        # Apply cloaking if supported
+        if self.is_cloaked and is_anti_capture_supported():
+            apply_anti_capture(dlg)
+
+        # Header banner
+        header_frame = ctk.CTkFrame(dlg, fg_color="#18181b", corner_radius=0)
+        header_frame.pack(fill="x")
+
+        title_lbl = ctk.CTkLabel(
+            header_frame,
+            text="🎓 Official Teacher Evaluation Report",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="#f8fafc"
+        )
+        title_lbl.pack(side="left", padx=20, pady=16)
+
+        letter = report.get("letter_grade", "N/A")
+        score = report.get("numerical_score", 0)
+        pct = report.get("percentage", float(score))
+        badge_color = "#34d399" if pct >= 80 else ("#fbbf24" if pct >= 70 else "#f87171")
+
+        grade_badge = ctk.CTkLabel(
+            header_frame,
+            text=f"Score: {letter} ({score}/100 • {pct:.1f}%)",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=badge_color
+        )
+        grade_badge.pack(side="right", padx=20, pady=16)
+
+        # Main scrollable body
+        body_scroll = ctk.CTkScrollableFrame(dlg, fg_color="transparent")
+        body_scroll.pack(fill="both", expand=True, padx=20, pady=16)
+
+        # Summary & Feedback Card
+        fb_card = ctk.CTkFrame(body_scroll, fg_color="#18181b", corner_radius=8, border_width=1, border_color="#27272a")
+        fb_card.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(fb_card, text="Instructor Commentary", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38bdf8").pack(anchor="w", padx=16, pady=(12, 4))
+        
+        fb_text = report.get("overall_feedback", "") or report.get("summary", "No commentary recorded.")
+        fb_lbl = ctk.CTkLabel(fb_card, text=fb_text, font=ctk.CTkFont(size=12), text_color="#cbd5e1", wraplength=700, justify="left")
+        fb_lbl.pack(anchor="w", padx=16, pady=(0, 12))
+
+        # Strengths & Improvements Grid
+        strengths = report.get("strengths", [])
+        improvements = report.get("areas_for_improvement", [])
+        if strengths or improvements:
+            grid_cols = ctk.CTkFrame(body_scroll, fg_color="transparent")
+            grid_cols.pack(fill="x", pady=(0, 12))
+
+            # Left: Strengths
+            str_col = ctk.CTkFrame(grid_cols, fg_color="#064e3b", corner_radius=8, border_width=1, border_color="#047857")
+            str_col.pack(side="left", fill="both", expand=True, padx=(0, 6))
+
+            ctk.CTkLabel(str_col, text="✓ Key Strengths", font=ctk.CTkFont(size=12, weight="bold"), text_color="#6ee7b7").pack(anchor="w", padx=12, pady=(10, 6))
+            for s in strengths:
+                ctk.CTkLabel(str_col, text=f"• {s}", font=ctk.CTkFont(size=11), text_color="#e2e8f0", wraplength=310, justify="left").pack(anchor="w", padx=12, pady=(0, 4))
+            ctk.CTkLabel(str_col, text="").pack(pady=2)
+
+            # Right: Areas for Improvement
+            imp_col = ctk.CTkFrame(grid_cols, fg_color="#451a03", corner_radius=8, border_width=1, border_color="#b45309")
+            imp_col.pack(side="right", fill="both", expand=True, padx=(6, 0))
+
+            ctk.CTkLabel(imp_col, text="⚠️ Areas for Improvement", font=ctk.CTkFont(size=12, weight="bold"), text_color="#fcd34d").pack(anchor="w", padx=12, pady=(10, 6))
+            for imp in improvements:
+                ctk.CTkLabel(imp_col, text=f"• {imp}", font=ctk.CTkFont(size=11), text_color="#e2e8f0", wraplength=310, justify="left").pack(anchor="w", padx=12, pady=(0, 4))
+            ctk.CTkLabel(imp_col, text="").pack(pady=2)
+
+        # Rubric Criteria Breakdown
+        crit_evals = report.get("criteria_evaluations", [])
+        if crit_evals:
+            ctk.CTkLabel(body_scroll, text="Rubric Criteria Breakdown", font=ctk.CTkFont(size=13, weight="bold"), text_color="#f8fafc").pack(anchor="w", pady=(8, 6))
+
+            for ev in crit_evals:
+                crit_card = ctk.CTkFrame(body_scroll, fg_color="#18181b", corner_radius=8, border_width=1, border_color="#27272a")
+                crit_card.pack(fill="x", pady=(0, 8))
+
+                top_bar = ctk.CTkFrame(crit_card, fg_color="transparent")
+                top_bar.pack(fill="x", padx=14, pady=(10, 4))
+
+                title = ev.get("title", "Requirement")
+                ctk.CTkLabel(top_bar, text=title, font=ctk.CTkFont(size=12, weight="bold"), text_color="#f8fafc").pack(side="left")
+
+                is_ful = ev.get("fulfilled", False)
+                status_color = "#34d399" if is_ful else "#f59e0b"
+                status_text = "✓ Fulfilled" if is_ful else "Developing"
+
+                score_info = f"[{ev.get('score', '')}/{ev.get('max_score', '')} pts]" if "score" in ev and "max_score" in ev else ""
+                badge_text = f"{status_text}  {score_info}".strip()
+
+                ctk.CTkLabel(top_bar, text=badge_text, font=ctk.CTkFont(size=11, weight="bold"), text_color=status_color).pack(side="right")
+
+                fb = ev.get("feedback", "").strip()
+                if fb:
+                    ctk.CTkLabel(crit_card, text=fb, font=ctk.CTkFont(size=11), text_color="#94a3b8", wraplength=690, justify="left").pack(anchor="w", padx=14, pady=(0, 10))
+
+        # Close button bottom bar
+        btn_bar = ctk.CTkFrame(dlg, fg_color="#18181b", height=50)
+        btn_bar.pack(fill="x")
+
+        close_btn = ctk.CTkButton(btn_bar, text="Close Report", command=dlg.destroy, width=120, height=34, fg_color="#27272a", hover_color="#3f3f46")
+        close_btn.pack(side="right", padx=16, pady=8)
+
     def _export_to_docx_action(self):
         default_name = f"{self.project.title.replace(' ', '_')}_{self.project.formatting_preset}.docx"
         output_path = filedialog.asksaveasfilename(
@@ -1559,6 +1812,9 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 "text": sec.get_active_text(),
             })
 
+        include_teacher = getattr(self, "include_teacher_report_cb", None) and self.include_teacher_report_cb.get() == 1
+        teacher_report = self.project.teacher_grade_report if include_teacher else None
+
         try:
             exported_path = DocumentExporter.export_to_docx(
                 project_title=self.project.title,
@@ -1569,6 +1825,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 course_name=self.project.course_name,
                 instructor_name=self.project.instructor_name,
                 bibliography=bib_lines,
+                teacher_grade_report=teacher_report,
             )
             messagebox.showinfo("Export Successful", f"Document exported successfully to:\n{exported_path}")
             # Highlight in Windows Explorer

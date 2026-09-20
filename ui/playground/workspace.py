@@ -28,6 +28,7 @@ from core.playground.doc_io import DocumentImporter, DocumentExporter
 from core.playground.humanizer_bridge import PlaygroundHumanizerBridge
 from core.playground.engine import PlaygroundEngine
 from core.playground.teacher_evaluator import TeacherEvaluator
+from core.playground.metadata_manager import AcademicMetadataManager
 from core.written_solver import WrittenSolver
 from core.playground.web_source import WebSourceIngestor, CitationGenerator
 from ui.playground.rubric_viewer import RubricViewer
@@ -52,6 +53,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.on_exit = on_exit
 
         self.project = PlaygroundProject()
+        self.metadata_mgr = AcademicMetadataManager(config_manager=self.config_manager)
         self.humanizer_bridge = PlaygroundHumanizerBridge(
             api_key=self.config.gemini_api_key or self.config.api_key if self.config else "",
             model_name=self.config.written_model_name if self.config else "gemini-3.5-flash-lite",
@@ -360,35 +362,160 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.topic_textbox.insert("1.0", self.project.topic_description)
         self.topic_textbox.bind("<KeyRelease>", lambda e: self._on_topic_changed())
 
-        # Target Word Count & Author Details
-        meta_row = ctk.CTkFrame(left_col, fg_color="transparent")
-        meta_row.pack(fill="x", padx=16, pady=4)
-        ctk.CTkLabel(meta_row, text="Target Words:", text_color="#94a3b8").pack(side="left")
-        self.words_entry = ctk.CTkEntry(meta_row, width=80)
+        # Target Word Count row
+        word_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        word_row.pack(fill="x", padx=16, pady=(4, 2))
+        ctk.CTkLabel(word_row, text="Target Words:", text_color="#94a3b8", width=80, anchor="w").pack(side="left")
+        self.words_entry = ctk.CTkEntry(word_row, width=80)
         self.words_entry.insert(0, str(self.project.target_total_words))
-        self.words_entry.pack(side="left", padx=8)
+        self.words_entry.pack(side="left", padx=(0, 8))
 
         self.detected_words_label = ctk.CTkLabel(
-            meta_row,
+            word_row,
             text="",
             font=ctk.CTkFont(size=11),
             text_color="#38bdf8"
         )
         self.detected_words_label.pack(side="left", padx=4)
 
-        ctk.CTkLabel(meta_row, text="Author:", text_color="#94a3b8").pack(side="left", padx=(12, 0))
-        self.author_entry = ctk.CTkEntry(meta_row, width=140, placeholder_text="Your Name")
-        self.author_entry.pack(side="left", padx=6, fill="x", expand=True)
+        # Academic Metadata Rows: Author, Course, Professor (Saved, Loaded, Deleted separately)
+        # 1. Author Name
+        author_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        author_row.pack(fill="x", padx=16, pady=2)
+        ctk.CTkLabel(author_row, text="Author:", text_color="#94a3b8", width=80, anchor="w").pack(side="left")
+        self.author_entry = ctk.CTkEntry(author_row, placeholder_text="Student / Author Name")
+        self.author_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.author_entry.insert(0, self.project.author_name)
 
-        meta_row2 = ctk.CTkFrame(left_col, fg_color="transparent")
-        meta_row2.pack(fill="x", padx=16, pady=4)
-        ctk.CTkLabel(meta_row2, text="Course:", text_color="#94a3b8").pack(side="left")
-        self.course_entry = ctk.CTkEntry(meta_row2, width=120, placeholder_text="e.g. ENGL 101")
-        self.course_entry.pack(side="left", padx=8)
+        self.author_menu = ctk.CTkOptionMenu(
+            author_row,
+            values=self._get_author_menu_values(),
+            command=self._on_author_selected,
+            width=120,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#27272a",
+            button_color="#3f3f46",
+            button_hover_color="#52525b"
+        )
+        self.author_menu.set("📂 Load ▾")
+        self.author_menu.pack(side="left", padx=(0, 4))
 
-        ctk.CTkLabel(meta_row2, text="Instructor:", text_color="#94a3b8").pack(side="left", padx=(12, 0))
-        self.instructor_entry = ctk.CTkEntry(meta_row2, width=120, placeholder_text="e.g. Dr. Smith")
-        self.instructor_entry.pack(side="left", padx=6, fill="x", expand=True)
+        self.author_save_btn = ctk.CTkButton(
+            author_row,
+            text="💾 Save",
+            command=self._save_author_action,
+            width=54,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#10b981",
+            hover_color="#059669"
+        )
+        self.author_save_btn.pack(side="left", padx=(0, 4))
+
+        self.author_del_btn = ctk.CTkButton(
+            author_row,
+            text="🗑️",
+            command=self._delete_author_action,
+            width=32,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#ef4444",
+            hover_color="#dc2626"
+        )
+        self.author_del_btn.pack(side="left")
+
+        # 2. Course Title
+        course_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        course_row.pack(fill="x", padx=16, pady=2)
+        ctk.CTkLabel(course_row, text="Course:", text_color="#94a3b8", width=80, anchor="w").pack(side="left")
+        self.course_entry = ctk.CTkEntry(course_row, placeholder_text="e.g. ENGL 101 - Academic Writing")
+        self.course_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.course_entry.insert(0, self.project.course_name)
+
+        self.course_menu = ctk.CTkOptionMenu(
+            course_row,
+            values=self._get_course_menu_values(),
+            command=self._on_course_selected,
+            width=120,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#27272a",
+            button_color="#3f3f46",
+            button_hover_color="#52525b"
+        )
+        self.course_menu.set("📂 Load ▾")
+        self.course_menu.pack(side="left", padx=(0, 4))
+
+        self.course_save_btn = ctk.CTkButton(
+            course_row,
+            text="💾 Save",
+            command=self._save_course_action,
+            width=54,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#10b981",
+            hover_color="#059669"
+        )
+        self.course_save_btn.pack(side="left", padx=(0, 4))
+
+        self.course_del_btn = ctk.CTkButton(
+            course_row,
+            text="🗑️",
+            command=self._delete_course_action,
+            width=32,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#ef4444",
+            hover_color="#dc2626"
+        )
+        self.course_del_btn.pack(side="left")
+
+        # 3. Professor / Instructor Name
+        inst_row = ctk.CTkFrame(left_col, fg_color="transparent")
+        inst_row.pack(fill="x", padx=16, pady=2)
+        ctk.CTkLabel(inst_row, text="Professor:", text_color="#94a3b8", width=80, anchor="w").pack(side="left")
+        self.instructor_entry = ctk.CTkEntry(inst_row, placeholder_text="e.g. Dr. Robert Vance")
+        self.instructor_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.instructor_entry.insert(0, self.project.instructor_name)
+
+        self.instructor_menu = ctk.CTkOptionMenu(
+            inst_row,
+            values=self._get_instructor_menu_values(),
+            command=self._on_instructor_selected,
+            width=120,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#27272a",
+            button_color="#3f3f46",
+            button_hover_color="#52525b"
+        )
+        self.instructor_menu.set("📂 Load ▾")
+        self.instructor_menu.pack(side="left", padx=(0, 4))
+
+        self.instructor_save_btn = ctk.CTkButton(
+            inst_row,
+            text="💾 Save",
+            command=self._save_instructor_action,
+            width=54,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#10b981",
+            hover_color="#059669"
+        )
+        self.instructor_save_btn.pack(side="left", padx=(0, 4))
+
+        self.instructor_del_btn = ctk.CTkButton(
+            inst_row,
+            text="🗑️",
+            command=self._delete_instructor_action,
+            width=32,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#ef4444",
+            hover_color="#dc2626"
+        )
+        self.instructor_del_btn.pack(side="left")
 
         # Source Materials List
         s_sep = ctk.CTkFrame(left_col, height=1, fg_color="#27272a")
@@ -515,6 +642,266 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         if new_title:
             self.project.title = new_title
             self.title_display.configure(text=new_title)
+
+    # -------------------------------------------------------------------------
+    # Academic Metadata Presets: Author, Course, Professor
+    # (Saved, Loaded, and Deleted all separately)
+    # -------------------------------------------------------------------------
+
+    # --- Author Presets ---
+    def _get_author_menu_values(self) -> List[str]:
+        saved = self.metadata_mgr.get_authors() if hasattr(self, "metadata_mgr") else []
+        items = ["📂 Load ▾"]
+        if saved:
+            for a in saved:
+                items.append(a)
+            items.append("🗑️ Manage / Delete...")
+        else:
+            items.append("(No saved authors)")
+        return items
+
+    def _refresh_author_menu(self):
+        if hasattr(self, "author_menu"):
+            self.author_menu.configure(values=self._get_author_menu_values())
+            self.author_menu.set("📂 Load ▾")
+
+    def _on_author_selected(self, choice: str):
+        self.author_menu.set("📂 Load ▾")
+        if choice == "🗑️ Manage / Delete...":
+            self._open_delete_modal("Author", self.metadata_mgr.get_authors(), self._delete_author)
+        elif choice not in ("📂 Load ▾", "(No saved authors)"):
+            self.author_entry.delete(0, "end")
+            self.author_entry.insert(0, choice)
+            self.project.author_name = choice
+
+    def _save_author_action(self):
+        val = self.author_entry.get().strip()
+        if not val:
+            messagebox.showwarning("Empty Author", "Please enter an Author Name before saving.", parent=self)
+            return
+        self.metadata_mgr.save_author(val)
+        self._refresh_author_menu()
+        messagebox.showinfo("Author Saved", f"Author Name '{val}' saved to presets!", parent=self)
+
+    def _delete_author_action(self):
+        saved = self.metadata_mgr.get_authors()
+        if not saved:
+            messagebox.showinfo("No Saved Authors", "You don't have any saved author names yet.", parent=self)
+            return
+        current = self.author_entry.get().strip()
+        if current and current in saved:
+            if messagebox.askyesno("Delete Saved Author", f"Remove '{current}' from saved authors?", parent=self):
+                self._delete_author(current)
+                messagebox.showinfo("Deleted", f"Removed '{current}' from saved authors.", parent=self)
+        else:
+            self._open_delete_modal("Author", saved, self._delete_author)
+
+    def _delete_author(self, name: str):
+        self.metadata_mgr.delete_author(name)
+        self._refresh_author_menu()
+        if self.author_entry.get().strip() == name:
+            self.author_entry.delete(0, "end")
+            self.project.author_name = ""
+
+    # --- Course Presets ---
+    def _get_course_menu_values(self) -> List[str]:
+        saved = self.metadata_mgr.get_courses() if hasattr(self, "metadata_mgr") else []
+        items = ["📂 Load ▾"]
+        if saved:
+            for c in saved:
+                items.append(c)
+            items.append("🗑️ Manage / Delete...")
+        else:
+            items.append("(No saved courses)")
+        return items
+
+    def _refresh_course_menu(self):
+        if hasattr(self, "course_menu"):
+            self.course_menu.configure(values=self._get_course_menu_values())
+            self.course_menu.set("📂 Load ▾")
+
+    def _on_course_selected(self, choice: str):
+        self.course_menu.set("📂 Load ▾")
+        if choice == "🗑️ Manage / Delete...":
+            self._open_delete_modal("Course", self.metadata_mgr.get_courses(), self._delete_course)
+        elif choice not in ("📂 Load ▾", "(No saved courses)"):
+            self.course_entry.delete(0, "end")
+            self.course_entry.insert(0, choice)
+            self.project.course_name = choice
+
+    def _save_course_action(self):
+        val = self.course_entry.get().strip()
+        if not val:
+            messagebox.showwarning("Empty Course", "Please enter a Course Title before saving.", parent=self)
+            return
+        self.metadata_mgr.save_course(val)
+        self._refresh_course_menu()
+        messagebox.showinfo("Course Saved", f"Course Title '{val}' saved to presets!", parent=self)
+
+    def _delete_course_action(self):
+        saved = self.metadata_mgr.get_courses()
+        if not saved:
+            messagebox.showinfo("No Saved Courses", "You don't have any saved courses yet.", parent=self)
+            return
+        current = self.course_entry.get().strip()
+        if current and current in saved:
+            if messagebox.askyesno("Delete Saved Course", f"Remove '{current}' from saved courses?", parent=self):
+                self._delete_course(current)
+                messagebox.showinfo("Deleted", f"Removed '{current}' from saved courses.", parent=self)
+        else:
+            self._open_delete_modal("Course", saved, self._delete_course)
+
+    def _delete_course(self, name: str):
+        self.metadata_mgr.delete_course(name)
+        self._refresh_course_menu()
+        if self.course_entry.get().strip() == name:
+            self.course_entry.delete(0, "end")
+            self.project.course_name = ""
+
+    # --- Professor Presets ---
+    def _get_instructor_menu_values(self) -> List[str]:
+        saved = self.metadata_mgr.get_professors() if hasattr(self, "metadata_mgr") else []
+        items = ["📂 Load ▾"]
+        if saved:
+            for p in saved:
+                items.append(p)
+            items.append("🗑️ Manage / Delete...")
+        else:
+            items.append("(No saved professors)")
+        return items
+
+    def _refresh_instructor_menu(self):
+        if hasattr(self, "instructor_menu"):
+            self.instructor_menu.configure(values=self._get_instructor_menu_values())
+            self.instructor_menu.set("📂 Load ▾")
+
+    def _on_instructor_selected(self, choice: str):
+        self.instructor_menu.set("📂 Load ▾")
+        if choice == "🗑️ Manage / Delete...":
+            self._open_delete_modal("Professor", self.metadata_mgr.get_professors(), self._delete_professor)
+        elif choice not in ("📂 Load ▾", "(No saved professors)"):
+            self.instructor_entry.delete(0, "end")
+            self.instructor_entry.insert(0, choice)
+            self.project.instructor_name = choice
+
+    def _save_instructor_action(self):
+        val = self.instructor_entry.get().strip()
+        if not val:
+            messagebox.showwarning("Empty Professor", "Please enter a Professor/Instructor Name before saving.", parent=self)
+            return
+        self.metadata_mgr.save_professor(val)
+        self._refresh_instructor_menu()
+        messagebox.showinfo("Professor Saved", f"Professor Name '{val}' saved to presets!", parent=self)
+
+    def _delete_instructor_action(self):
+        saved = self.metadata_mgr.get_professors()
+        if not saved:
+            messagebox.showinfo("No Saved Professors", "You don't have any saved professors yet.", parent=self)
+            return
+        current = self.instructor_entry.get().strip()
+        if current and current in saved:
+            if messagebox.askyesno("Delete Saved Professor", f"Remove '{current}' from saved professors?", parent=self):
+                self._delete_professor(current)
+                messagebox.showinfo("Deleted", f"Removed '{current}' from saved professors.", parent=self)
+        else:
+            self._open_delete_modal("Professor", saved, self._delete_professor)
+
+    def _delete_professor(self, name: str):
+        self.metadata_mgr.delete_professor(name)
+        self._refresh_instructor_menu()
+        if self.instructor_entry.get().strip() == name:
+            self.instructor_entry.delete(0, "end")
+            self.project.instructor_name = ""
+
+    # --- Common Delete Modal ---
+    def _open_delete_modal(self, category: str, items: List[str], on_delete_callback):
+        """Opens a management dialog listing all saved presets with individual delete buttons."""
+        if not items:
+            messagebox.showinfo("No Saved Items", f"No saved {category.lower()}s found to delete.", parent=self)
+            return
+
+        modal = ctk.CTkToplevel(self)
+        modal.title(f"Manage Saved {category}s")
+        modal.geometry("440x360")
+        modal.transient(self)
+        modal.grab_set()
+
+        head = ctk.CTkFrame(modal, fg_color="transparent")
+        head.pack(fill="x", padx=20, pady=(16, 8))
+        ctk.CTkLabel(
+            head,
+            text=f"🗑️ Manage Saved {category} Presets",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="#f8fafc"
+        ).pack(side="left")
+
+        scroll = ctk.CTkScrollableFrame(modal, fg_color="#09090b")
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 12))
+
+        def populate():
+            for child in scroll.winfo_children():
+                child.destroy()
+
+            current_items = []
+            if category == "Author":
+                current_items = self.metadata_mgr.get_authors()
+            elif category == "Course":
+                current_items = self.metadata_mgr.get_courses()
+            elif category == "Professor":
+                current_items = self.metadata_mgr.get_professors()
+
+            if not current_items:
+                ctk.CTkLabel(
+                    scroll,
+                    text=f"No saved {category.lower()}s remaining.",
+                    text_color="#71717a",
+                    font=ctk.CTkFont(size=12)
+                ).pack(pady=20)
+                return
+
+            for itm in current_items:
+                row = ctk.CTkFrame(scroll, fg_color="#18181b", corner_radius=6, border_width=1, border_color="#27272a")
+                row.pack(fill="x", pady=3, padx=2)
+
+                ctk.CTkLabel(
+                    row,
+                    text=itm,
+                    text_color="#f8fafc",
+                    font=ctk.CTkFont(size=12),
+                    anchor="w"
+                ).pack(side="left", padx=12, pady=8, fill="x", expand=True)
+
+                def make_del_cmd(val=itm):
+                    return lambda: do_delete(val)
+
+                ctk.CTkButton(
+                    row,
+                    text="Delete",
+                    command=make_del_cmd(itm),
+                    width=65,
+                    height=26,
+                    font=ctk.CTkFont(size=11),
+                    fg_color="#ef4444",
+                    hover_color="#dc2626"
+                ).pack(side="right", padx=10, pady=6)
+
+        def do_delete(val):
+            on_delete_callback(val)
+            populate()
+
+        populate()
+
+        close_btn = ctk.CTkButton(
+            modal,
+            text="Done",
+            command=modal.destroy,
+            width=100,
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#2563eb",
+            hover_color="#1d4ed8"
+        )
+        close_btn.pack(pady=(0, 16))
 
     def _on_topic_changed(self):
         self.project.topic_description = self.topic_textbox.get("1.0", "end").strip()

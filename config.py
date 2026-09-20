@@ -214,6 +214,11 @@ class AppConfig:
     log_to_file: bool = True
     max_log_entries: int = 500
 
+    # Academic Metadata Presets
+    saved_authors: List[str] = field(default_factory=list)
+    saved_courses: List[str] = field(default_factory=list)
+    saved_professors: List[str] = field(default_factory=list)
+
     # Keybinds
     hotkeys: Dict[str, str] = field(default_factory=lambda: {
         "trigger_solve": "F8",

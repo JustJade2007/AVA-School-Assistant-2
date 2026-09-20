@@ -53,6 +53,9 @@
     "playground_format": "MLA",
     "playground_auto_humanize": true,
     "playground_projects_dir": "projects",
+    "saved_authors": [],
+    "saved_courses": [],
+    "saved_professors": [],
     "hotkeys": {
         "trigger_solve": "F8",
         "confirm_action": "F9",

@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.4.a] - 2026-09-20
+
+### Added
+- **Independent Academic Metadata Presets (Author, Course, Professor)**:
+  - Added independent save, load, and delete management for **Author Name**, **Course Title**, and **Professor / Instructor Name** in Playground Studio.
+  - Implemented `AcademicMetadataManager` in `core/playground/metadata_manager.py` to persist presets across application sessions via `AppConfig` and local JSON fallback storage.
+  - Updated Stage 1 metadata UI in `ui/playground/workspace.py` with individual `📂 Load ▾` dropdown menus, `💾 Save` preset buttons, and `🗑️` delete buttons for each field.
+  - Added an interactive preset management modal for reviewing and deleting saved entries individually per category without affecting other metadata.
+  - Added `saved_authors`, `saved_courses`, and `saved_professors` schema fields to `AppConfig` (`config.py`) and `config.default.json`.
+
 ## [2.1.3.c] - 2026-09-20
 
 ### Fixed

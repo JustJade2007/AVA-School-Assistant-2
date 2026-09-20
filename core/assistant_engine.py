@@ -484,6 +484,8 @@ class AssistantEngine:
             )
 
             extra_images: List[str] = []
+            self.executor._viewport_is_scrolled = False
+            self.executor._last_scroll_center = (offset_x + curr_w // 2, offset_y + curr_h // 2)
 
             # 3. Supplementary Information Inspection Phase (reference sheet modal or scrolled content)
             if result.get("status") == "needs_more_info" and self.config.auto_inspect_references and not self.executor.is_stopped():
@@ -632,29 +634,19 @@ class AssistantEngine:
                             logger.debug(f"Error checking scroll displacement: {e}")
 
                     # Capture scrolled content
+                    time.sleep(0.3)
                     scrolled_b64, _, _, _, _, _, _ = self.capture.capture_and_encode(
                         region=region,
                         max_dimension=self.config.max_capture_dimension
                     )
                     extra_images.append(scrolled_b64)
 
-                    # Restore exact scroll position to align coordinate frame with top
-                    logger.info(f"Restoring viewport fold scroll (scrolling up {scroll_amt}px)...")
-                    self.executor.scroll(scroll_amt, center_x, center_y)
-                    self.executor._viewport_is_scrolled = False
-                    time.sleep(0.4)
-
-                    # Zero-token verification: verify scroll restoration matches pre-scroll baseline
-                    if self.config.local_verification_enabled and baseline_scroll_img:
-                        try:
-                            restored_img = self.capture.capture_screen(region=region)
-                            restored_ok, r_diff = self.verifier.verify_modal_dismissed(baseline_scroll_img, restored_img, threshold_diff=4.0)
-                            if not restored_ok:
-                                logger.info(f"Fine-tuning scroll restoration alignment (diff={r_diff:.1f})...")
-                                self.executor.scroll(100, center_x, center_y)
-                                time.sleep(0.3)
-                        except Exception as e:
-                            logger.debug(f"Error checking scroll restoration: {e}")
+                    # Retain scrolled viewport position: do NOT immediately scroll back up!
+                    # Keeping the viewport aligned with the lower view prevents viewport jitter
+                    # and avoids scroll inertia drift when executing actions on lower view elements.
+                    self.executor._viewport_is_scrolled = True
+                    self.executor._last_scroll_center = (center_x, center_y)
+                    logger.info(f"Retaining scrolled view ({scroll_amt}px) for stable action execution without viewport jitter.")
 
                 if extra_images and not self.executor.is_stopped():
                     logger.info("Re-evaluating question with supplementary imagery...")
@@ -699,19 +691,16 @@ class AssistantEngine:
                 center_y = offset_y + curr_h // 2
 
                 self.executor.scroll(-auto_scroll_amt, center_x, center_y)
-                time.sleep(0.6)
+                self.executor._viewport_is_scrolled = True
+                self.executor._last_scroll_center = (center_x, center_y)
+                time.sleep(0.5)
 
                 scrolled_b64, _, _, _, _, _, _ = self.capture.capture_and_encode(
                     region=region,
                     max_dimension=self.config.max_capture_dimension
                 )
 
-                # Restore viewport to top
-                self.executor.scroll(auto_scroll_amt, center_x, center_y)
-                self.executor._viewport_is_scrolled = False
-                time.sleep(0.4)
-
-                logger.info("Re-evaluating question with both upper view and scrolled lower view...")
+                logger.info("Re-evaluating question with lower scrolled view...")
                 self.set_state(EngineState.THINKING, "Analyzing question with lower scrolled view...")
                 scrolled_result = ai_client.solve_screen(
                     base64_image=base64_data,
@@ -729,12 +718,39 @@ class AssistantEngine:
                     extra_images=[scrolled_b64]
                 )
                 if scrolled_result and len(scrolled_result.get("actions", [])) > 0:
-                    logger.info(f"Lower view inspection found {len(scrolled_result.get('actions', []))} action(s)!")
+                    logger.info(f"Lower view inspection found {len(scrolled_result.get('actions', []))} action(s)! Retaining scrolled viewport.")
                     extra_images = [scrolled_b64]
                     result = scrolled_result
+                    # Auto-tag actions and navigation buttons as belonging to the scrolled view
+                    for act in result.get("actions", []):
+                        if "in_scrolled_view" not in act:
+                            act["in_scrolled_view"] = True
+                        if "scroll_amount" not in act:
+                            act["scroll_amount"] = auto_scroll_amt
+                    items = result.get("items", [])
+                    if isinstance(items, list):
+                        for itm in items:
+                            for act in itm.get("actions", []):
+                                if "in_scrolled_view" not in act:
+                                    act["in_scrolled_view"] = True
+                                if "scroll_amount" not in act:
+                                    act["scroll_amount"] = auto_scroll_amt
+                    for btn_name in ["check_button", "next_button"]:
+                        btn = result.get(btn_name)
+                        if btn and isinstance(btn, dict):
+                            if "in_scrolled_view" not in btn:
+                                btn["in_scrolled_view"] = True
+                            if "scroll_amount" not in btn:
+                                btn["scroll_amount"] = auto_scroll_amt
                     q_snippet = (result.get('question') or '')[:80]
                     ans = result.get('answer')
                     actions_count = len(result.get('actions', []))
+                else:
+                    # If lower view inspection did not reveal actions, restore viewport to top
+                    logger.info("Lower view inspection did not reveal new actions. Restoring viewport to top...")
+                    self.executor.scroll(auto_scroll_amt, center_x, center_y)
+                    self.executor._viewport_is_scrolled = False
+                    time.sleep(0.35)
 
             # Check question evaluation status (correct, incorrect, unsubmitted)
             eval_info = self.check_question_evaluation_status(result)
@@ -801,6 +817,7 @@ class AssistantEngine:
                             self._discover_and_click_next_button(override_region=self.last_region)
                     if self.config.autonomous_mode and not self.executor.is_stopped():
                         time.sleep(1.2)
+                        self.executor._viewport_is_scrolled = False
                         self.set_state(EngineState.IDLE)
                         self.trigger_solve()
                     return
@@ -1240,6 +1257,7 @@ class AssistantEngine:
                     logger.info(f"Advancing to next question: Waiting {load_delay:.1f}s for page to render...")
                     self._handle_adjustment("⏳ Waiting for next question to load...")
                     time.sleep(load_delay)
+                    self.executor._viewport_is_scrolled = False
                     logger.info("Continuing solve pipeline for next part/question...")
                     self.set_state(EngineState.IDLE)
                     self.trigger_solve()
@@ -1760,6 +1778,13 @@ class AssistantEngine:
 
         is_scrolled = bool(check_btn.get("in_scrolled_view", False))
         scroll_amt = abs(int(check_btn.get("scroll_amount", 500)))
+        btn_y = float(check_btn.get("y", 1000))
+        # Viewport alignment safeguard:
+        # If the viewport is already scrolled down, avoid scrolling back up away from the Check button
+        # unless the button was explicitly detected in the top header (y < 250).
+        if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
+            is_scrolled = True
+            check_btn["in_scrolled_view"] = True
         self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
 
         x = check_btn.get("screen_x", check_btn.get("x"))
@@ -1805,6 +1830,13 @@ class AssistantEngine:
 
         is_scrolled = bool(next_btn.get("in_scrolled_view", False))
         scroll_amt = abs(int(next_btn.get("scroll_amount", 500)))
+        btn_y = float(next_btn.get("y", 1000))
+        # Viewport alignment safeguard:
+        # If the viewport is already scrolled down (e.g. after answering lower view elements),
+        # avoid scrolling back up away from the Next button unless it was explicitly detected in the top header (y < 250).
+        if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
+            is_scrolled = True
+            next_btn["in_scrolled_view"] = True
         self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
 
         x = next_btn.get("screen_x", next_btn.get("x"))

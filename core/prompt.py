@@ -95,6 +95,7 @@ Your tasks are:
      * When both images are provided:
        - If an action targets an element in Image 2 (the scrolled lower view), include "in_scrolled_view": true in that action.
        - If an action targets an element in Image 1 (the upper view), include "in_scrolled_view": false in that action.
+       - If "check_button" or "next_button" is located in Image 2 (the scrolled lower view), include "in_scrolled_view": true in that button object.
    - DROPDOWN QUESTIONS & SELECT MENUS:
      If the question contains one or more DROPDOWN MENUS / SELECT BOXES (with arrows ▼, ▾, ˅, or "Choose...", "Select...", or inline fill-in blanks that have arrows or seem like they cannot be filled in with the given information without seeing the menu options):
      DO NOT guess or assume the choices if they are hidden!

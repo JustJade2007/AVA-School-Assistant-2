@@ -104,6 +104,7 @@ class AutomationExecutor:
         self._is_executing = False
         self._input_stream_lock = threading.Lock()
         self._viewport_is_scrolled = False
+        self._last_scroll_center = None
 
     def is_input_active(self) -> bool:
         """Returns True if an automation input stream is currently active."""
@@ -310,8 +311,22 @@ class AutomationExecutor:
     def scroll(self, clicks: int, x: Optional[int] = None, y: Optional[int] = None):
         """Scrolls mouse wheel."""
         self._check_stop()
-        if x is not None and y is not None:
-            self.move_mouse_humanized(x, y)
+        target_x = x
+        target_y = y
+        if target_x is None or target_y is None:
+            if getattr(self, "_last_scroll_center", None) is not None:
+                target_x, target_y = self._last_scroll_center
+            else:
+                try:
+                    w, h = pyautogui.size()
+                    target_x, target_y = w // 2, h // 2
+                except Exception:
+                    pass
+
+        if target_x is not None and target_y is not None:
+            self.move_mouse_humanized(target_x, target_y)
+            self._last_scroll_center = (target_x, target_y)
+
         self._check_stop()
         pyautogui.scroll(clicks)
 
@@ -329,16 +344,30 @@ class AutomationExecutor:
         """
         self._check_stop()
         scroll_amt = abs(int(scroll_amount))
+        target_x = center_x
+        target_y = center_y
+        if target_x is None or target_y is None:
+            if getattr(self, "_last_scroll_center", None) is not None:
+                target_x, target_y = self._last_scroll_center
+            else:
+                try:
+                    w, h = pyautogui.size()
+                    target_x, target_y = w // 2, h // 2
+                except Exception:
+                    pass
+
         if scrolled and not self._viewport_is_scrolled:
-            logger.info(f"Viewport alignment: scrolling down {scroll_amt}px to access lower view elements...")
-            self.scroll(-scroll_amt, center_x, center_y)
+            logger.info(f"Viewport alignment: scrolling down {scroll_amt}px at ({target_x}, {target_y}) to access lower view elements...")
+            self.scroll(-scroll_amt, target_x, target_y)
             self._viewport_is_scrolled = True
-            time.sleep(0.3)
+            # Allow browser smooth scroll animation to settle completely before any input
+            time.sleep(0.45)
         elif not scrolled and self._viewport_is_scrolled:
-            logger.info(f"Viewport alignment: scrolling up {scroll_amt}px to access upper view elements...")
-            self.scroll(scroll_amt, center_x, center_y)
+            logger.info(f"Viewport alignment: scrolling up {scroll_amt}px at ({target_x}, {target_y}) to access upper view elements...")
+            self.scroll(scroll_amt, target_x, target_y)
             self._viewport_is_scrolled = False
-            time.sleep(0.3)
+            # Allow browser smooth scroll animation to settle completely before any input
+            time.sleep(0.45)
 
     def key_press(self, key: str):
         """Presses an individual key or combo (e.g. 'enter', 'tab', 'ctrl+a')."""

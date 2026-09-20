@@ -752,6 +752,15 @@ class AIClient:
                     btn["screen_y"] = sy
                     logger.info(f"Target mapped [{btn_key}]: model=({btn['x']}, {btn['y']}) -> screen=({sx}, {sy})")
 
+        # Propagate in_scrolled_view to navigation buttons if actions or question elements target lower view
+        has_scrolled_actions = any(bool(a.get("in_scrolled_view")) for a in result.get("actions", []))
+        for nav_key in ["check_button", "next_button"]:
+            btn = result.get(nav_key)
+            if btn and isinstance(btn, dict) and "in_scrolled_view" not in btn:
+                by = float(btn.get("y", 1000))
+                if has_scrolled_actions or by >= 350:
+                    btn["in_scrolled_view"] = True
+
         # Process and normalize evaluation status, rethinking, and question/answer
         any_incorrect = False
         all_correct = True if (isinstance(items, list) and items) else False

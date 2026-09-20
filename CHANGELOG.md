@@ -8,6 +8,22 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.4.d] - 2026-09-20
+
+### Fixed & Improved
+- **Viewport Scroll Stabilization & Rapid Jitter Elimination**:
+  - Eliminated the rapid "scroll down and scroll up" viewport jump during question inspection and cut-off detection in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py).
+  - Retained the scrolled viewport position after capturing the lower area (`_viewport_is_scrolled = True`), ensuring the screen remains aligned with the lower view for immediate, jitter-free action execution without scroll inertia drift.
+- **Answer Button Localization & Click Accuracy**:
+  - Resolved missed answer clicks by maintaining the scrolled view and auto-tagging all actions and multi-part items discovered during lower view inspection with `in_scrolled_view: True`.
+  - Added center tracking (`_last_scroll_center`) in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py) so `scroll` and `ensure_scrolled_view` always target the validated content area rather than arbitrary cursor positions.
+  - Added a 0.45s smooth scroll deceleration settling buffer to allow browser inertial scrolling animations to come to a full stop before input clicks are executed.
+- **Next / Check Button Alignment Safeguard**:
+  - Fixed the issue where AVA would answer a question in the scrolled view and then scroll back up to the top to click where the Next button was when scrolled down.
+  - Implemented a viewport alignment safeguard in `trigger_check_button` and `trigger_next_button` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py): if the viewport is currently scrolled down and the button is situated in the lower viewport (`y >= 250`), AVA retains the scrolled position and clicks the button directly on screen instead of scrolling away.
+  - Automatically propagated `in_scrolled_view: True` to navigation buttons in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) when question actions target the lower view.
+  - Updated prompt guidelines in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) for clear attribution of `check_button` and `next_button` in Image 2.
+
 ## [2.1.4.c] - 2026-09-20
 
 ### Fixed

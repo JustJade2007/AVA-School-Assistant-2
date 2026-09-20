@@ -931,7 +931,7 @@ class LocalVisualVerifier:
         self,
         image: Optional[Image.Image] = None,
         region: Optional[Tuple[int, int, int, int]] = None,
-        min_cluster_pixels: int = 250
+        min_cluster_pixels: int = 1200
     ) -> Dict[str, Any]:
         """
         Inspects an image or screen capture for high-contrast visual grading markers:
@@ -1074,7 +1074,7 @@ class LocalVisualVerifier:
             except Exception as e:
                 logger.debug(f"Differential evaluation mask error: {e}")
 
-        markers = self.detect_platform_evaluation_markers(target_img, min_cluster_pixels=250)
+        markers = self.detect_platform_evaluation_markers(target_img, min_cluster_pixels=1200)
         markers["is_incorrect"] = (markers.get("status") == "incorrect")
         markers["is_correct"] = (markers.get("status") == "correct")
         markers["screen_transitioned"] = trans_ok

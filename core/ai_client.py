@@ -836,9 +836,14 @@ class AIClient:
             result.setdefault("is_rethinking", False)
             result.setdefault("rethink_reasoning", "")
 
-            # INVARIANT: An unsubmitted question with 0 actions can NEVER be marked ready to advance!
-            # (Prevents skipping unanswered questions due to model hallucination or missing action generation)
-            if result.get("evaluation_status") == "unsubmitted" and not result.get("actions") and not any(itm.get("actions") for itm in items if isinstance(itm, dict)):
+            # INVARIANT: An unsubmitted question with 0 actions can NEVER be marked ready to advance
+            # UNLESS the answer is already filled out and confirmed right on screen (needs_action is False).
+            if (
+                result.get("evaluation_status") == "unsubmitted"
+                and not result.get("actions")
+                and not any(itm.get("actions") for itm in items if isinstance(itm, dict))
+                and result.get("needs_action") is not False
+            ):
                 q_text = str(result.get("question", "")).strip().lower()
                 is_interstitial = (
                     not q_text
@@ -846,7 +851,7 @@ class AIClient:
                     and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation"])
                 )
                 if not is_interstitial:
-                    logger.warning("Unsubmitted question has zero actions. Forcing ready_to_advance = False to prevent skipping unanswered question.")
+                    logger.warning("Unsubmitted question has zero actions and needs action. Forcing ready_to_advance = False to prevent skipping unanswered question.")
                     result["ready_to_advance"] = False
 
         result.setdefault("platform_feedback", "")

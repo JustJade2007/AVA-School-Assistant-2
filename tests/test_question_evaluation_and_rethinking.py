@@ -405,6 +405,67 @@ class TestQuestionEvaluationAndRethinking(unittest.TestCase):
 
         self.assertFalse(raw_result["ready_to_advance"])
 
+    def test_already_answered_on_screen_allows_advance(self):
+        """
+        Verifies that when an answer is already filled and right on screen (needs_action=False, actions=[]),
+        check_question_evaluation_status recognizes it as answered and ready to advance.
+        """
+        result = {
+            "question": "Which planet is closest to the Sun?",
+            "answer": "Mercury",
+            "evaluation_status": "unsubmitted",
+            "needs_action": False,
+            "actions": [],
+            "next_button": {"screen_x": 800, "screen_y": 800}
+        }
+
+        eval_info = self.engine.check_question_evaluation_status(result)
+        self.assertTrue(eval_info["is_answered"])
+        self.assertTrue(eval_info["ready_to_advance"])
+        self.assertFalse(eval_info["is_rethinking"])
+
+    def test_minor_red_pixels_do_not_falsely_mark_incorrect(self):
+        """
+        Verifies that minor red UI elements (e.g. 300 red pixels from a logo or button)
+        do not trigger a false-positive incorrect platform evaluation marker.
+        """
+        img = Image.new("RGB", (400, 300), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        # Draw small red box (~300 pixels)
+        draw.rectangle([10, 10, 26, 26], fill=(220, 20, 20))
+
+        markers = self.verifier.detect_platform_evaluation_markers(img)
+        self.assertFalse(markers["is_incorrect"])
+        self.assertEqual(markers["status"], "unsubmitted")
+
+    @patch("core.assistant_engine.AIClient")
+    def test_solve_pipeline_zero_actions_no_unbound_local_error(self, mock_ai_cls):
+        """
+        Verifies that _run_solve_pipeline does NOT raise UnboundLocalError on extra_images
+        when actions_count == 0 on a regular solve without needs_more_info.
+        """
+        mock_ai_instance = MagicMock()
+        mock_ai_instance.solve_screen.return_value = {
+            "question": "Solve the equation",
+            "answer": "x = 5",
+            "actions": [],
+            "needs_action": False,
+            "next_button": None,
+            "evaluation_status": "unsubmitted"
+        }
+        mock_ai_cls.return_value = mock_ai_instance
+
+        # Mock capture
+        self.engine.capture.capture_and_encode = MagicMock(return_value=("fake_b64", 800, 600, 1.0, 1.0, 0, 0))
+        self.engine.capture.capture_screen = MagicMock(return_value=Image.new("RGB", (800, 600), (200, 200, 200)))
+        self.engine.config_manager.config.reading_delay_enabled = False
+
+        # Run pipeline - must NOT raise UnboundLocalError
+        try:
+            self.engine._run_solve_pipeline()
+        except UnboundLocalError as err:
+            self.fail(f"_run_solve_pipeline raised UnboundLocalError: {err}")
+
 
 if __name__ == "__main__":
     unittest.main()

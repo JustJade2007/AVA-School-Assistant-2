@@ -289,17 +289,33 @@ class AssistantEngine:
                 res["existing_written_text"] = None
 
         # Combine signals:
-        # 1. If AI or visual markers indicate incorrect
-        if eval_status in ["incorrect", "wrong"] or any_item_incorrect or (local_markers.get("detected") and local_markers.get("status") == "incorrect"):
+        # 1. If AI explicitly indicates incorrect
+        if eval_status in ["incorrect", "wrong"] or any_item_incorrect:
             final_status = "incorrect"
             is_answered = False  # NEVER considered answered when marked incorrect!
             is_rethinking = True
             if not rethink_reasoning:
                 rethink_reasoning = "Question marked incorrect by platform. Rethinking problem and entry format."
-            details = f"marked_incorrect (ai={eval_status}, visual={local_markers.get('details', '')})"
+            details = f"marked_incorrect (ai={eval_status})"
+
+        # 1b. If visual markers indicate incorrect with high confidence & high pixel count (and not contradicted by AI 'correct' or 'needs_action=False')
+        elif (
+            local_markers.get("detected")
+            and local_markers.get("status") == "incorrect"
+            and local_markers.get("confidence", 0) >= 0.88
+            and local_markers.get("red_pixels", 0) >= 1200
+            and eval_status not in ["correct", "right"]
+            and res.get("needs_action") is not False
+        ):
+            final_status = "incorrect"
+            is_answered = False
+            is_rethinking = True
+            if not rethink_reasoning:
+                rethink_reasoning = "Platform visual error indicator detected. Rethinking entry."
+            details = f"marked_incorrect (visual={local_markers.get('details', '')})"
 
         # 2. If visual markers explicitly indicate correct
-        elif local_markers.get("detected") and local_markers.get("status") == "correct":
+        elif local_markers.get("detected") and local_markers.get("status") == "correct" and local_markers.get("confidence", 0) >= 0.85:
             final_status = "correct"
             is_answered = True
             is_rethinking = False
@@ -319,20 +335,27 @@ class AssistantEngine:
                 is_rethinking = False
                 details = f"marked_correct (ai={eval_status}, visual={local_markers.get('details', '')})"
 
-        # 4. Otherwise, unsubmitted
+        # 4. If answer is already in place and confirmed right on screen (needs_action is False, 0 actions required)
+        elif res.get("needs_action") is False and len(res.get("actions", [])) == 0 and not any_item_incorrect:
+            final_status = "unsubmitted"
+            is_answered = True
+            is_rethinking = False
+            details = "already_answered_on_screen (needs_action=False, actions=0)"
+
+        # 5. Otherwise, unsubmitted
         else:
             final_status = "unsubmitted"
             is_rethinking = False
             has_answer = bool(res.get("answer") and res.get("answer") not in ["Answer determined", ""])
-            # Invariant: An unsubmitted question has NOT been answered on screen yet!
             is_answered = False
             details = f"unsubmitted (draft_ready={has_answer})"
 
-        # Invariant: Unsubmitted questions cannot advance until actions are executed on screen!
+        # Determine ready_to_advance:
         if final_status == "correct":
             ready_to_advance = True
+        elif is_answered and (res.get("next_button") or str(res.get("advance_action", "")).lower() == "scroll_down"):
+            ready_to_advance = True
         else:
-            # For unsubmitted or incorrect questions, advancing is strictly gated
             ready_to_advance = False
 
         self.last_verification_detail = details
@@ -460,10 +483,11 @@ class AssistantEngine:
                 coordinate_mode=self.config.coordinate_mode
             )
 
+            extra_images: List[str] = []
+
             # 3. Supplementary Information Inspection Phase (reference sheet modal or scrolled content)
             if result.get("status") == "needs_more_info" and self.config.auto_inspect_references and not self.executor.is_stopped():
                 info_type = result.get("info_type", "")
-                extra_images = []
 
                 if info_type == "open_reference":
                     ref_btn = result.get("reference_button")
@@ -665,7 +689,7 @@ class AssistantEngine:
                 or any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
                 and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation", "explain", "describe"])
             )
-            if actions_count == 0 and not is_interstitial and not extra_images and not result.get("next_button") and not self.executor.is_stopped():
+            if actions_count == 0 and not is_interstitial and not extra_images and not result.get("next_button") and result.get("needs_action") is not False and not self.executor.is_stopped():
                 logger.info("No input actions detected in top view. Possible cut-off question; scrolling down 500px to inspect lower area...")
                 self.set_state(EngineState.INSPECTING, "Scrolling down to inspect lower question area...")
                 self._handle_adjustment("📜 Cut-off question check: scrolling down to view remainder...")
@@ -706,6 +730,7 @@ class AssistantEngine:
                 )
                 if scrolled_result and len(scrolled_result.get("actions", [])) > 0:
                     logger.info(f"Lower view inspection found {len(scrolled_result.get('actions', []))} action(s)!")
+                    extra_images = [scrolled_b64]
                     result = scrolled_result
                     q_snippet = (result.get('question') or '')[:80]
                     ans = result.get('answer')
@@ -744,13 +769,24 @@ class AssistantEngine:
             self.last_error = None
             self._notify_result(result)
 
-            # If all parts are already confirmed CORRECT by platform and no actions are required
-            if (
-                eval_info["status"] == "correct"
-                and (not result.get("needs_action") or len(result.get("actions", [])) == 0)
+            # If all parts are already confirmed CORRECT by platform and no actions are required,
+            # OR if question answer is already in place on screen (needs_action=False, actions=0) and ready to advance
+            is_already_filled = (
+                result.get("needs_action") is False
+                and len(result.get("actions", [])) == 0
                 and not result.get("check_button")
+                and eval_info["status"] != "incorrect"
+                and not bool(result.get("is_rethinking"))
+                and bool(result.get("next_button") or str(result.get("advance_action", "")).lower() == "scroll_down")
+            )
+            if (
+                (eval_info["status"] == "correct" and (not result.get("needs_action") or len(result.get("actions", [])) == 0) and not result.get("check_button"))
+                or is_already_filled
             ):
-                logger.info("Question is already marked CORRECT by platform on screen. No input actions needed.")
+                if eval_info["status"] == "correct":
+                    logger.info("Question is already marked CORRECT by platform on screen. No input actions needed.")
+                else:
+                    logger.info("Question answer is already in place on screen (needs_action=False). Advancing to next question...")
                 if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
                     time.sleep(0.4)
                     advance_action = str(result.get("advance_action", "")).lower()
@@ -769,7 +805,8 @@ class AssistantEngine:
                         self.trigger_solve()
                     return
                 else:
-                    self.set_state(EngineState.IDLE, "Question confirmed correct")
+                    msg = "Question confirmed correct" if eval_info["status"] == "correct" else "Question already answered on screen"
+                    self.set_state(EngineState.IDLE, msg)
                     return
 
             is_multi_part = result.get("is_multi_part", False)
@@ -914,9 +951,15 @@ class AssistantEngine:
         # CRITICAL SAFETY INVARIANT: Prevent skipping unanswered questions
         # If there are zero actions, no submission check button, and the question is unsubmitted/needs action
         has_submission_action = bool(self.last_result.get("check_button"))
+        is_already_answered = (
+            self.last_result.get("needs_action") is False
+            and not actions
+            and not bool(self.last_result.get("is_rethinking"))
+            and self.last_result.get("evaluation_status") != "incorrect"
+        )
         is_unsubmitted = (
-            self.last_result.get("evaluation_status") == "unsubmitted"
-            or self.last_result.get("needs_action") is True
+            (self.last_result.get("evaluation_status") == "unsubmitted" or self.last_result.get("needs_action") is True)
+            and not is_already_answered
         )
         if not actions and not has_submission_action and is_unsubmitted:
             q_text = str(self.last_result.get("question", "")).strip().lower()
@@ -1049,7 +1092,7 @@ class AssistantEngine:
                 return
 
             # Check if auto next or multi-part continuation is applicable
-            if (is_answered or verification.get("all_verified", False) or verification.get("verified_count", 0) > 0) and not has_pending_items:
+            if (is_answered or is_already_answered or verification.get("all_verified", False) or verification.get("verified_count", 0) > 0) and not has_pending_items:
                 self.last_result["ready_to_advance"] = True
             elif has_pending_items:
                 self.last_result["ready_to_advance"] = False
@@ -1118,7 +1161,7 @@ class AssistantEngine:
 
                         # If platform marked the answer as INCORRECT:
                         # Prevent softlocking continuously giving an incorrect answer by immediately halting advance and rethinking
-                        if post_eval.get("status") == "incorrect" and post_eval.get("confidence", 0) >= 0.85:
+                        if post_eval.get("status") == "incorrect" and post_eval.get("confidence", 0) >= 0.90 and post_eval.get("red_pixels", 0) >= 1200:
                             logger.warning("Post-submission evaluation: Platform marked answer as INCORRECT! Halting advance and triggering rethink loop...")
                             self._handle_adjustment("⚠️ Answer marked INCORRECT by platform! Rethinking solution & format...")
                             self.last_result["ready_to_advance"] = False

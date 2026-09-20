@@ -8,6 +8,19 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.4.c] - 2026-09-20
+
+### Fixed
+- **AI Vision `extra_images` UnboundLocalError Fix**:
+  - Fixed `UnboundLocalError: cannot access local variable 'extra_images' where it is not associated with a value` in `_run_solve_pipeline` ([core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py)).
+  - Initialized `extra_images = []` in all execution branches prior to the supplementary inspection phase, ensuring the variable is always defined when evaluating question cut-off heuristics.
+- **Answered Question Evaluation Status & False "Incorrect" / "Unanswered" Prevention**:
+  - Prevented answered questions from being falsely categorized as "incorrect" or "unanswered" during automated answering.
+  - Raised the visual platform evaluation marker threshold (`min_cluster_pixels`) from 250 to 1200 in [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py) and [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), preventing minor red UI elements (logos, banners, buttons) from triggering false rethink cycles.
+  - Prevented local visual markers from overriding AI evaluation when the AI model explicitly confirms `eval_status == 'correct'` or `needs_action is False`.
+  - Updated `check_question_evaluation_status` and `execute_current_solution` to recognize when an answer is already filled out and correct on screen (`needs_action is False`, 0 actions required), marking `is_answered = True` and allowing auto-advancing via `next_button` rather than halting or redoing.
+  - Updated `AIClient._map_coordinates` in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) to preserve `ready_to_advance = True` when `needs_action is False`.
+
 ## [2.1.4.b] - 2026-09-20
 
 ### Fixed

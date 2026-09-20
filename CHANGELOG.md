@@ -8,6 +8,13 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.1.b] - 2026-09-20
+
+### Fixed
+- **Web & YouTube Citation Generator Parameter Mismatch**:
+  - Added `format_style` parameter and `**kwargs` support to `CitationGenerator.generate()` and `CitationGenerator.generate_citation()` to resolve `TypeError: got an unexpected keyword argument 'format_style'` during web article and YouTube source ingestion.
+  - Added defensive error boundaries around citation generation in `ui/playground/workspace.py` for both manual link ingestion and embedded YouTube auto-import.
+
 ## [2.1.1.a] - 2026-09-20
 
 ### Added

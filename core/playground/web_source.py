@@ -272,16 +272,32 @@ class CitationGenerator:
     """Generates formal academic bibliographic citations according to style guides."""
 
     @classmethod
-    def generate(cls, source_data: Dict[str, Any], style: str = "MLA") -> str:
-        return cls.generate_citation(source_data, style)
+    def generate(
+        cls,
+        source_data: Optional[Dict[str, Any]] = None,
+        style: str = "MLA",
+        format_style: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        chosen = format_style or style or "MLA"
+        return cls.generate_citation(source_data, style=chosen, **kwargs)
 
     @classmethod
-    def generate_citation(cls, source_data: Dict[str, Any], style: str = "MLA") -> str:
+    def generate_citation(
+        cls,
+        source_data: Optional[Dict[str, Any]] = None,
+        style: str = "MLA",
+        format_style: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         """
         Creates a formatted citation string for Works Cited / References.
         Supported styles: 'MLA', 'APA', 'Standard Report' (Chicago).
         """
-        style_norm = (style or "MLA").upper()
+        if not source_data:
+            source_data = {}
+        chosen_style = format_style or style or "MLA"
+        style_norm = (chosen_style or "MLA").upper()
         title = source_data.get("title") or "Source Material"
         author = source_data.get("author") or ""
         url = source_data.get("url") or source_data.get("file_path") or ""

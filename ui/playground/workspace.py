@@ -661,9 +661,16 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                     )
                     self.project.sources.append(src)
 
-                    citation = CitationGenerator.generate(result, format_style=self.project.formatting_preset)
-                    if citation and citation not in self.project.bibliography_entries:
-                        self.project.bibliography_entries.append(citation)
+                    try:
+                        citation = CitationGenerator.generate(
+                            result,
+                            style=self.project.formatting_preset,
+                            format_style=self.project.formatting_preset,
+                        )
+                        if citation and citation not in self.project.bibliography_entries:
+                            self.project.bibliography_entries.append(citation)
+                    except Exception as cite_err:
+                        logger.warning(f"Could not generate citation for {url}: {cite_err}")
 
                     self.after(0, lambda: self._finish_web_ingest(sub_win, src))
                 except Exception as e:
@@ -711,9 +718,16 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                             file_path=u
                         )
                         self.project.sources.append(src)
-                        cit = CitationGenerator.generate(res, format_style=self.project.formatting_preset)
-                        if cit and cit not in self.project.bibliography_entries:
-                            self.project.bibliography_entries.append(cit)
+                        try:
+                            cit = CitationGenerator.generate(
+                                res,
+                                style=self.project.formatting_preset,
+                                format_style=self.project.formatting_preset,
+                            )
+                            if cit and cit not in self.project.bibliography_entries:
+                                self.project.bibliography_entries.append(cit)
+                        except Exception as cite_err:
+                            logger.warning(f"Could not generate citation for auto-imported YouTube link {u}: {cite_err}")
                         self.after(0, self._render_sources_list)
                 except Exception as ex:
                     logger.warning(f"Could not auto-import youtube link {u}: {ex}")

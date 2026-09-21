@@ -68,7 +68,7 @@ class HUDOverlay(ctk.CTkToplevel):
         attach_minimize_restore_handlers(
             self,
             is_cloaked_getter=lambda: self.config.anti_capture_enabled,
-            on_restore=lambda: (self.attributes("-topmost", True), self.apply_cloak())
+            on_restore=self._on_overlay_restored
         )
 
         # Position on screen (width supports generous room for header controls)
@@ -1023,16 +1023,25 @@ class HUDOverlay(ctk.CTkToplevel):
             self.geometry(f"460x320")
 
     def minimize_overlay(self):
-        """Minimizes the HUD overlay to the Windows taskbar normally."""
+        """Minimizes the HUD overlay to the Windows taskbar normally without exposing native titlebar."""
         self.is_hidden = False
         try:
             if hasattr(self, "visualizer") and self.visualizer:
                 self.visualizer.clear()
-            from core.cloaking import get_window_hwnd, apply_anti_capture
-            hwnd = get_window_hwnd(self)
-            if hwnd:
-                apply_anti_capture(hwnd, enable=False)
-            self.overrideredirect(False)
+            import sys
+            if sys.platform == "win32":
+                import ctypes
+                from core.cloaking import get_window_hwnd, apply_anti_capture
+                from ui.window_utils import ensure_taskbar_presence
+                hwnd = get_window_hwnd(self)
+                if hwnd:
+                    ensure_taskbar_presence(self)
+                    apply_anti_capture(hwnd, enable=False)
+                    # Asynchronously post SC_MINIMIZE to Win32 message queue so overrideredirect is preserved
+                    WM_SYSCOMMAND = 0x0112
+                    SC_MINIMIZE = 0xF020
+                    ctypes.windll.user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0)
+                    return
             self.iconify()
         except Exception as e:
             logger.debug(f"Error in minimize_overlay: {e}")
@@ -1042,15 +1051,47 @@ class HUDOverlay(ctk.CTkToplevel):
         """Hides the overlay window from the screen (delegates to minimize_overlay)."""
         self.minimize_overlay()
 
-    def show_overlay(self):
-        """Shows and restores the overlay to topmost with cloaking intact."""
-        self.is_hidden = False
+    def _on_overlay_restored(self):
+        """Ensures that upon restoring from taskbar, borderless styling and cloaking are strictly enforced."""
         try:
-            self.deiconify()
             self.overrideredirect(True)
             self.lift()
             self.attributes("-topmost", True)
             self.apply_cloak()
+            import sys
+            if sys.platform == "win32":
+                import ctypes
+                from core.cloaking import get_window_hwnd
+                from ui.window_utils import ensure_taskbar_presence
+                hwnd = get_window_hwnd(self)
+                if hwnd:
+                    ensure_taskbar_presence(self)
+                    user32 = ctypes.windll.user32
+                    GWL_STYLE = -16
+                    WS_CAPTION = 0x00C00000
+                    WS_THICKFRAME = 0x00040000
+                    st = user32.GetWindowLongW(hwnd, GWL_STYLE)
+                    if st & (WS_CAPTION | WS_THICKFRAME):
+                        user32.SetWindowLongW(hwnd, GWL_STYLE, st & ~(WS_CAPTION | WS_THICKFRAME))
+                        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0004 | 0x0020)
+        except Exception as e:
+            logger.debug(f"Error in _on_overlay_restored: {e}")
+
+    def show_overlay(self):
+        """Shows and restores the overlay to topmost with cloaking intact without native titlebar."""
+        self.is_hidden = False
+        try:
+            import sys
+            if sys.platform == "win32":
+                import ctypes
+                from core.cloaking import get_window_hwnd
+                hwnd = get_window_hwnd(self)
+                if hwnd:
+                    WM_SYSCOMMAND = 0x0112
+                    SC_RESTORE = 0xF120
+                    ctypes.windll.user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0)
+            self.deiconify()
+            self._on_overlay_restored()
         except Exception as e:
             logger.debug(f"Error in show_overlay: {e}")
 

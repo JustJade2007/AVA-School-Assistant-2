@@ -21,6 +21,10 @@ The version format is `1.2.3.a`:
   - Implemented dynamic display affinity state management via `attach_minimize_restore_handlers()`: temporarily lifts `WDA_EXCLUDEFROMCAPTURE` when windows enter the iconic state to avoid DWM shell enumeration and thumbnail dropout, seamlessly re-enabling anti-capture cloaking upon window restoration.
   - Refactored HUD overlay minimize action (`self.minimize_overlay()`) in [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py) so clicking `—` minimizes normally to the taskbar instead of disappearing via withdraw.
   - Integrated native Win32 `WM_SETICON` loading for 16x16 and 32x32 icons in [ui/asset_loader.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/asset_loader.py) and [ui/window_utils.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/window_utils.py) to ensure custom branding persists on the Windows taskbar and Alt-Tab switcher across all modes.
+- **Automated Worker Reopen Title Bar Elimination**:
+  - Eliminated `overrideredirect(False)` toggling during HUD overlay minimization in [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py), preserving `overrideredirect(True)` throughout the entire window lifecycle and preventing the default Windows title bar (`WS_CAPTION`) from ever displaying upon restore.
+  - Implemented asynchronous Win32 `SC_MINIMIZE` dispatch via `PostMessageW`, enabling standard taskbar minimization without native frame generation.
+  - Added `_on_overlay_restored` callback in [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py) to strictly re-apply borderless styling, topmost layer, stealth cloaking, and strip `WS_CAPTION` / `WS_THICKFRAME` extended styles whenever the worker is reopened from the taskbar, Alt-Tab, or duplicate launcher activation.
 
 ## [2.1.4.f] - 2026-09-20
 

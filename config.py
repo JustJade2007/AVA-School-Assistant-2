@@ -100,7 +100,7 @@ CONFIG_FILE_PATH = get_config_file_path()
 DEFAULT_CONFIG_FILE_PATH = get_default_config_file_path()
 
 # Application metadata
-APP_VERSION = "2.2.4.a"
+APP_VERSION = "2.2.5.a"
 GITHUB_REPO = "JustJade2007/AVA-School-Assistant-2"
 
 # Available default model choices
@@ -202,6 +202,8 @@ class AppConfig:
     overlay_y: int = 40
     overlay_width: int = 490
     header_icon_size: int = 11
+    # Planned Click & Navigation Button Visualizer Overlay (toggleable debug screen)
+    show_target_overlay: bool = False
 
     # Capture & Display Resolution Settings
     capture_mode: str = "fullscreen"  # "fullscreen" or "roi"

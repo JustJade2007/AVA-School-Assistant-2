@@ -32,6 +32,7 @@ hiddenimports = [
     'ui.asset_loader',
     'ui.window_utils',
     'ui.hud_icons',
+    'core.visual_grounding',
     'core.single_instance',
     'humanizer',
     'docx',

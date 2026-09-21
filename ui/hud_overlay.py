@@ -256,6 +256,24 @@ class HUDOverlay(ctk.CTkToplevel):
         )
         self.btn_debug.pack(side="right", padx=1)
 
+        # 5b. Target Visualizer Toggle (toggleable debug screen for planned clicks & next button)
+        is_target_active = bool(getattr(self.config, "show_target_overlay", False))
+        target_color = "#00ffcc" if is_target_active else "#94a3b8"
+        target_bg = "#0f766e" if is_target_active else "#3f3f46"
+        target_hover = "#14b8a6" if is_target_active else "#52525b"
+        self.btn_target_overlay = ctk.CTkButton(
+            self.header_actions_frame,
+            text="",
+            image=get_hud_icon("target", size=(self.icon_size, self.icon_size), color=target_color),
+            width=btn_wh,
+            height=btn_wh,
+            corner_radius=corner_rad,
+            fg_color=target_bg,
+            hover_color=target_hover,
+            command=self.toggle_target_overlay
+        )
+        self.btn_target_overlay.pack(side="right", padx=1)
+
         # 6. Quick Snip Tool (cutout button) - sleek circular accent
         snip_wh = max(22, btn_wh - 2)
         snip_corner = snip_wh // 2
@@ -885,6 +903,10 @@ class HUDOverlay(ctk.CTkToplevel):
             else:
                 self._stop_status_pulse()
 
+        if state in [EngineState.EXECUTING, EngineState.SCANNING, EngineState.THINKING, EngineState.NAVIGATING]:
+            if hasattr(self, "visualizer") and self.visualizer:
+                self.visualizer.clear()
+
         # Update confirm button label & styling based on state
         hk_confirm = self.config.hotkeys.get("confirm_action", "F9")
         if is_unverified or is_unverified_retry:
@@ -1024,6 +1046,37 @@ class HUDOverlay(ctk.CTkToplevel):
             engine=self.engine,
             open_error_tab=open_error_tab,
             initial_error=self.engine.last_error
+        )
+
+    def toggle_target_overlay(self):
+        """Toggles the on-screen action click targets and next button debug visualizer."""
+        new_val = not getattr(self.config, "show_target_overlay", False)
+        self.config_manager.update({"show_target_overlay": new_val})
+        self._update_target_overlay_btn_state()
+        if new_val:
+            self._show_adjustment_toast("Target & Next overlay: ON")
+            if self.engine.last_result:
+                actions = self.engine.last_result.get("actions", [])
+                next_btn = self.engine.last_result.get("next_button")
+                check_btn = self.engine.last_result.get("check_button")
+                submit_btn = self.engine.last_result.get("submit_button")
+                self.visualizer.draw_actions(actions, next_btn, check_btn, submit_btn)
+        else:
+            self._show_adjustment_toast("Target & Next overlay: OFF")
+            self.visualizer.clear()
+
+    def _update_target_overlay_btn_state(self):
+        """Updates target overlay header button color based on active state."""
+        if not hasattr(self, "btn_target_overlay") or not self.btn_target_overlay.winfo_exists():
+            return
+        is_active = bool(getattr(self.config, "show_target_overlay", False))
+        color = "#00ffcc" if is_active else "#94a3b8"
+        bg = "#0f766e" if is_active else "#3f3f46"
+        hover = "#14b8a6" if is_active else "#52525b"
+        self.btn_target_overlay.configure(
+            image=get_hud_icon("target", size=(self.icon_size, self.icon_size), color=color),
+            fg_color=bg,
+            hover_color=hover
         )
 
     def _on_engine_result(self, result: Dict[str, Any]):
@@ -1235,8 +1288,11 @@ class HUDOverlay(ctk.CTkToplevel):
         else:
             self.btn_next.configure(text=f"⏭ Next ({hk_next})")
 
-        # Draw targets on cloaked visualizer overlay
-        self.visualizer.draw_actions(actions, next_btn, check_btn, submit_btn)
+        # Draw targets on cloaked visualizer overlay if enabled
+        if getattr(self.config, "show_target_overlay", False):
+            self.visualizer.draw_actions(actions, next_btn, check_btn, submit_btn)
+        else:
+            self.visualizer.clear()
 
     def _on_written_text_edited(self, event=None):
         """Called live as the user types into the written response preview box."""

@@ -8,6 +8,21 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.5.a] - 2026-09-21
+
+### Added & Improved
+- **Zero-Token Visual Grounding (Coordinate Rulers & Set-of-Marks)**:
+  - **Marginal Coordinate Rulers**: Added fine-grained, high-contrast normalized coordinate axes (0..1000) drawn along the top margin (X-axis) and left margin (Y-axis) with major ticks every 100 units and minor ticks every 10/50 units in [core/visual_grounding.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/visual_grounding.py).
+  - **Candidate Control Anchor Detection & Numbered Badges (Set-of-Marks)**: Implemented local computer-vision detection of candidate interactive controls (circular radio buttons, square checkboxes, rectangular input fields, and action buttons). Overlays numbered cyan badges (`[1]`, `[2]`, `[3]`, ...) with high-contrast outlines and builds a spatial `mark_registry`.
+  - **Direct Mark ID Resolution & Proximity Snapping**: In [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py), supported `"mark": <id>` in action output for instant 1:1 anchor resolution, and implemented proximity snapping within 28 normalized units to automatically snap near-miss coordinates directly to the exact pixel center of the visual anchor.
+  - **Zero-Token Integration**: Integrated `capture_and_ground` in [core/capture.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/capture.py) and [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) for both initial solving and double-check visual verification with zero additional token cost.
+  - **Updated AI Prompts**: In [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py), added instructions guiding the vision model to align coordinates with the visual rulers and leverage numbered mark tags.
+- **Toggleable Planned-Clicks & Next-Button Debug Overlay**:
+  - **Configurable Visibility**: Added `show_target_overlay: bool = False` to [config.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/config.py) and [config.default.json](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/config.default.json), ensuring debug overlays do not appear automatically on initial launch.
+  - **HUD Header Quick Toggle**: Added a target crosshair icon button on the HUD overlay bar in [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py) and vector icon in [ui/hud_icons.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_icons.py) to toggle click target and Next button overlays on the fly.
+  - **Settings Dashboard Control**: Added switch under *Execution & Behavior* in [ui/settings_view.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/settings_view.py).
+  - **Conditional Overlay Rendering**: In [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py), updated `show_solution` to only draw planned actions and Next button markers when enabled, clearing any active overlay when toggled off.
+
 ## [2.2.4.a] - 2026-09-21
 
 ### Fixed & Improved

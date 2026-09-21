@@ -166,6 +166,10 @@ IMPORTANT COORDINATE & BOUNDING BOX INSTRUCTIONS:
   * (x=0, y=0) is top-left corner (0%, 0%) of the screenshot.
   * (x=1000, y=1000) is bottom-right corner (100%, 100%) of the screenshot.
   * Example: screen center is x=500, y=500.
+- VISUAL RULERS & SET-OF-MARKS GROUNDING:
+  * The screenshot features normalized 0..1000 coordinate rulers along the top margin (X-axis) and left margin (Y-axis) to verify exact coordinates.
+  * Interactive candidate controls (inputs, options, buttons) may have numbered anchor badges (e.g. [1], [2], [3]...).
+  * When targeting a marked control, you may include "mark": <id> (integer or string) in the action object in addition to (x, y). AVA will automatically snap to the exact pixel center of that anchor mark!
 - For ALL fill-in-the-blank input boxes, text/numeric fields, options, and clickable buttons:
   Provide BOTH "box_2d": [ymin, xmin, ymax, xmax] (representing the exact outer boundary of the box/control, normalized 0..1000)
   AND center coordinates "x": (xmin + xmax) // 2 and "y": (ymin + ymax) // 2.
@@ -447,7 +451,8 @@ If a mistake is found, for example:
   ]
 }}
 
-All coordinates (x, y) must be normalized integers 0..1000.
+All coordinates (x, y) must be normalized integers 0..1000, aligning with the visual rulers on the screenshot.
+If an anchor mark tag [1], [2], ... is visible on the target option or control, you can include "mark": <id> in the corrective action.
 Output raw JSON only.
 """
 

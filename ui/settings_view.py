@@ -738,6 +738,21 @@ class SettingsWindow(ctk.CTkToplevel):
             justify="left"
         ).pack(anchor="w", padx=42, pady=(0, 12))
 
+        # Planned-Click & Next Button Debug Visualizer Switch
+        self.switch_target_overlay = ctk.CTkSwitch(
+            f,
+            text="Show Click Targets & Next Button Overlay (Debug Preview)",
+            font=ctk.CTkFont(weight="bold")
+        )
+        self.switch_target_overlay.pack(anchor="w", padx=12, pady=(4, 4))
+        ctk.CTkLabel(
+            f,
+            text="Draws temporary on-screen click target markers and highlights the Next/Submit button.\nToggleable on the fly using the target crosshair button on the HUD bar.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            justify="left"
+        ).pack(anchor="w", padx=42, pady=(0, 12))
+
     # --- TAB 3: ANTI-CAPTURE & HUD ---
     def _build_cloak_tab(self):
         f = self.tab_cloak
@@ -1195,6 +1210,11 @@ class SettingsWindow(ctk.CTkToplevel):
         else:
             self.switch_local_verification.deselect()
 
+        if getattr(cfg, "show_target_overlay", False):
+            self.switch_target_overlay.select()
+        else:
+            self.switch_target_overlay.deselect()
+
         if cfg.anti_capture_enabled:
             self.switch_anti_capture.select()
         else:
@@ -1365,6 +1385,7 @@ class SettingsWindow(ctk.CTkToplevel):
             click_variance_enabled=bool(self.switch_click_variance.get()),
             smart_typos_enabled=bool(self.switch_smart_typos.get()),
             local_verification_enabled=bool(self.switch_local_verification.get()),
+            show_target_overlay=bool(self.switch_target_overlay.get()),
             humanize_mouse=bool(self.switch_humanize.get()),
             mouse_speed=float(self.slider_mouse_speed.get()),
             anti_capture_enabled=bool(self.switch_anti_capture.get()),

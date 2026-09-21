@@ -57,12 +57,19 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
 11. **Global Hotkeys**:
    - Control the assistant from anywhere on your system, even while other browser or desktop windows are focused.
 12. **Playground Mode (Long-Form Project Studio)**:
-   - Dedicated semi-automated workspace designed for longer writing assignments, essays, capstone projects, and research papers.
-   - **Rubric Ingestion**: Screen-snip rubrics directly or upload files (`.pdf`, `.docx`, `.doc`, `.txt`) and free-form notes. AI automatically extracts grading criteria into an interactive checklist.
-   - **Outline & Rubric Criteria Mapping**: Formulate structured section-by-section outlines mapped to rubric goals with target word counts.
-   - **Interactive Review & Humanizing**: Section-by-section drafting with mandatory user review checkpoints, direct inline editing, prompt refinements, and auto-polishing via **Jade's AI Humanizer**.
-   - **Academic .docx Export**: Full compiled document preview and formatted Word export supporting MLA 9th, APA 7th, and Standard Technical Report presets.
-   - **Complete Isolation**: Suspends all default solving hotkeys (`F8`, etc.) and safely minimizes/hides the HUD overlay until you return.
+    - Dedicated semi-automated workspace designed for longer writing assignments, essays, capstone projects, and research papers.
+    - **Rubric Ingestion**: Screen-snip rubrics directly or upload files (`.pdf`, `.docx`, `.doc`, `.txt`) and free-form notes. AI automatically extracts grading criteria into an interactive checklist.
+    - **Outline & Rubric Criteria Mapping**: Formulate structured section-by-section outlines mapped to rubric goals with target word counts.
+    - **Interactive Review & Humanizing**: Section-by-section drafting with mandatory user review checkpoints, direct inline editing, prompt refinements, and auto-polishing via **Jade's AI Humanizer**.
+    - **Academic .docx Export**: Full compiled document preview and formatted Word export supporting MLA 9th, APA 7th, and Standard Technical Report presets.
+    - **Complete Isolation**: Suspends all default solving hotkeys (`F8`, etc.) and safely minimizes/hides the HUD overlay until you return.
+13. **Zero-Token Visual Grounding (Coordinate Rulers & Set-of-Marks)**:
+    - **Normalized Marginal Rulers**: Overlays fine-grained high-contrast coordinate axes (0..1000) along top and left image boundaries to eliminate spatial estimation errors.
+    - **Candidate Control Numbered Badges (Set-of-Marks)**: Automatically detects interactive controls (radio circles, checkbox squares, inputs, buttons) and stamps numbered badges (`[1]`, `[2]`, `[3]`, ...).
+    - **Proximity Snapping & Direct Mark Targeting**: Resolves explicit `"mark": <id>` output and automatically snaps near-miss model coordinates within 28 normalized units to the exact physical center of the target control.
+    - **0 Additional AI Tokens**: Grounding features are drawn directly onto the image buffer prior to encoding, leveraging flat multimodal vision token costs.
+14. **Toggleable Planned-Click & Next Button Debug Visualizer**:
+    - Complete on-screen preview highlighting planned click markers and Next/Submit buttons is now toggleable on demand via the HUD header target crosshair button or Settings, without popping up on first run.
 
 ---
 

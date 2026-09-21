@@ -154,6 +154,20 @@ def get_hud_icon(name: str, size: Union[int, Tuple[int, int]] = 16, color: str =
         # Center target dot
         draw.ellipse([c - 1.5 * scale, c - 1.5 * scale, c + 1.5 * scale, c + 1.5 * scale], fill=color)
 
+    elif name in ["target", "crosshair"]:
+        # Bullseye target with crosshairs (used for planned-click visualizer toggle)
+        lw = max(1, int(1.4 * scale))
+        outer_r = r * 0.85
+        inner_r = r * 0.45
+        draw.ellipse([c - outer_r, c - outer_r, c + outer_r, c + outer_r], outline=color, width=lw)
+        draw.ellipse([c - inner_r, c - inner_r, c + inner_r, c + inner_r], outline=color, width=lw)
+        draw.ellipse([c - 1.8 * scale, c - 1.8 * scale, c + 1.8 * scale, c + 1.8 * scale], fill=color)
+        # Crosshairs extending outward
+        draw.line([c, pad, c, c - inner_r * 0.6], fill=color, width=lw)
+        draw.line([c, c + inner_r * 0.6, c, canvas_size - pad], fill=color, width=lw)
+        draw.line([pad, c, c - inner_r * 0.6, c], fill=color, width=lw)
+        draw.line([c + inner_r * 0.6, c, canvas_size - pad, c], fill=color, width=lw)
+
     elif name == "playground":
         # Document & quill pen icon
         w = max(2, int(1.8 * scale))

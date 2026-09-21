@@ -617,16 +617,30 @@ class AssistantEngine:
             self.last_region = region
             logger.debug(f"Capturing screen (mode={self.config.capture_mode}, region={region})...")
 
-            (base64_data,
-             curr_w,
-             curr_h,
-             scale_x,
-             scale_y,
-             offset_x,
-             offset_y) = self.capture.capture_and_encode(
-                 region=region,
-                 max_dimension=self.config.max_capture_dimension
-             )
+            mark_registry = {}
+            if hasattr(self.capture, "capture_and_ground"):
+                (base64_data,
+                 curr_w,
+                 curr_h,
+                 scale_x,
+                 scale_y,
+                 offset_x,
+                 offset_y,
+                 mark_registry) = self.capture.capture_and_ground(
+                     region=region,
+                     max_dimension=self.config.max_capture_dimension
+                 )
+            else:
+                (base64_data,
+                 curr_w,
+                 curr_h,
+                 scale_x,
+                 scale_y,
+                 offset_x,
+                 offset_y) = self.capture.capture_and_encode(
+                     region=region,
+                     max_dimension=self.config.max_capture_dimension
+                 )
 
             # Blank screen render guard: if screen is completely blank (e.g. white loading screen), pause and re-capture
             try:
@@ -636,20 +650,33 @@ class AssistantEngine:
                     logger.warning("Blank screen detected (stddev < 1.8). Page is likely loading. Waiting 1.0s before capturing...")
                     self._handle_adjustment("⏳ Waiting for page to finish loading...")
                     time.sleep(1.0)
-                    (base64_data,
-                     curr_w,
-                     curr_h,
-                     scale_x,
-                     scale_y,
-                     offset_x,
-                     offset_y) = self.capture.capture_and_encode(
-                         region=region,
-                         max_dimension=self.config.max_capture_dimension
-                     )
+                    if hasattr(self.capture, "capture_and_ground"):
+                        (base64_data,
+                         curr_w,
+                         curr_h,
+                         scale_x,
+                         scale_y,
+                         offset_x,
+                         offset_y,
+                         mark_registry) = self.capture.capture_and_ground(
+                             region=region,
+                             max_dimension=self.config.max_capture_dimension
+                         )
+                    else:
+                        (base64_data,
+                         curr_w,
+                         curr_h,
+                         scale_x,
+                         scale_y,
+                         offset_x,
+                         offset_y) = self.capture.capture_and_encode(
+                             region=region,
+                             max_dimension=self.config.max_capture_dimension
+                         )
             except Exception as e:
                 logger.debug(f"Blank screen check skipped: {e}")
 
-            logger.debug(f"Capture successful ({curr_w}x{curr_h}, base64 len={len(base64_data)}).")
+            logger.debug(f"Capture successful ({curr_w}x{curr_h}, base64 len={len(base64_data)}, marks={len(mark_registry)}).")
 
             # 2. AI Reasoning Phase
             phase = f"AI Vision ({self.config.ai_provider}:{self.config.model_name})"
@@ -675,7 +702,8 @@ class AssistantEngine:
                 calibration_offset_y=self.config.calibration_offset_y,
                 calibration_scale_x=self.config.calibration_scale_x,
                 calibration_scale_y=self.config.calibration_scale_y,
-                coordinate_mode=self.config.coordinate_mode
+                coordinate_mode=self.config.coordinate_mode,
+                mark_registry=mark_registry
             )
 
             extra_images: List[str] = []
@@ -1840,18 +1868,33 @@ class AssistantEngine:
             # Brief pause for UI rendering / selection animations to finish
             time.sleep(0.25)
 
-            # Fresh capture of the current state
+            # Fresh capture of the current state with visual grounding and mark anchors
+            mark_registry = {}
             try:
-                (base64_data,
-                 curr_w,
-                 curr_h,
-                 scale_x,
-                 scale_y,
-                 offset_x,
-                 offset_y) = self.capture.capture_and_encode(
-                     region=self.last_region,
-                     max_dimension=self.config.max_capture_dimension
-                 )
+                if hasattr(self.capture, "capture_and_ground"):
+                    (base64_data,
+                     curr_w,
+                     curr_h,
+                     scale_x,
+                     scale_y,
+                     offset_x,
+                     offset_y,
+                     mark_registry) = self.capture.capture_and_ground(
+                         region=self.last_region,
+                         max_dimension=self.config.max_capture_dimension,
+                         prior_actions=executed_actions
+                     )
+                else:
+                    (base64_data,
+                     curr_w,
+                     curr_h,
+                     scale_x,
+                     scale_y,
+                     offset_x,
+                     offset_y) = self.capture.capture_and_encode(
+                         region=self.last_region,
+                         max_dimension=self.config.max_capture_dimension
+                     )
             except Exception as e:
                 logger.warning(f"_double_check_answers_on_screen: screen capture failed: {e}")
                 return True
@@ -1871,7 +1914,8 @@ class AssistantEngine:
                 calibration_offset_y=self.config.calibration_offset_y,
                 calibration_scale_x=self.config.calibration_scale_x,
                 calibration_scale_y=self.config.calibration_scale_y,
-                coordinate_mode=self.config.coordinate_mode
+                coordinate_mode=self.config.coordinate_mode,
+                mark_registry=mark_registry
             )
 
             is_correct = check_res.get("double_check_passed", True)

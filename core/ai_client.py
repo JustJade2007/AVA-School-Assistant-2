@@ -143,12 +143,14 @@ class AIClient:
         calibration_scale_x: float = 1.0,
         calibration_scale_y: float = 1.0,
         coordinate_mode: str = "normalized_1000",
-        extra_images: Optional[List[str]] = None
+        extra_images: Optional[List[str]] = None,
+        mark_registry: Optional[Dict[int, Tuple[int, int]]] = None
     ) -> Dict[str, Any]:
         """
         Sends the screenshot to the chosen AI model, parses structured solution,
         and scales action coordinates to global screen pixel coordinates.
         Supports extra_images for supplementary reference views or scrolled content.
+        Supports mark_registry for zero-token Set-of-Marks grounding and coordinate snapping.
         """
         if not self.api_key:
             raise ValueError("API Key is not configured. Please set your API key in Settings.")
@@ -185,7 +187,8 @@ class AIClient:
             calibration_scale_x=calibration_scale_x,
             calibration_scale_y=calibration_scale_y,
             coordinate_mode=coordinate_mode,
-            has_multi_view=has_multi_view
+            has_multi_view=has_multi_view,
+            mark_registry=mark_registry
         )
 
         return result
@@ -325,7 +328,8 @@ class AIClient:
         calibration_offset_y: int = 0,
         calibration_scale_x: float = 1.0,
         calibration_scale_y: float = 1.0,
-        coordinate_mode: str = "normalized_1000"
+        coordinate_mode: str = "normalized_1000",
+        mark_registry: Optional[Dict[int, Tuple[int, int]]] = None
     ) -> Dict[str, Any]:
         """
         Visually double-checks the current screenshot after actions have been executed,
@@ -396,7 +400,8 @@ class AIClient:
                 calibration_scale_x=calibration_scale_x,
                 calibration_scale_y=calibration_scale_y,
                 coordinate_mode=coordinate_mode,
-                has_multi_view=False
+                has_multi_view=False,
+                mark_registry=mark_registry
             )
             corrective_actions = corr_dict.get("actions", [])
 
@@ -747,11 +752,13 @@ class AIClient:
         calibration_scale_x: float = 1.0,
         calibration_scale_y: float = 1.0,
         coordinate_mode: str = "normalized_1000",
-        has_multi_view: bool = False
+        has_multi_view: bool = False,
+        mark_registry: Optional[Dict[int, Tuple[int, int]]] = None
     ):
         """
         Translates coordinates from model output space to real screen desktop space,
         accounting for [0, 1000] normalized grid, high-DPI scaling, and user calibration.
+        Supports visual grounding mark_registry for explicit mark IDs and proximity snapping.
         """
         # Determine target physical dimensions of the captured region
         if image_width is not None and image_width > 0:
@@ -763,6 +770,74 @@ class AIClient:
             target_h = float(image_height * scale_y)
         else:
             target_h = float(1000 * scale_y)
+
+        def _get_mark_coords(entry: Any) -> Tuple[float, float, Optional[int], Optional[int]]:
+            if isinstance(entry, dict):
+                norm_x = float(entry.get("norm_x", entry.get("x", 0)))
+                norm_y = float(entry.get("norm_y", entry.get("y", 0)))
+                sx = entry.get("screen_x")
+                sy = entry.get("screen_y")
+                return norm_x, norm_y, (int(sx) if sx is not None else None), (int(sy) if sy is not None else None)
+            elif isinstance(entry, (list, tuple)):
+                return float(entry[0]), float(entry[1]), None, None
+            return 0.0, 0.0, None, None
+
+        def _resolve_mark_or_snap(obj: Dict[str, Any], label: str = ""):
+            """Resolves explicit Set-of-Marks ID or snaps near-miss coordinates to candidate anchors."""
+            if not mark_registry:
+                return
+
+            # Case 1: Explicit mark provided (e.g. "mark": 3 or "mark": "3")
+            raw_mark = obj.get("mark")
+            if raw_mark is not None:
+                try:
+                    mark_id = int(str(raw_mark).strip().strip("[]"))
+                    if mark_id in mark_registry:
+                        mx, my, msx, msy = _get_mark_coords(mark_registry[mark_id])
+                        logger.info(f"Visual grounding: Resolved {label} mark [{mark_id}] -> norm=({mx}, {my}), screen=({msx}, {msy})")
+                        obj["x"] = mx
+                        obj["y"] = my
+                        obj["grounded_mark"] = mark_id
+                        if msx is not None and msy is not None:
+                            obj["screen_x"] = msx
+                            obj["screen_y"] = msy
+                        return
+                except (ValueError, TypeError):
+                    pass
+
+            # Case 2: Proximity snapping if model gave (x, y) close to a detected mark anchor
+            if "x" in obj and "y" in obj:
+                try:
+                    ox = float(obj["x"])
+                    oy = float(obj["y"])
+                    best_dist = 999999.0
+                    best_mark = None
+                    best_norm = None
+                    best_screen = None
+                    for mid, m_entry in mark_registry.items():
+                        mx, my, msx, msy = _get_mark_coords(m_entry)
+                        dist = ((ox - mx) ** 2 + (oy - my) ** 2) ** 0.5
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_mark = mid
+                            best_norm = (mx, my)
+                            best_screen = (msx, msy)
+
+                    # Snap if within 28 normalized units (~2.8% of screen)
+                    if best_norm and best_dist <= 28.0:
+                        logger.info(
+                            f"Visual grounding: Snapped {label} ({ox:.0f}, {oy:.0f}) to anchor "
+                            f"mark [{best_mark}] ({best_norm[0]}, {best_norm[1]}), dist={best_dist:.1f}"
+                        )
+                        obj["x"] = best_norm[0]
+                        obj["y"] = best_norm[1]
+                        obj["mark"] = best_mark
+                        obj["grounded_mark"] = best_mark
+                        if best_screen and best_screen[0] is not None and best_screen[1] is not None:
+                            obj["screen_x"] = best_screen[0]
+                            obj["screen_y"] = best_screen[1]
+                except (ValueError, TypeError):
+                    pass
 
         def _translate_point(raw_x: float, raw_y: float) -> Tuple[int, int]:
             # Detect whether to treat coordinate as normalized (0..1000) or raw pixel space
@@ -789,6 +864,10 @@ class AIClient:
             if not has_multi_view:
                 # In single-view captures, no scrolled lower view exists; force in_scrolled_view to False
                 action["in_scrolled_view"] = False
+
+            # Set-of-Marks ID resolution and proximity snapping
+            _resolve_mark_or_snap(action, context_label or action_type)
+
             # Support box_2d: [ymin, xmin, ymax, xmax]
             if "box_2d" in action and isinstance(action["box_2d"], (list, tuple)) and len(action["box_2d"]) == 4:
                 b = action["box_2d"]
@@ -812,9 +891,12 @@ class AIClient:
                 action["box_height"] = abs(by2 - by1)
 
             if "x" in action and "y" in action:
-                sx, sy = _translate_point(float(action["x"]), float(action["y"]))
-                action["screen_x"] = sx
-                action["screen_y"] = sy
+                if "screen_x" not in action or "screen_y" not in action:
+                    sx, sy = _translate_point(float(action["x"]), float(action["y"]))
+                    action["screen_x"] = sx
+                    action["screen_y"] = sy
+                else:
+                    sx, sy = action["screen_x"], action["screen_y"]
                 desc = action.get("description", "")
                 prefix = f"[{context_label}] " if context_label else ""
                 box_info = f" box={action['box_screen']}" if "box_screen" in action else ""
@@ -835,6 +917,7 @@ class AIClient:
                 action["screen_to_y"] = ty
 
         def _process_choice(choice: Dict[str, Any]):
+            _resolve_mark_or_snap(choice, choice.get("label", "choice"))
             if "box_2d" in choice and isinstance(choice["box_2d"], (list, tuple)) and len(choice["box_2d"]) == 4:
                 b = choice["box_2d"]
                 ymin, xmin, ymax, xmax = float(b[0]), float(b[1]), float(b[2]), float(b[3])
@@ -965,6 +1048,7 @@ class AIClient:
         for btn_key in ["check_button", "next_button", "submit_button", "reference_button", "close_button", "dropdown_button"]:
             btn = result.get(btn_key)
             if btn and isinstance(btn, dict):
+                _resolve_mark_or_snap(btn, btn_key)
                 if "box_2d" in btn and isinstance(btn["box_2d"], (list, tuple)) and len(btn["box_2d"]) == 4:
                     b = btn["box_2d"]
                     ymin, xmin, ymax, xmax = float(b[0]), float(b[1]), float(b[2]), float(b[3])

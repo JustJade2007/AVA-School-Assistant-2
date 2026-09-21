@@ -61,6 +61,9 @@ class HomeDashboard(ctk.CTkToplevel):
         self.minsize(860, 600)
         self.configure(fg_color="#09090b")
         apply_window_icon(self)
+        from ui.window_utils import ensure_taskbar_presence, attach_minimize_restore_handlers
+        ensure_taskbar_presence(self)
+        attach_minimize_restore_handlers(self, is_cloaked_getter=lambda: getattr(self, "is_cloaked", True))
         self.protocol("WM_DELETE_WINDOW", self._on_close_requested)
 
     def _apply_initial_cloak(self):

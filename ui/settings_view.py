@@ -44,6 +44,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self.minsize(580, 600)
         self.configure(fg_color="#18181b")
         apply_window_icon(self)
+        from ui.window_utils import ensure_taskbar_presence
+        ensure_taskbar_presence(self)
 
         # Auto-save settings if user closes window via titlebar 'X' button
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)

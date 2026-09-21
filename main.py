@@ -14,11 +14,23 @@ def main():
     # Set explicit AppUserModelID so Windows taskbar groups AVA under its own icon
     set_windows_app_user_model_id()
 
+    # Check if an instance is already running; if so, bring to foreground and exit
+    from core.single_instance import check_single_instance
+    app_instance_holder = []
+
+    def on_activate():
+        if app_instance_holder:
+            app_instance_holder[0].bring_to_foreground()
+
+    if not check_single_instance(on_activate=on_activate):
+        print("AVA School Assistant 2 is already running. Brought active window to foreground.")
+        sys.exit(0)
+
     parser = argparse.ArgumentParser(description="AVA School Assistant 2")
     parser.add_argument(
         "--version",
         action="version",
-        version="AVA School Assistant 2 v2.1.4.f"
+        version="AVA School Assistant 2 v2.1.5.a"
     )
     parser.add_argument(
         "--worker",
@@ -56,6 +68,7 @@ def main():
         start_mode = "playground"
 
     app = AVASchoolAssistantApp(start_mode=start_mode)
+    app_instance_holder.append(app)
     if args.debug:
         from core.logger import set_debug_mode
         set_debug_mode(True)

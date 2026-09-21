@@ -30,6 +30,8 @@ hiddenimports = [
     'ui.home_view',
     'ui.changelog_viewer',
     'ui.asset_loader',
+    'ui.window_utils',
+    'core.single_instance',
     'humanizer',
     'docx',
     'pypdf',

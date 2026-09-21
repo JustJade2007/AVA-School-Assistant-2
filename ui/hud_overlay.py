@@ -63,6 +63,14 @@ class HUDOverlay(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.attributes("-alpha", self.config.overlay_opacity)
 
+        from ui.window_utils import ensure_taskbar_presence, attach_minimize_restore_handlers
+        self.after(50, lambda: ensure_taskbar_presence(self))
+        attach_minimize_restore_handlers(
+            self,
+            is_cloaked_getter=lambda: self.config.anti_capture_enabled,
+            on_restore=lambda: (self.attributes("-topmost", True), self.apply_cloak())
+        )
+
         # Position on screen (width supports generous room for header controls)
         x = max(10, self.config.overlay_x)
         y = max(10, self.config.overlay_y)
@@ -169,7 +177,7 @@ class HUDOverlay(ctk.CTkToplevel):
         )
         self.btn_close.pack(side="right", padx=1)
 
-        # 2. Hide button (circular)
+        # 2. Minimize button (circular)
         self.btn_hide = ctk.CTkButton(
             self.header_actions_frame,
             text="—",
@@ -180,7 +188,7 @@ class HUDOverlay(ctk.CTkToplevel):
             fg_color="#3f3f46",
             hover_color="#52525b",
             text_color="#e4e4e7",
-            command=self.hide_overlay
+            command=self.minimize_overlay
         )
         self.btn_hide.pack(side="right", padx=1)
 
@@ -1014,27 +1022,59 @@ class HUDOverlay(ctk.CTkToplevel):
             self.btn_collapse.configure(text="▲")
             self.geometry(f"460x320")
 
+    def minimize_overlay(self):
+        """Minimizes the HUD overlay to the Windows taskbar normally."""
+        self.is_hidden = False
+        try:
+            if hasattr(self, "visualizer") and self.visualizer:
+                self.visualizer.clear()
+            from core.cloaking import get_window_hwnd, apply_anti_capture
+            hwnd = get_window_hwnd(self)
+            if hwnd:
+                apply_anti_capture(hwnd, enable=False)
+            self.overrideredirect(False)
+            self.iconify()
+        except Exception as e:
+            logger.debug(f"Error in minimize_overlay: {e}")
+            self.iconify()
+
     def hide_overlay(self):
-        """Hides the overlay window from the screen."""
-        self.is_hidden = True
-        self.withdraw()
-        if hasattr(self, "visualizer") and self.visualizer:
-            self.visualizer.clear()
+        """Hides the overlay window from the screen (delegates to minimize_overlay)."""
+        self.minimize_overlay()
 
     def show_overlay(self):
-        """Shows and restores the overlay to topmost."""
+        """Shows and restores the overlay to topmost with cloaking intact."""
         self.is_hidden = False
-        self.deiconify()
-        self.lift()
-        self.attributes("-topmost", True)
-        self.apply_cloak()
+        try:
+            self.deiconify()
+            self.overrideredirect(True)
+            self.lift()
+            self.attributes("-topmost", True)
+            self.apply_cloak()
+        except Exception as e:
+            logger.debug(f"Error in show_overlay: {e}")
 
     def toggle_visibility(self) -> bool:
-        """Toggles between hidden and shown states. Returns True if now visible."""
-        if self.winfo_viewable() and not self.is_hidden:
-            self.hide_overlay()
-            return False
-        else:
+        """Toggles between minimized and shown states. Returns True if now visible."""
+        try:
+            is_iconic = False
+            if hasattr(self, "state") and self.state() == "iconic":
+                is_iconic = True
+            elif sys.platform == "win32":
+                import ctypes
+                from core.cloaking import get_window_hwnd
+                hwnd = get_window_hwnd(self)
+                if hwnd and ctypes.windll.user32.IsIconic(hwnd):
+                    is_iconic = True
+
+            if is_iconic or not self.winfo_viewable() or self.is_hidden:
+                self.show_overlay()
+                return True
+            else:
+                self.minimize_overlay()
+                return False
+        except Exception as e:
+            logger.debug(f"Error toggling visibility: {e}")
             self.show_overlay()
             return True
 

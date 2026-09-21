@@ -8,6 +8,20 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.5.a] - 2026-09-21
+
+### Added & Improved
+- **Single-Instance Application Enforcement & Automatic Foreground Activation**:
+  - Implemented [core/single_instance.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/single_instance.py) utilizing a named Win32 kernel Mutex (`Local\AVASchoolAssistant2_SingleInstance_Mutex`) and loopback IPC socket (`127.0.0.1:49285`).
+  - Added duplicate instance prevention in [main.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/main.py): launching `AVA_School_Assistant_2.exe` while another copy is already running detects the existing process, transmits an activation signal, restores any minimized application windows, brings the running application to the foreground via `AttachThreadInput` / `SetForegroundWindow`, and terminates the duplicate process cleanly.
+  - Added thread-safe `bring_to_foreground()` in [ui/app.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/app.py) to automatically restore and focus whichever workspace module is currently active (Playground Studio, HUD Overlay, or Command Hub Home).
+- **Taskbar & Alt-Tab Minimization Fix**:
+  - Created [ui/window_utils.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/window_utils.py) providing `ensure_taskbar_presence()`, enforcing `WS_EX_APPWINDOW` and stripping `WS_EX_TOOLWINDOW` extended styles across all top-level application windows.
+  - Removed `overrideredirect(True)` from the root Tk window in [ui/app.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/app.py), eliminating root-level tool window style inheritance that previously caused child windows to disappear from the taskbar and Alt+Tab when minimized.
+  - Implemented dynamic display affinity state management via `attach_minimize_restore_handlers()`: temporarily lifts `WDA_EXCLUDEFROMCAPTURE` when windows enter the iconic state to avoid DWM shell enumeration and thumbnail dropout, seamlessly re-enabling anti-capture cloaking upon window restoration.
+  - Refactored HUD overlay minimize action (`self.minimize_overlay()`) in [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py) so clicking `—` minimizes normally to the taskbar instead of disappearing via withdraw.
+  - Integrated native Win32 `WM_SETICON` loading for 16x16 and 32x32 icons in [ui/asset_loader.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/asset_loader.py) and [ui/window_utils.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/window_utils.py) to ensure custom branding persists on the Windows taskbar and Alt-Tab switcher across all modes.
+
 ## [2.1.4.f] - 2026-09-20
 
 ### Fixed & Improved

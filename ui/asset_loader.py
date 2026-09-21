@@ -118,5 +118,8 @@ def _safe_reapply_icon(window, ico_path: str) -> None:
     try:
         if window.winfo_exists():
             window.iconbitmap(ico_path)
+            from ui.window_utils import set_native_window_icon
+            set_native_window_icon(window, ico_path)
     except Exception:
         pass
+

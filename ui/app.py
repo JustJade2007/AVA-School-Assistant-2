@@ -34,11 +34,10 @@ class AVASchoolAssistantApp:
         self.engine = AssistantEngine(config_manager=self.config_manager)
         self.hotkey_manager = GlobalHotkeyManager()
 
-        # Root window (can stay hidden while top levels float)
+        # Root window (stays withdrawn while top-level modules display)
         self.root = ctk.CTk()
         self.root.title("AVA School Assistant 2")
         self.root.geometry("1x1+-100+-100")
-        self.root.overrideredirect(True)
         self.root.withdraw()
         apply_window_icon(self.root)
 
@@ -60,6 +59,8 @@ class AVASchoolAssistantApp:
             on_exit_app=self.quit_app
         )
         apply_window_icon(self.home_window)
+        from ui.window_utils import ensure_taskbar_presence
+        ensure_taskbar_presence(self.home_window)
 
         if start_mode == "worker":
             self.launch_automated_worker()
@@ -317,6 +318,43 @@ class AVASchoolAssistantApp:
         )
         self.snipping_tool.start()
 
+    def bring_to_foreground(self):
+        """
+        Restores and brings the currently active application window to the foreground.
+        Thread-safe and callable from external IPC signals when a duplicate launch is attempted.
+        """
+        try:
+            self.root.after(0, self._do_bring_to_foreground)
+        except Exception as e:
+            logger.debug(f"Failed to dispatch bring_to_foreground: {e}")
+
+    def _do_bring_to_foreground(self):
+        logger.info("External activation signal received: Bringing active AVA window to foreground...")
+        target_win = None
+        if self.playground_window and self.playground_window.winfo_exists():
+            target_win = self.playground_window
+        elif self.hud_window and self.hud_window.winfo_exists() and not getattr(self.hud_window, "is_hidden", False):
+            target_win = self.hud_window
+            self.hud_window.show_overlay()
+        elif self.home_window and self.home_window.winfo_exists():
+            target_win = self.home_window
+
+        if target_win:
+            try:
+                if hasattr(target_win, "state") and target_win.state() == "iconic":
+                    target_win.deiconify()
+                target_win.lift()
+                target_win.focus_force()
+            except Exception as e:
+                logger.debug(f"Error focusing target window: {e}")
+
+            if sys.platform == "win32":
+                from core.single_instance import force_foreground_window
+                from core.cloaking import get_window_hwnd
+                hwnd = get_window_hwnd(target_win)
+                if hwnd:
+                    force_foreground_window(hwnd)
+
     def quit_app(self):
         """Thread-safe shutdown of application and background listeners."""
         try:
@@ -327,6 +365,11 @@ class AVASchoolAssistantApp:
 
     def _do_quit_app(self):
         logger.info("Exiting AVA School Assistant 2...")
+        try:
+            from core.single_instance import cleanup_single_instance
+            cleanup_single_instance()
+        except Exception:
+            pass
         try:
             self.hotkey_manager.stop()
         except Exception as e:

@@ -8,6 +8,17 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.6.a] - 2026-09-21
+
+### Added & Improved
+- **AI Visual Double-Check & Self-Correction Before Advancing**:
+  - Implemented visual double-checking in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) (`_double_check_answers_on_screen`), automatically verifying the question and all selected answers on screen after choosing answers and before clicking Next, Check Answer, or Submit.
+  - Added dedicated double-check prompt `get_double_check_prompt` in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) instructing the vision model to inspect the post-execution screen and verify that visible selections (filled radio buttons, checked boxes, typed text) accurately and completely match the correct answer.
+  - Added mistake detection and classification: distinguishes `wrong_option` (clicked wrong radio/checkbox), `unclicked_option` (missed click / unselected option), `missing_selection` (missed multi-select item), and `wrong_text` (mistyped or unfilled input).
+  - Added autonomous self-correction loop: if a mistake is detected, the AI generates and executes exact corrective actions (e.g. clicking the correct option, unchecking wrong options, or re-typing) and re-verifies up to `max_double_check_retries` before permitting progression.
+  - Added `double_check_solution` in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) with automatic screen coordinate translation for corrective actions.
+  - Added configuration options `double_check_enabled: bool = True` and `max_double_check_retries: int = 2` in [config.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/config.py).
+
 ## [2.1.5.b] - 2026-09-21
 
 ### Fixed & Improved

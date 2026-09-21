@@ -2,6 +2,9 @@
 Prompts and schemas for AI Vision problem solving and UI action determination.
 """
 
+import json
+
+
 def get_vision_system_prompt(image_width: int, image_height: int) -> str:
     """
     Returns the system prompt instructing the vision model to detect all question parts,
@@ -346,3 +349,87 @@ Your job is to determine the navigation or advance mechanism:
 All coordinates (x, y) must be normalized integers 0..1000.
 Output raw JSON only without markdown fences.
 """
+
+
+def get_double_check_prompt(
+    image_width: int,
+    image_height: int,
+    question: str,
+    intended_answer: str,
+    intended_actions: list = None
+) -> str:
+    """
+    Returns the verification prompt instructing the vision model to double-check
+    the screen after answer actions have executed, verifying that the on-screen
+    selected options or typed inputs accurately match the correct answer.
+    """
+    actions_desc = ""
+    if intended_actions:
+        actions_desc = f"\nIntended actions attempted:\n{json.dumps(intended_actions, indent=2)}"
+
+    return f"""You are AVA's QA & Visual Verification Engine.
+The screenshot dimensions are {image_width} pixels wide by {image_height} pixels high.
+
+An automated student assistant has just finished executing actions to answer the question on screen.
+Before the student advances or submits, you must perform a strict, independent DOUBLE-CHECK of the screen.
+
+TARGET PROBLEM DETAILS:
+- Question: {question}
+- Target Correct Answer: {intended_answer}{actions_desc}
+
+YOUR VERIFICATION TASKS:
+1. INSPECT THE CURRENT ON-SCREEN STATE:
+   - Identify all options, radio buttons, checkboxes, dropdowns, and fill-in text fields currently visible.
+   - Determine EXACTLY what is currently selected (solid filled radio dot, checked box), highlighted, or typed into boxes.
+   - Distinguish real user inputs from placeholder / watermark text (gray hints like 'Type here', 'e.g. 5'). Placeholder text is UNFILLED.
+
+2. VERIFY ACCURACY AGAINST INTENDED CORRECT ANSWER:
+   - Does what is visibly selected/typed on screen accurately and completely represent the correct answer?
+   - Check for common automation mistakes:
+     * "wrong_option": The bot clicked the wrong radio button or option (e.g. choice A is selected instead of choice B).
+     * "unclicked_option": The bot intended to click an option, but the radio button or checkbox was missed and remains unselected.
+     * "missing_selection": On multi-select questions ("select all that apply"), one or more required options were not checked, or an incorrect option was checked.
+     * "wrong_text": An input field has mistyped text, truncated characters, wrong sign, or is still empty.
+     * "other": Dropdown didn't open/select, drag-and-drop missed the drop zone, etc.
+     * "none": The visible state on screen 100% matches the target correct answer.
+
+3. PROVIDE CORRECTIVE ACTIONS IF MESSED UP:
+   - If a mistake is detected (messed_up = true):
+     Provide the precise corrective actions required to fix the on-screen state:
+     * To deselect a wrong checkbox: click on the wrong checkbox option.
+     * To select the correct radio button / checkbox: click on the center of the correct option.
+     * To fix a text input: click to focus the input box, type the correct text, with "clear_first": true.
+   - If everything is correct (messed_up = false):
+     Set double_check_passed = true, corrective_actions = [].
+
+OUTPUT FORMAT (JSON ONLY, NO MARKDOWN FENCES):
+{{
+  "double_check_passed": true,
+  "messed_up": false,
+  "issue_type": "none",
+  "currently_selected_summary": "Option C ($45.00) is visibly selected with filled radio button.",
+  "details": "Selected answer on screen matches the target correct answer.",
+  "corrective_actions": []
+}}
+
+If a mistake is found, for example:
+{{
+  "double_check_passed": false,
+  "messed_up": true,
+  "issue_type": "wrong_option",
+  "currently_selected_summary": "Option B is visibly selected instead of Option C.",
+  "details": "Bot clicked Option B (x=350, y=420) instead of correct Option C.",
+  "corrective_actions": [
+    {{
+      "type": "click",
+      "x": 350,
+      "y": 510,
+      "description": "Click correct Option C radio button"
+    }}
+  ]
+}}
+
+All coordinates (x, y) must be normalized integers 0..1000.
+Output raw JSON only.
+"""
+

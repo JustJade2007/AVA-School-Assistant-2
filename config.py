@@ -175,6 +175,9 @@ class AppConfig:
     action_delay: float = 0.5
     # auto_inspect_references: True = inspects modals, reference sheets, or scrolled content if requested by AI
     auto_inspect_references: bool = True
+    # double_check_enabled: True = visually double-checks question and selected answers before advancing
+    double_check_enabled: bool = True
+    max_double_check_retries: int = 2
 
     # Humanization / Anti-bot detection
     humanize_mouse: bool = True

@@ -309,6 +309,106 @@ class AIClient:
 
         return None
 
+    def double_check_solution(
+        self,
+        base64_image: str,
+        question: str,
+        intended_answer: str,
+        intended_actions: Optional[List[Dict[str, Any]]] = None,
+        image_width: int = 1000,
+        image_height: int = 1000,
+        scale_x: float = 1.0,
+        scale_y: float = 1.0,
+        offset_x: int = 0,
+        offset_y: int = 0,
+        calibration_offset_x: int = 0,
+        calibration_offset_y: int = 0,
+        calibration_scale_x: float = 1.0,
+        calibration_scale_y: float = 1.0,
+        coordinate_mode: str = "normalized_1000"
+    ) -> Dict[str, Any]:
+        """
+        Visually double-checks the current screenshot after actions have been executed,
+        verifying whether the on-screen selected options or typed answers accurately match
+        the target correct answer. If a mistake is detected (e.g. wrong option, unclicked option),
+        returns mapped corrective actions to resolve it.
+        """
+        if not self.api_key:
+            return {"double_check_passed": True, "messed_up": False, "issue_type": "none", "details": "API key not configured", "corrective_actions": []}
+
+        from core.prompt import get_double_check_prompt
+        prompt = get_double_check_prompt(
+            image_width=image_width,
+            image_height=image_height,
+            question=question,
+            intended_answer=intended_answer,
+            intended_actions=intended_actions
+        )
+
+        raw_response_text = ""
+        try:
+            if self.provider == "gemini":
+                raw_response_text = self._call_gemini(base64_image, prompt)
+            elif self.provider == "openai":
+                raw_response_text = self._call_openai(base64_image, prompt)
+            elif self.provider == "anthropic":
+                raw_response_text = self._call_anthropic(base64_image, prompt)
+            elif self.provider == "custom":
+                raw_response_text = self._call_custom(base64_image, prompt)
+            else:
+                return {"double_check_passed": True, "messed_up": False, "issue_type": "none", "details": f"Unsupported provider: {self.provider}", "corrective_actions": []}
+        except Exception as e:
+            logger.warning(f"Double-check vision call failed: {e}")
+            return {"double_check_passed": True, "messed_up": False, "issue_type": "none", "details": f"Vision call error: {e}", "corrective_actions": []}
+
+        try:
+            result = self._extract_json(raw_response_text)
+        except Exception as e:
+            logger.warning(f"Could not parse double-check JSON: {e}")
+            return {"double_check_passed": True, "messed_up": False, "issue_type": "none", "details": f"JSON parse error: {e}", "corrective_actions": []}
+
+        # Normalize fields
+        messed_up = bool(result.get("messed_up", False))
+        double_check_passed = bool(result.get("double_check_passed", not messed_up))
+        if messed_up:
+            double_check_passed = False
+
+        issue_type = str(result.get("issue_type", "none" if not messed_up else "other")).lower().strip()
+        details = str(result.get("details", "")).strip()
+        selected_summary = str(result.get("currently_selected_summary", "")).strip()
+        corrective_actions = result.get("corrective_actions", [])
+        if not isinstance(corrective_actions, list):
+            corrective_actions = []
+
+        # Map corrective action coordinates if needed
+        if corrective_actions:
+            corr_dict = {"actions": corrective_actions}
+            self._map_coordinates(
+                result=corr_dict,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                image_width=image_width,
+                image_height=image_height,
+                calibration_offset_x=calibration_offset_x,
+                calibration_offset_y=calibration_offset_y,
+                calibration_scale_x=calibration_scale_x,
+                calibration_scale_y=calibration_scale_y,
+                coordinate_mode=coordinate_mode,
+                has_multi_view=False
+            )
+            corrective_actions = corr_dict.get("actions", [])
+
+        return {
+            "double_check_passed": double_check_passed,
+            "messed_up": messed_up,
+            "issue_type": issue_type,
+            "currently_selected_summary": selected_summary,
+            "details": details,
+            "corrective_actions": corrective_actions
+        }
+
     def generate_text_response(
         self,
         prompt: str,

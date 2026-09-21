@@ -99,6 +99,8 @@ class AssistantEngine:
     @property
     def ai_client(self) -> AIClient:
         """Returns an active AIClient instance configured with current provider and model settings."""
+        if hasattr(self, "_custom_ai_client") and self._custom_ai_client is not None:
+            return self._custom_ai_client
         return AIClient(
             provider=self.config.ai_provider,
             api_key=self.config.get_api_key_for_provider(self.config.ai_provider),
@@ -1304,6 +1306,19 @@ class AssistantEngine:
                 )
                 return
 
+            # Visual Double-Check Phase (AVA QA):
+            # Visually verify that the on-screen selected options/inputs genuinely match the intended answer
+            # after choosing all answers and before hitting Next, Check Answer, or Submit!
+            if is_answered and actions:
+                double_check_ok = self._double_check_answers_on_screen(actions)
+                if not double_check_ok:
+                    self.last_result["ready_to_advance"] = False
+                    self.set_state(
+                        EngineState.WAITING_CONFIRMATION,
+                        "Double-check flagged selection discrepancy. Press F9 to retry or click manually."
+                    )
+                    return
+
             # Check if auto next or multi-part continuation is applicable
             if (is_answered or is_already_answered or verification.get("all_verified", False) or verification.get("verified_count", 0) > 0) and not has_pending_items:
                 self.last_result["ready_to_advance"] = True
@@ -1511,6 +1526,123 @@ class AssistantEngine:
             self.last_error = diag
             self.set_state(EngineState.ERROR, diag.message)
             self._notify_error(diag)
+
+    def _double_check_answers_on_screen(self, executed_actions: list) -> bool:
+        """
+        Visually double-checks the question and all selected answers on screen
+        after choosing answers and before hitting Next, Check Answer, or Submit.
+        Detects if the bot messed up (e.g. clicked the wrong option, didn't click
+        an option, or entered incorrect input), and executes corrective actions.
+
+        Returns True if double-check passed (or was corrected), False otherwise.
+        """
+        if not getattr(self.config, "double_check_enabled", True):
+            return True
+
+        if not self.last_result:
+            return True
+
+        # If question was already marked correct by platform, no double-check needed
+        if self.last_result.get("evaluation_status") == "correct" and not executed_actions:
+            return True
+
+        # Only double-check if actions were executed or question was supposed to have an answer
+        if not executed_actions and not self.last_result.get("needs_action", True):
+            return True
+
+        question_text = str(self.last_result.get("question", "")).strip()
+        answer_text = str(self.last_result.get("answer", "")).strip()
+        if not question_text and not answer_text:
+            return True
+
+        retries = 0
+        max_retries = max(1, getattr(self.config, "max_double_check_retries", 2))
+
+        while retries <= max_retries:
+            if self.executor.is_stopped():
+                return False
+
+            self.set_state(EngineState.VERIFYING, "Double-checking selected answers on screen...")
+            logger.info(
+                f"Double-checking selected answers on screen (attempt {retries + 1}/{max_retries + 1}): "
+                f"Question='{question_text[:50]}...', Expected='{answer_text[:50]}'..."
+            )
+
+            # Brief pause for UI rendering / selection animations to finish
+            time.sleep(0.25)
+
+            # Fresh capture of the current state
+            try:
+                (base64_data,
+                 curr_w,
+                 curr_h,
+                 scale_x,
+                 scale_y,
+                 offset_x,
+                 offset_y) = self.capture.capture_and_encode(
+                     region=self.last_region,
+                     max_dimension=self.config.max_capture_dimension
+                 )
+            except Exception as e:
+                logger.warning(f"_double_check_answers_on_screen: screen capture failed: {e}")
+                return True
+
+            check_res = self.ai_client.double_check_solution(
+                base64_image=base64_data,
+                question=question_text,
+                intended_answer=answer_text,
+                intended_actions=executed_actions,
+                image_width=curr_w,
+                image_height=curr_h,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                calibration_offset_x=self.config.calibration_offset_x,
+                calibration_offset_y=self.config.calibration_offset_y,
+                calibration_scale_x=self.config.calibration_scale_x,
+                calibration_scale_y=self.config.calibration_scale_y,
+                coordinate_mode=self.config.coordinate_mode
+            )
+
+            is_correct = check_res.get("double_check_passed", True)
+            messed_up = check_res.get("messed_up", False)
+            issue_type = check_res.get("issue_type", "none")
+            details = check_res.get("details", "")
+            summary = check_res.get("currently_selected_summary", "")
+            corrective_actions = check_res.get("corrective_actions", [])
+
+            if is_correct and not messed_up:
+                logger.info(
+                    f"[OK] Visual double-check PASSED: {details or 'Selected answers visibly match target answer.'} "
+                    f"({summary})"
+                )
+                self._handle_adjustment("✓ Double-check verified: Selected answers match correct answer")
+                return True
+
+            # Mistake detected!
+            retries += 1
+            err_msg = f"⚠️ Double-check detected mistake ({issue_type}): {details or summary}"
+            logger.warning(
+                f"[!] Visual double-check FAILED (attempt {retries}): issue_type={issue_type}, "
+                f"details='{details}', summary='{summary}', corrective_actions={len(corrective_actions)}"
+            )
+            self._handle_adjustment(f"{err_msg} -> Applying corrections...")
+
+            if corrective_actions:
+                logger.info(f"Executing {len(corrective_actions)} corrective actions from double-check...")
+                self.set_state(EngineState.EXECUTING, f"Correcting {issue_type}...")
+                self.executor.execute_action_sequence(corrective_actions, delay_between=self.config.action_delay)
+                # Loop back to verify again
+                executed_actions = corrective_actions
+            else:
+                logger.warning("Double-check reported a mistake but provided no corrective actions.")
+                break
+
+        # If retries exhausted and still messed up
+        logger.warning("Double-check retries exhausted. Question may still have selection discrepancies.")
+        self._handle_adjustment("⚠️ Double-check warning: Could not fully confirm selection on screen.")
+        return False
 
     def _refine_input_box_targets(self, result: Dict[str, Any]):
         """

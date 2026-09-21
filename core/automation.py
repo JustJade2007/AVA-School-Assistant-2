@@ -917,6 +917,20 @@ class AutomationExecutor:
                                 t_roi = self.verifier.capture_roi(int(sx), int(sy), radius_w=25, radius_h=15)
                                 subsequent_input_targets.append((sub_idx, int(sx), int(sy), t_roi))
 
+                # Guard against raw scroll actions in answer selection sequences
+                act_type = action.get("type", "").lower()
+                if act_type == "scroll" and idx < len(actions) - 1:
+                    has_subsequent_clicks = any(
+                        a.get("type", "").lower() in ["click", "double_click", "type_text"]
+                        for a in actions[idx + 1:]
+                    )
+                    if has_subsequent_clicks:
+                        logger.warning(
+                            "Action sequence contains a 'scroll' action followed by answer clicks. "
+                            "Suppressing scroll action to prevent moving target coordinates from under the cursor."
+                        )
+                        continue
+
                 # Viewport scroll alignment (Dual-View Scrolled Action Execution)
                 is_scrolled_target = bool(action.get("in_scrolled_view", False))
                 scroll_amt = abs(int(action.get("scroll_amount", 500)))

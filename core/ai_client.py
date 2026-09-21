@@ -891,6 +891,65 @@ class AIClient:
         else:
             result["actions"] = combined_actions
 
+        # Choice-to-Action Fallback Synthesis:
+        # If no explicit actions were returned, but choices and an answer exist,
+        # synthesize the click action targeting the matching choice to prevent false cut-off scrolling!
+        if not result.get("actions") and result.get("needs_action") is not False:
+            ans_str = str(result.get("answer") or result.get("correct_answer") or "").strip().lower()
+            all_choices = result.get("choices")
+            if not all_choices and isinstance(result.get("items"), list):
+                for itm in result["items"]:
+                    if itm.get("choices"):
+                        all_choices = itm["choices"]
+                        if not ans_str:
+                            ans_str = str(itm.get("correct_answer") or itm.get("answer") or "").strip().lower()
+                        break
+
+            if isinstance(all_choices, list) and all_choices and ans_str:
+                matched_choice = None
+                # Pass 1: exact label/text match or substring match
+                for ch in all_choices:
+                    lbl = str(ch.get("label", "")).strip().lower()
+                    txt = str(ch.get("text", "")).strip().lower()
+                    if (lbl and (lbl in ans_str or ans_str in lbl)) or (txt and (txt in ans_str or ans_str in txt)):
+                        matched_choice = ch
+                        break
+
+                # Pass 2: Option letter match (e.g. 'A', 'B', 'C', 'D')
+                if not matched_choice:
+                    for ch in all_choices:
+                        lbl = str(ch.get("label", "")).strip().lower()
+                        for letter in ["a", "b", "c", "d", "e"]:
+                            if (f"option {letter}" in ans_str or f"({letter})" in ans_str
+                                or ans_str.startswith(f"{letter}.") or ans_str.startswith(f"{letter})")
+                                or ans_str == letter or ans_str.startswith(f"choice {letter}")):
+                                if (f"option {letter}" in lbl or f"({letter})" in lbl
+                                    or lbl.startswith(f"{letter}.") or lbl.startswith(f"{letter})")
+                                    or lbl == letter or lbl.startswith(f"choice {letter}")):
+                                    matched_choice = ch
+                                    break
+                        if matched_choice:
+                            break
+
+                if matched_choice:
+                    synth_act = {
+                        "type": "click",
+                        "x": matched_choice.get("x"),
+                        "y": matched_choice.get("y"),
+                        "box_2d": matched_choice.get("box_2d"),
+                        "description": f"Select {matched_choice.get('label', 'chosen option')}",
+                        "in_scrolled_view": False,
+                        "choices": all_choices
+                    }
+                    _process_action(synth_act, context_label="Synthesized Choice")
+                    result["actions"] = [synth_act]
+                    logger.info(f"Synthesized click action from matched choice '{matched_choice.get('label')}': screen=({synth_act.get('screen_x')}, {synth_act.get('screen_y')})")
+
+        # In single-view captures, strictly force in_scrolled_view to False on ALL final actions
+        if not has_multi_view and isinstance(result.get("actions"), list):
+            for act in result["actions"]:
+                act["in_scrolled_view"] = False
+
         # Normalize aliases if present
         if "submit_button" in result and not result.get("check_button"):
             s_btn = result["submit_button"]

@@ -100,7 +100,7 @@ CONFIG_FILE_PATH = get_config_file_path()
 DEFAULT_CONFIG_FILE_PATH = get_default_config_file_path()
 
 # Application metadata
-APP_VERSION = "2.2.2.a"
+APP_VERSION = "2.2.3.a"
 GITHUB_REPO = "JustJade2007/AVA-School-Assistant-2"
 
 # Available default model choices

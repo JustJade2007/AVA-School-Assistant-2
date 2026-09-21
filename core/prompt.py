@@ -103,14 +103,19 @@ Your tasks are:
 
 6. SUPPLEMENTARY INFORMATION, MULTI-VIEW, SCROLLING & DROPDOWN QUESTIONS:
    - SCROLLING DOWN TO SEE THE WHOLE QUESTION:
-     If the question text, reading passage, diagram, sub-parts, answer choices (e.g. options C, D), or answer input box/button continue below the visible container/screen (requiring scrolling down to view):
-     DO NOT guess or assume what is cut off!
+     * CRITICAL SCROLLING SAFETY RULES:
+       - DO NOT request scrolling down if the question, answer choices (e.g. Option A, B, C, D), or input fields are already visible in the screenshot!
+       - NEVER request "info_type": "scroll_down" if you can already solve the question with the visible choices or inputs!
+       - NEVER request scrolling down to guess if more choices exist when standard multiple-choice options (e.g. 2 to 5 options) are visible!
+       - ONLY request scrolling down if the question prompt, reading passage, or a table is visibly sliced in half at the bottom border of the screen.
+       - FOR ALL standard single-image screens: ALWAYS set "in_scrolled_view": false on ALL actions! NEVER set "in_scrolled_view": true unless Image 2 was explicitly provided and the element exists ONLY in Image 2!
+     If a reading passage, diagram, or table is genuinely cut off at the bottom boundary:
      Ask AVA to scroll down to reveal the rest of the question by responding:
      {{
        "status": "needs_more_info",
        "info_type": "scroll_down",
        "scroll_amount": 500,
-       "reason": "Question passage, answer choices, or input field extend below the viewport fold."
+       "reason": "Question passage or diagram is visibly cut off at bottom border."
      }}
      AVA will scroll down, capture the revealed content as Image 2, and re-query you with both images!
      * When both images are provided:
@@ -225,14 +230,14 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
       "existing_answer": "120",
       "correct_answer": "144",
       "needs_action": true,
-      "reasoning": "12 * 12 = 144. Box currently has incorrect 120. Clearing and typing 144 in scrolled view.",
+      "reasoning": "12 * 12 = 144. Box currently has incorrect 120. Clearing and typing 144.",
       "actions": [
         {{
           "type": "click",
           "box_2d": [535, 360, 565, 480],
           "x": 420,
           "y": 550,
-          "in_scrolled_view": true,
+          "in_scrolled_view": false,
           "description": "Focus input box for Part 2"
         }},
         {{
@@ -242,7 +247,7 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
           "y": 550,
           "clear_first": true,
           "text": "144",
-          "in_scrolled_view": true,
+          "in_scrolled_view": false,
           "description": "Clear incorrect value and type 144"
         }}
       ]

@@ -8,6 +8,19 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.3.a] - 2026-09-21
+
+### Fixed & Improved
+- **Eliminated Erroneous Scrolling Before Answer Selection**:
+  - Resolved an issue where AVA evaluated the screen, scrolled down, and then attempted to click answer choices whose coordinates were displaced by the scroll.
+  - **Choice-to-Action Fallback Synthesis**: In [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) and [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), if the AI identifies candidate multiple-choice points and returns an answer but omits an explicit `actions` array, AVA automatically synthesizes the click action targeting the matching choice.
+  - **Hardened Cut-Off Question Inspection Guard**: In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), strictly disabled autonomous 500px scrolling when valid choices or answers already exist on screen, preventing false cut-off detection on visible questions.
+  - **Prompt Scroll Instructions & Few-Shot Correction**: In [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py), added strict rules forbidding `scroll_down` or `needs_more_info` when question choices/inputs are visible, and fixed the few-shot JSON example where `"in_scrolled_view": true` was erroneously set on normal question inputs.
+  - **Viewport Restoration & Alignment Guards**:
+    - In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), if supplementary scrolling occurs but returned actions target elements in the upper view, the viewport is automatically restored to the top before deliberation and execution.
+    - Added pre-execution viewport synchronization in `execute_current_solution` ensuring the viewport matches the action's target view before capturing ROIs or clicking.
+  - **Automation Sequence Scroll Guard**: In [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py), suppressed raw `scroll` actions inside answer selection sequences to prevent moving target coordinates from under the cursor.
+
 ## [2.2.2.a] - 2026-09-21
 
 ### Fixed & Improved

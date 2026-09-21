@@ -867,17 +867,76 @@ class AssistantEngine:
             actions_count = len(result.get('actions', []))
             logger.info(f"AI Solution returned: Answer='{ans}', Actions={actions_count}, Question='{q_snippet}'")
 
-            # Automatic Cut-Off Question Detection:
-            # If 0 actions were found and no next button is visible, the question or its inputs/choices
-            # may be below the fold. Automatically scroll down 500px to inspect lower viewport.
+            # Choice-to-Action Guard:
+            # If actions is still 0 but choices and answer exist, synthesize the click action targeting the matching choice
+            if actions_count == 0 and result.get("needs_action") is not False:
+                choices = result.get("choices", [])
+                ans_str = str(ans or "").strip().lower()
+                if isinstance(choices, list) and choices and ans_str:
+                    matched_choice = None
+                    for ch in choices:
+                        lbl = str(ch.get("label", "")).strip().lower()
+                        txt = str(ch.get("text", "")).strip().lower()
+                        if (lbl and (lbl in ans_str or ans_str in lbl)) or (txt and (txt in ans_str or ans_str in txt)):
+                            matched_choice = ch
+                            break
+                    if not matched_choice:
+                        for ch in choices:
+                            lbl = str(ch.get("label", "")).strip().lower()
+                            for letter in ["a", "b", "c", "d", "e"]:
+                                if (f"option {letter}" in ans_str or f"({letter})" in ans_str
+                                    or ans_str.startswith(f"{letter}.") or ans_str.startswith(f"{letter})")
+                                    or ans_str == letter or ans_str.startswith(f"choice {letter}")):
+                                    if (f"option {letter}" in lbl or f"({letter})" in lbl
+                                        or lbl.startswith(f"{letter}.") or lbl.startswith(f"{letter})")
+                                        or lbl == letter or lbl.startswith(f"choice {letter}")):
+                                        matched_choice = ch
+                                        break
+                            if matched_choice:
+                                break
+                    if matched_choice:
+                        cx = matched_choice.get("screen_x", matched_choice.get("x"))
+                        cy = matched_choice.get("screen_y", matched_choice.get("y"))
+                        if cx is not None and cy is not None:
+                            synth_act = {
+                                "type": "click",
+                                "x": matched_choice.get("x"),
+                                "y": matched_choice.get("y"),
+                                "screen_x": int(cx),
+                                "screen_y": int(cy),
+                                "box_2d": matched_choice.get("box_2d"),
+                                "description": f"Select {matched_choice.get('label', 'chosen option')}",
+                                "in_scrolled_view": False,
+                                "choices": choices
+                            }
+                            result["actions"] = [synth_act]
+                            actions_count = 1
+                            logger.info(f"Synthesized click action for choice '{matched_choice.get('label')}' at ({cx}, {cy})")
+
+            # Automatic Cut-Off Question Detection Guard:
+            # ONLY scroll down to inspect if 0 actions were found AND no valid choices/answers exist.
+            # Never scroll down if answer choices or an answer are already present on screen!
+            has_explicit_choices = bool(result.get("choices") and len(result.get("choices")) >= 2)
+            ans_val = str(result.get("answer", "")).strip().lower()
+            placeholder_phrases = ["cut off", "view below", "scroll down", "need to view", "choices below", "not visible", "more info", "see below"]
+            has_explicit_answer = bool(ans_val and not any(p in ans_val for p in placeholder_phrases))
             q_text = str(result.get("question", "")).strip().lower()
             is_interstitial = (
                 not q_text
                 or any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
                 and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation", "explain", "describe"])
             )
-            if actions_count == 0 and not is_interstitial and not extra_images and not result.get("next_button") and result.get("needs_action") is not False and not self.executor.is_stopped():
-                logger.info("No input actions detected in top view. Possible cut-off question; scrolling down 500px to inspect lower area...")
+            if (
+                actions_count == 0
+                and not has_explicit_choices
+                and not has_explicit_answer
+                and not is_interstitial
+                and not extra_images
+                and not result.get("next_button")
+                and result.get("needs_action") is not False
+                and not self.executor.is_stopped()
+            ):
+                logger.info("No input actions or choices detected in top view. Possible cut-off question; scrolling down 500px to inspect lower area...")
                 self.set_state(EngineState.INSPECTING, "Scrolling down to inspect lower question area...")
                 self._handle_adjustment("📜 Cut-off question check: scrolling down to view remainder...")
 
@@ -945,6 +1004,16 @@ class AssistantEngine:
                     logger.info("Lower view inspection did not reveal new actions. Restoring viewport to top...")
                     self.executor.scroll(auto_scroll_amt, center_x, center_y)
                     self.executor._viewport_is_scrolled = False
+                    time.sleep(0.35)
+
+            # Viewport Restoration Guard:
+            # If supplementary scrolling occurred, verify whether returned actions target the upper view.
+            # If so, restore the viewport to top before proceeding to deliberation and action execution!
+            if self.executor._viewport_is_scrolled and not self.executor.is_stopped():
+                actions_require_scrolled = any(bool(a.get("in_scrolled_view")) for a in result.get("actions", []))
+                if not actions_require_scrolled:
+                    logger.info("Actions target top view elements. Restoring viewport to top before execution...")
+                    self.executor.ensure_scrolled_view(scrolled=False, scroll_amount=500)
                     time.sleep(0.35)
 
             result["extra_images_used"] = bool(extra_images and len(extra_images) > 0)
@@ -1229,6 +1298,20 @@ class AssistantEngine:
                 return
 
         q_key = str(self.last_result.get("question", "current_question"))[:60]
+
+        # Ensure viewport is aligned with the first action's target view BEFORE capturing ROIs or clicking!
+        if actions:
+            first_act = actions[0]
+            first_is_scrolled = bool(first_act.get("in_scrolled_view", False))
+            first_scroll_amt = abs(int(first_act.get("scroll_amount", 500)))
+            if self.executor._viewport_is_scrolled != first_is_scrolled:
+                logger.info(
+                    f"execute_current_solution: Aligning viewport to {'lower scrolled' if first_is_scrolled else 'top'} view "
+                    f"before pre-check and click execution..."
+                )
+                self.executor.ensure_scrolled_view(first_is_scrolled, first_scroll_amt)
+                time.sleep(0.35)
+
         # Pre-Execution Check: Verify if proposed answer options are ALREADY selected on screen
         if self.config.local_verification_enabled and actions and not was_rethinking:
             all_already_selected = True

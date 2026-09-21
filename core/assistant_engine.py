@@ -940,6 +940,8 @@ class AssistantEngine:
                     self.executor._viewport_is_scrolled = False
                     time.sleep(0.35)
 
+            result["extra_images_used"] = bool(extra_images and len(extra_images) > 0)
+
             # Check question evaluation status (correct, incorrect, unsubmitted)
             eval_info = self.check_question_evaluation_status(result)
             result["evaluation_status"] = eval_info["status"]
@@ -2022,6 +2024,9 @@ class AssistantEngine:
         if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
             is_scrolled = True
             check_btn["in_scrolled_view"] = True
+        elif not self.executor._viewport_is_scrolled and not (self.last_result and self.last_result.get("extra_images_used", False)):
+            is_scrolled = False
+            check_btn["in_scrolled_view"] = False
         self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
 
         x = check_btn.get("screen_x", check_btn.get("x"))
@@ -2086,6 +2091,9 @@ class AssistantEngine:
         if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
             is_scrolled = True
             next_btn["in_scrolled_view"] = True
+        elif not self.executor._viewport_is_scrolled and not (self.last_result and self.last_result.get("extra_images_used", False)):
+            is_scrolled = False
+            next_btn["in_scrolled_view"] = False
         self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
 
         x = next_btn.get("screen_x", next_btn.get("x"))
@@ -2120,6 +2128,9 @@ class AssistantEngine:
         if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
             is_scrolled = True
             submit_btn["in_scrolled_view"] = True
+        elif not self.executor._viewport_is_scrolled and not (self.last_result and self.last_result.get("extra_images_used", False)):
+            is_scrolled = False
+            submit_btn["in_scrolled_view"] = False
         self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
 
         x = submit_btn.get("screen_x", submit_btn.get("x"))

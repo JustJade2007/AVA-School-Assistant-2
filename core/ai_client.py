@@ -171,6 +171,7 @@ class AIClient:
         result = self._extract_json(raw_response_text)
 
         # Scale coordinates back to global desktop screen space
+        has_multi_view = bool(extra_images and len(extra_images) > 0)
         self._map_coordinates(
             result=result,
             scale_x=scale_x,
@@ -183,7 +184,8 @@ class AIClient:
             calibration_offset_y=calibration_offset_y,
             calibration_scale_x=calibration_scale_x,
             calibration_scale_y=calibration_scale_y,
-            coordinate_mode=coordinate_mode
+            coordinate_mode=coordinate_mode,
+            has_multi_view=has_multi_view
         )
 
         return result
@@ -275,7 +277,8 @@ class AIClient:
                 calibration_offset_y=calibration_offset_y,
                 calibration_scale_x=calibration_scale_x,
                 calibration_scale_y=calibration_scale_y,
-                coordinate_mode=coordinate_mode
+                coordinate_mode=coordinate_mode,
+                has_multi_view=False
             )
             target_btn["advance_action"] = result.get("advance_action", "click_button")
 
@@ -643,7 +646,8 @@ class AIClient:
         calibration_offset_y: int = 0,
         calibration_scale_x: float = 1.0,
         calibration_scale_y: float = 1.0,
-        coordinate_mode: str = "normalized_1000"
+        coordinate_mode: str = "normalized_1000",
+        has_multi_view: bool = False
     ):
         """
         Translates coordinates from model output space to real screen desktop space,
@@ -682,6 +686,9 @@ class AIClient:
 
         def _process_action(action: Dict[str, Any], context_label: str = ""):
             action_type = action.get("type", "action")
+            if not has_multi_view:
+                # In single-view captures, no scrolled lower view exists; force in_scrolled_view to False
+                action["in_scrolled_view"] = False
             # Support box_2d: [ymin, xmin, ymax, xmax]
             if "box_2d" in action and isinstance(action["box_2d"], (list, tuple)) and len(action["box_2d"]) == 4:
                 b = action["box_2d"]
@@ -787,14 +794,18 @@ class AIClient:
                     btn["screen_y"] = sy
                     logger.info(f"Target mapped [{btn_key}]: model=({btn['x']}, {btn['y']}) -> screen=({sx}, {sy})")
 
-        # Propagate in_scrolled_view to navigation buttons if actions or question elements target lower view
+        # Propagate in_scrolled_view to navigation buttons only when a multi-view scrolled view actually exists
         has_scrolled_actions = any(bool(a.get("in_scrolled_view")) for a in result.get("actions", []))
-        for nav_key in ["check_button", "next_button", "submit_button"]:
+        for nav_key in ["check_button", "next_button", "submit_button", "reference_button", "close_button", "dropdown_button"]:
             btn = result.get(nav_key)
-            if btn and isinstance(btn, dict) and "in_scrolled_view" not in btn:
-                by = float(btn.get("y", 1000))
-                if has_scrolled_actions or by >= 350:
-                    btn["in_scrolled_view"] = True
+            if btn and isinstance(btn, dict):
+                if not has_multi_view:
+                    # In single-view captures, no scrolled lower view exists; everything is in the primary view
+                    btn["in_scrolled_view"] = False
+                elif "in_scrolled_view" not in btn:
+                    # If multi-view was captured, only propagate if actions explicitly targeted the scrolled lower view AND button is in lower view
+                    by = float(btn.get("y", 1000))
+                    btn["in_scrolled_view"] = bool(has_scrolled_actions and by >= 350)
 
         # Process and normalize evaluation status, rethinking, and question/answer
         any_incorrect = False

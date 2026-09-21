@@ -8,6 +8,15 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.1.5.b] - 2026-09-21
+
+### Fixed & Improved
+- **Elimination of Unnecessary Down-Scroll Before Clicking Next Button**:
+  - Resolved an issue in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) where navigation buttons (`next_button`, `check_button`, `submit_button`) were unconditionally tagged with `in_scrolled_view = True` due to their vertical coordinate (`by >= 350`), causing the automated worker to scroll down 500px prior to clicking Next on normal single-view screens.
+  - Added multi-view awareness (`has_multi_view`) to `_map_coordinates`: in single-view captures (`has_multi_view = False`), all buttons and actions strictly preserve `in_scrolled_view = False`.
+  - Added viewport alignment safeguards in `trigger_next_button()`, `trigger_check_button()`, and `trigger_submit_button()` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) ensuring that unless the viewport is already scrolled or extra supplementary images were actively used during the solve pipeline, `is_scrolled` is forced to `False`, preventing unwanted down-scroll displacement before button interaction.
+  - Preserved natural continuous scrolling quiz progression (`advance_action: "scroll_down"`) and scrolled multi-view question interaction without viewport jitter.
+
 ## [2.1.5.a] - 2026-09-21
 
 ### Added & Improved

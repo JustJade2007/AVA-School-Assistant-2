@@ -645,6 +645,52 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
         # Should have captured at least 3 frames (blank, content1, content2) before declaring settled
         self.assertGreaterEqual(engine.capture.capture_screen.call_count, 3)
 
+    def test_single_view_next_button_does_not_pre_scroll(self):
+        """
+        Verifies that single-view questions do not scroll down before clicking Next.
+        """
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.executor.click = MagicMock()
+        engine.executor.ensure_scrolled_view = MagicMock()
+        engine.executor._viewport_is_scrolled = False
+
+        engine.last_result = {
+            "advance_action": "click_button",
+            "next_button": {"x": 750, "y": 850, "screen_x": 750, "screen_y": 850, "in_scrolled_view": False},
+            "extra_images_used": False
+        }
+        engine.trigger_next_button()
+
+        # Must NOT call ensure_scrolled_view with True
+        engine.executor.ensure_scrolled_view.assert_called_once_with(False, 500)
+        engine.executor.click.assert_called_once_with(750, 850)
+
+    def test_ai_client_map_coordinates_single_view_does_not_mark_next_scrolled(self):
+        """
+        Verifies that _map_coordinates never marks next_button as in_scrolled_view
+        when has_multi_view is False, even if y >= 350.
+        """
+        client = AIClient(provider="gemini", api_key="mock_key")
+        result = {
+            "next_button": {"x": 500, "y": 850},
+            "actions": [{"type": "click", "x": 500, "y": 200}]
+        }
+        client._map_coordinates(result, 1.0, 1.0, 0, 0, 1000, 1000, has_multi_view=False)
+        self.assertFalse(result["next_button"].get("in_scrolled_view", False))
+
+    def test_ai_client_map_coordinates_multi_view_marks_scrolled_when_appropriate(self):
+        """
+        Verifies that _map_coordinates marks next_button as in_scrolled_view
+        when has_multi_view is True and has_scrolled_actions is True and by >= 350.
+        """
+        client = AIClient(provider="gemini", api_key="mock_key")
+        result = {
+            "next_button": {"x": 500, "y": 850},
+            "actions": [{"type": "click", "x": 500, "y": 200, "in_scrolled_view": True}]
+        }
+        client._map_coordinates(result, 1.0, 1.0, 0, 0, 1000, 1000, has_multi_view=True)
+        self.assertTrue(result["next_button"].get("in_scrolled_view", False))
+
 
 if __name__ == "__main__":
     unittest.main()

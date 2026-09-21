@@ -15,6 +15,7 @@ from core.assistant_engine import AssistantEngine, EngineState
 from config import AppConfig, ConfigManager
 from ui.visualizer import CloakedVisualizer
 from ui.asset_loader import apply_window_icon, get_logo_ctk_image
+from ui.hud_icons import get_hud_icon
 
 
 class HUDOverlay(ctk.CTkToplevel):
@@ -45,6 +46,13 @@ class HUDOverlay(ctk.CTkToplevel):
         self._drag_start_y = 0
         self.debug_window = None
 
+        # Animation states
+        self._typewriter_after_id = None
+        self._active_typewriters: Dict[str, str] = {}
+        self._pulse_after_id = None
+        self._pulse_step = 0
+        self._pulse_base_color = "#38bdf8"
+
         self._setup_window()
         self._build_ui()
         self._register_engine_callbacks()
@@ -71,12 +79,19 @@ class HUDOverlay(ctk.CTkToplevel):
             on_restore=self._on_overlay_restored
         )
 
+        # Transparent color-keying to eliminate outer rectangular corners
+        self.TRANSPARENT_KEY = "#010203"
+        self.configure(fg_color=self.TRANSPARENT_KEY)
+        try:
+            self.wm_attributes("-transparentcolor", self.TRANSPARENT_KEY)
+        except Exception:
+            pass
+
         # Position on screen (width supports generous room for header controls)
         x = max(10, self.config.overlay_x)
         y = max(10, self.config.overlay_y)
         w = max(480, getattr(self.config, "overlay_width", 490))
         self.geometry(f"{w}x320+{x}+{y}")
-        self.configure(fg_color="#18181b")
 
         # Draggable window bindings
         self.bind("<ButtonPress-1>", self._on_drag_start)
@@ -102,15 +117,15 @@ class HUDOverlay(ctk.CTkToplevel):
                 self.cloak_badge.configure(text="⚠️ UNCLOAK", text_color="#f59e0b", fg_color="#451a03")
 
     def _build_ui(self):
-        # Outer border frame
+        # Outer border frame with smooth rounded corners
         self.main_frame = ctk.CTkFrame(
             self,
             fg_color="#18181b",
-            corner_radius=12,
+            corner_radius=14,
             border_width=2,
             border_color="#3b82f6"
         )
-        self.main_frame.pack(fill="both", expand=True, padx=2, pady=2)
+        self.main_frame.pack(fill="both", expand=True, padx=4, pady=4)
 
         # --- Top Header Bar ---
         self.header_frame = ctk.CTkFrame(self.main_frame, fg_color="#27272a", corner_radius=8, height=36)
@@ -166,22 +181,20 @@ class HUDOverlay(ctk.CTkToplevel):
         self.header_actions_frame.bind("<Control-MouseWheel>", self._on_header_mousewheel)
 
         # Calculate initial button dimensions from configurable icon size
-        self.icon_size = getattr(self.config, "header_icon_size", 11)
-        btn_wh = self.icon_size + 11
+        self.icon_size = getattr(self.config, "header_icon_size", 12)
+        btn_wh = max(24, self.icon_size + 12)
         corner_rad = btn_wh // 2
-        btn_font = ctk.CTkFont(size=self.icon_size)
 
         # 1. Close button (circular, rightmost)
         self.btn_close = ctk.CTkButton(
             self.header_actions_frame,
-            text="✕",
+            text="",
+            image=get_hud_icon("close", size=(self.icon_size, self.icon_size), color="#fecdd3"),
             width=btn_wh,
             height=btn_wh,
             corner_radius=corner_rad,
-            font=btn_font,
             fg_color="#3f3f46",
             hover_color="#ef4444",
-            text_color="#fecdd3",
             command=self._handle_close
         )
         self.btn_close.pack(side="right", padx=1)
@@ -189,14 +202,13 @@ class HUDOverlay(ctk.CTkToplevel):
         # 2. Minimize button (circular)
         self.btn_hide = ctk.CTkButton(
             self.header_actions_frame,
-            text="—",
+            text="",
+            image=get_hud_icon("minimize", size=(self.icon_size, self.icon_size), color="#e4e4e7"),
             width=btn_wh,
             height=btn_wh,
             corner_radius=corner_rad,
-            font=btn_font,
             fg_color="#3f3f46",
             hover_color="#52525b",
-            text_color="#e4e4e7",
             command=self.minimize_overlay
         )
         self.btn_hide.pack(side="right", padx=1)
@@ -204,14 +216,13 @@ class HUDOverlay(ctk.CTkToplevel):
         # 3. Collapse button (circular)
         self.btn_collapse = ctk.CTkButton(
             self.header_actions_frame,
-            text="▲",
+            text="",
+            image=get_hud_icon("collapse_up", size=(self.icon_size, self.icon_size), color="#e4e4e7"),
             width=btn_wh,
             height=btn_wh,
             corner_radius=corner_rad,
-            font=btn_font,
             fg_color="#3f3f46",
             hover_color="#52525b",
-            text_color="#e4e4e7",
             command=self.toggle_collapse
         )
         self.btn_collapse.pack(side="right", padx=1)
@@ -220,14 +231,13 @@ class HUDOverlay(ctk.CTkToplevel):
         if self.on_open_settings:
             self.btn_settings = ctk.CTkButton(
                 self.header_actions_frame,
-                text="⚙",
+                text="",
+                image=get_hud_icon("settings", size=(self.icon_size, self.icon_size), color="#bfdbfe"),
                 width=btn_wh,
                 height=btn_wh,
                 corner_radius=corner_rad,
-                font=btn_font,
                 fg_color="#3f3f46",
                 hover_color="#2563eb",
-                text_color="#bfdbfe",
                 command=self.on_open_settings
             )
             self.btn_settings.pack(side="right", padx=1)
@@ -235,34 +245,32 @@ class HUDOverlay(ctk.CTkToplevel):
         # 5. Debug Console button (circular)
         self.btn_debug = ctk.CTkButton(
             self.header_actions_frame,
-            text="🐞",
+            text="",
+            image=get_hud_icon("debug", size=(self.icon_size, self.icon_size), color="#7dd3fc"),
             width=btn_wh,
             height=btn_wh,
             corner_radius=corner_rad,
-            font=btn_font,
             fg_color="#3f3f46",
             hover_color="#52525b",
-            text_color="#7dd3fc",
             command=self.open_debug_window
         )
         self.btn_debug.pack(side="right", padx=1)
 
         # 6. Quick Snip Tool (cutout button) - SMALLER & sleek circular accent
-        snip_wh = max(18, btn_wh - 4)
+        snip_wh = max(20, btn_wh - 2)
         snip_corner = snip_wh // 2
-        snip_font = ctk.CTkFont(size=max(8, self.icon_size - 2))
+        snip_icon_sz = max(9, self.icon_size - 1)
 
         if self.on_snip_solve:
             self.btn_snip = ctk.CTkButton(
                 self.header_actions_frame,
-                text="✂️",
+                text="",
+                image=get_hud_icon("snip", size=(snip_icon_sz, snip_icon_sz), color="#f0f9ff"),
                 width=snip_wh,
                 height=snip_wh,
                 corner_radius=snip_corner,
-                font=snip_font,
                 fg_color="#0369a1",
                 hover_color="#0284c7",
-                text_color="#f0f9ff",
                 command=self.on_snip_solve
             )
             self.btn_snip.pack(side="right", padx=1)
@@ -271,14 +279,13 @@ class HUDOverlay(ctk.CTkToplevel):
         if self.on_open_playground:
             self.btn_playground = ctk.CTkButton(
                 self.header_actions_frame,
-                text="📝",
+                text="",
+                image=get_hud_icon("playground", size=(self.icon_size, self.icon_size), color="#c7d2fe"),
                 width=btn_wh,
                 height=btn_wh,
                 corner_radius=corner_rad,
-                font=btn_font,
                 fg_color="#312e81",
                 hover_color="#4338ca",
-                text_color="#c7d2fe",
                 command=self.on_open_playground
             )
             self.btn_playground.pack(side="right", padx=1)
@@ -513,9 +520,10 @@ class HUDOverlay(ctk.CTkToplevel):
         )
         self.btn_retry_error.pack(side="left", padx=4, pady=4)
 
-        # --- Interactive Controls & Keybind Buttons ---
-        self.btn_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        self.btn_frame.pack(fill="x", padx=6, pady=(0, 6))
+        # --- Interactive Controls & Modern Floating Action Dock ---
+        self.dock_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
+        self.dock_frame.pack(fill="x", padx=6, pady=(0, 6))
+        self.btn_frame = self.dock_frame  # Compatibility alias
 
         hk = self.config.hotkeys
         hk_solve = hk.get("trigger_solve", "F8")
@@ -524,130 +532,266 @@ class HUDOverlay(ctk.CTkToplevel):
         hk_pause = hk.get("pause_resume", "F7")
         hk_stop = hk.get("emergency_stop", "F12")
 
-        # Row 1 of controls
-        self.btn_solve = ctk.CTkButton(
-            self.btn_frame,
-            text=f"▶ Solve ({hk_solve})",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#2563eb",
-            hover_color="#1d4ed8",
-            height=30,
-            command=self.engine.trigger_solve
-        )
-        self.btn_solve.grid(row=0, column=0, padx=3, pady=3, sticky="ew")
+        # Upper Aux Row (secondary utilities: Pause, Scroll, Inspect, Cloak)
+        self.aux_dock_frame = ctk.CTkFrame(self.dock_frame, fg_color="#18181b", corner_radius=8, border_width=1, border_color="#27272a")
+        self.aux_dock_frame.pack(fill="x", pady=(0, 4))
 
-        self.btn_confirm = ctk.CTkButton(
-            self.btn_frame,
-            text=f"✓ Confirm ({hk_confirm})",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#059669",
-            hover_color="#047857",
-            height=30,
-            command=self.engine.confirm_and_execute
-        )
-        self.btn_confirm.grid(row=0, column=1, padx=3, pady=3, sticky="ew")
-
-        self.btn_next = ctk.CTkButton(
-            self.btn_frame,
-            text=f"⏭ Next ({hk_next})",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#7c3aed",
-            hover_color="#6d28d9",
-            height=30,
-            command=self.engine.trigger_next_question
-        )
-        self.btn_next.grid(row=0, column=2, padx=3, pady=3, sticky="ew")
-
-        # Row 2 of controls
         self.btn_pause = ctk.CTkButton(
-            self.btn_frame,
-            text=f"⏸ Pause ({hk_pause})",
-            font=ctk.CTkFont(size=11),
-            fg_color="#4b5563",
-            hover_color="#374151",
-            height=28,
+            self.aux_dock_frame,
+            text=f" Pause [{hk_pause}]",
+            image=get_hud_icon("pause", size=(10, 10), color="#9ca3af"),
+            compound="left",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            text_color="#d1d5db",
+            height=24,
+            corner_radius=6,
             command=self.engine.pause_resume
         )
-        self.btn_pause.grid(row=1, column=0, padx=3, pady=3, sticky="ew")
-
-        self.btn_stop = ctk.CTkButton(
-            self.btn_frame,
-            text=f"⏹ Killswitch ({hk_stop})",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#dc2626",
-            hover_color="#b91c1c",
-            height=28,
-            command=self.engine.emergency_stop
-        )
-        self.btn_stop.grid(row=1, column=1, padx=3, pady=3, sticky="ew")
-
-        self.btn_test_cloak = ctk.CTkButton(
-            self.btn_frame,
-            text="👁 Verify Cloak",
-            font=ctk.CTkFont(size=10),
-            fg_color="#374151",
-            hover_color="#4b5563",
-            height=28,
-            command=self._test_cloak_visibility
-        )
-        self.btn_test_cloak.grid(row=1, column=2, padx=3, pady=3, sticky="ew")
-
-        # Row 3 of controls: Viewport scrolling for long questions
-        self.btn_scroll_down = ctk.CTkButton(
-            self.btn_frame,
-            text="📜 Scroll Down",
-            font=ctk.CTkFont(size=10),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            height=26,
-            command=self._manual_scroll_down
-        )
-        self.btn_scroll_down.grid(row=2, column=0, padx=3, pady=2, sticky="ew")
+        self.btn_pause.pack(side="left", fill="x", expand=True, padx=2, pady=2)
 
         self.btn_scroll_up = ctk.CTkButton(
-            self.btn_frame,
-            text="📜 Scroll Up",
-            font=ctk.CTkFont(size=10),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            height=26,
+            self.aux_dock_frame,
+            text="▲ Scroll",
+            font=ctk.CTkFont(size=9),
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            text_color="#94a3b8",
+            height=24,
+            corner_radius=6,
             command=self._manual_scroll_up
         )
-        self.btn_scroll_up.grid(row=2, column=1, padx=3, pady=2, sticky="ew")
+        self.btn_scroll_up.pack(side="left", fill="x", expand=True, padx=2, pady=2)
+
+        self.btn_scroll_down = ctk.CTkButton(
+            self.aux_dock_frame,
+            text="▼ Scroll",
+            font=ctk.CTkFont(size=9),
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            text_color="#94a3b8",
+            height=24,
+            corner_radius=6,
+            command=self._manual_scroll_down
+        )
+        self.btn_scroll_down.pack(side="left", fill="x", expand=True, padx=2, pady=2)
 
         self.btn_inspect_whole = ctk.CTkButton(
-            self.btn_frame,
-            text="🔍 Inspect Whole Q",
-            font=ctk.CTkFont(size=10),
-            fg_color="#0f766e",
+            self.aux_dock_frame,
+            text=" Inspect",
+            image=get_hud_icon("debug", size=(10, 10), color="#2dd4bf"),
+            compound="left",
+            font=ctk.CTkFont(size=9),
+            fg_color="#134e4a",
             hover_color="#115e59",
-            height=26,
+            text_color="#ccfbf1",
+            height=24,
+            corner_radius=6,
             command=self._manual_inspect_whole_question
         )
-        self.btn_inspect_whole.grid(row=2, column=2, padx=3, pady=2, sticky="ew")
+        self.btn_inspect_whole.pack(side="left", fill="x", expand=True, padx=2, pady=2)
 
-        # Row 3 of controls: Playground Mode launcher
+        self.btn_test_cloak = ctk.CTkButton(
+            self.aux_dock_frame,
+            text=" Cloak Proof",
+            image=get_hud_icon("cloak", size=(10, 10), color="#10b981"),
+            compound="left",
+            font=ctk.CTkFont(size=9),
+            fg_color="#064e3b",
+            hover_color="#065f46",
+            text_color="#a7f3d0",
+            height=24,
+            corner_radius=6,
+            command=self._test_cloak_visibility
+        )
+        self.btn_test_cloak.pack(side="left", fill="x", expand=True, padx=2, pady=2)
+
+        # Primary Hero Row (Solve, Execute, Next, Stop)
+        self.actions_dock_frame = ctk.CTkFrame(self.dock_frame, fg_color="#18181b", corner_radius=10, border_width=1, border_color="#27272a")
+        self.actions_dock_frame.pack(fill="x", pady=(0, 2))
+
+        self.btn_solve = ctk.CTkButton(
+            self.actions_dock_frame,
+            text=f" Solve [{hk_solve}]",
+            image=get_hud_icon("solve", size=(12, 12), color="#ffffff"),
+            compound="left",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            text_color="#ffffff",
+            height=32,
+            corner_radius=8,
+            command=self.engine.trigger_solve
+        )
+        self.btn_solve.pack(side="left", fill="x", expand=True, padx=2, pady=3)
+
+        self.btn_confirm = ctk.CTkButton(
+            self.actions_dock_frame,
+            text=f" Execute [{hk_confirm}]",
+            image=get_hud_icon("execute", size=(12, 12), color="#ffffff"),
+            compound="left",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            text_color="#ffffff",
+            height=32,
+            corner_radius=8,
+            command=self.engine.confirm_and_execute
+        )
+        self.btn_confirm.pack(side="left", fill="x", expand=True, padx=2, pady=3)
+
+        self.btn_next = ctk.CTkButton(
+            self.actions_dock_frame,
+            text=f" Next [{hk_next}]",
+            image=get_hud_icon("next", size=(12, 12), color="#ffffff"),
+            compound="left",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#7c3aed",
+            hover_color="#6d28d9",
+            text_color="#ffffff",
+            height=32,
+            corner_radius=8,
+            command=self.engine.trigger_next_question
+        )
+        self.btn_next.pack(side="left", fill="x", expand=True, padx=2, pady=3)
+
+        self.btn_stop = ctk.CTkButton(
+            self.actions_dock_frame,
+            text=f" Stop [{hk_stop}]",
+            image=get_hud_icon("stop", size=(12, 12), color="#ffffff"),
+            compound="left",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            fg_color="#dc2626",
+            hover_color="#b91c1c",
+            text_color="#ffffff",
+            height=32,
+            corner_radius=8,
+            command=self.engine.emergency_stop
+        )
+        self.btn_stop.pack(side="left", fill="x", expand=True, padx=2, pady=3)
+
+        # Optional Playground Mode launcher pill
         if self.on_open_playground:
             self.btn_playground_launch = ctk.CTkButton(
-                self.btn_frame,
-                text="📝 Launch Playground Mode (F3)",
+                self.dock_frame,
+                text=" Launch Playground Mode (F3)",
+                image=get_hud_icon("playground", size=(11, 11), color="#c7d2fe"),
+                compound="left",
                 font=ctk.CTkFont(size=10, weight="bold"),
                 fg_color="#312e81",
                 hover_color="#4338ca",
-                height=26,
+                text_color="#e0e7ff",
+                height=24,
+                corner_radius=6,
                 command=self.on_open_playground
             )
-            self.btn_playground_launch.grid(row=3, column=0, columnspan=3, padx=3, pady=(3, 2), sticky="ew")
-
-        self.btn_frame.grid_columnconfigure(0, weight=1)
-        self.btn_frame.grid_columnconfigure(1, weight=1)
-        self.btn_frame.grid_columnconfigure(2, weight=1)
+            self.btn_playground_launch.pack(fill="x", padx=2, pady=(2, 0))
 
     def _register_engine_callbacks(self):
         self.engine.add_state_listener(self._on_engine_state_change)
         self.engine.add_result_listener(self._on_engine_result)
         self.engine.add_error_listener(self._on_engine_error)
         self.engine.add_adjustment_listener(self._on_engine_adjustment)
+
+    def _cancel_animations(self):
+        """Cancels all active animation callbacks."""
+        if self._pulse_after_id:
+            try:
+                self.after_cancel(self._pulse_after_id)
+            except Exception:
+                pass
+            self._pulse_after_id = None
+
+        for widget_id, after_id in list(self._active_typewriters.items()):
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
+        self._active_typewriters.clear()
+
+    def _animate_typewriter_text(
+        self,
+        widget: ctk.CTkLabel,
+        full_text: str,
+        prefix: str = "",
+        char_delay_ms: int = 10,
+        chunk_size: int = 3,
+        callback: Optional[Callable[[], None]] = None
+    ):
+        """Smoothly reveals text character by character like a typewriter."""
+        widget_key = str(widget)
+        if widget_key in self._active_typewriters:
+            try:
+                self.after_cancel(self._active_typewriters[widget_key])
+            except Exception:
+                pass
+            del self._active_typewriters[widget_key]
+
+        # If window does not exist or text is very short, set immediately
+        if not self.winfo_exists() or len(full_text) <= chunk_size:
+            widget.configure(text=f"{prefix}{full_text}")
+            if callback:
+                callback()
+            return
+
+        current_idx = 0
+
+        def _step():
+            nonlocal current_idx
+            if not self.winfo_exists() or not widget.winfo_exists():
+                return
+            current_idx += chunk_size
+            current_idx = min(current_idx, len(full_text))
+            widget.configure(text=f"{prefix}{full_text[:current_idx]}")
+            if current_idx < len(full_text):
+                self._active_typewriters[widget_key] = self.after(char_delay_ms, _step)
+            else:
+                if widget_key in self._active_typewriters:
+                    del self._active_typewriters[widget_key]
+                if callback:
+                    callback()
+
+        _step()
+
+    def _start_status_pulse(self, base_color: str):
+        """Starts a breathing glow animation on the status dot indicator."""
+        self._stop_status_pulse()
+        self._pulse_base_color = base_color
+        self._pulse_step = 0
+
+        # Pulsing color ramps based on primary hue
+        color_cycles = {
+            "#38bdf8": ["#38bdf8", "#60a5fa", "#93c5fd", "#e0f2fe", "#93c5fd", "#60a5fa"],
+            "#a855f7": ["#a855f7", "#c084fc", "#d8b4fe", "#f3e8ff", "#d8b4fe", "#c084fc"],
+            "#3b82f6": ["#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe", "#93c5fd", "#60a5fa"],
+            "#06b6d4": ["#06b6d4", "#22d3ee", "#67e8f9", "#cffafe", "#67e8f9", "#22d3ee"],
+            "#ec4899": ["#ec4899", "#f472b6", "#fbcfe8", "#fdf2f8", "#fbcfe8", "#f472b6"],
+            "#8b5cf6": ["#8b5cf6", "#a78bfa", "#c4b5fd", "#ede9fe", "#c4b5fd", "#a78bfa"],
+            "#10b981": ["#10b981", "#34d399", "#6ee7b7", "#a7f3d0", "#6ee7b7", "#34d399"]
+        }
+        cycle = color_cycles.get(base_color, [base_color])
+        if len(cycle) <= 1:
+            self.status_dot.configure(text_color=base_color)
+            return
+
+        def _pulse():
+            if not self.winfo_exists() or not self.status_dot.winfo_exists():
+                return
+            self._pulse_step = (self._pulse_step + 1) % len(cycle)
+            self.status_dot.configure(text_color=cycle[self._pulse_step])
+            self._pulse_after_id = self.after(160, _pulse)
+
+        _pulse()
+
+    def _stop_status_pulse(self):
+        """Stops the status breathing glow."""
+        if self._pulse_after_id:
+            try:
+                self.after_cancel(self._pulse_after_id)
+            except Exception:
+                pass
+            self._pulse_after_id = None
 
     def _on_engine_adjustment(self, message: str):
         self.after(0, lambda: self._show_adjustment_toast(message))
@@ -685,7 +829,19 @@ class HUDOverlay(ctk.CTkToplevel):
 
         is_unverified = (state == EngineState.WAITING_CONFIRMATION and detail.startswith("UNVERIFIED"))
 
+        # Manage pulsing breathing glow for active processing states
+        active_pulse_states = {
+            EngineState.SCANNING: "#38bdf8",
+            EngineState.THINKING: "#a855f7",
+            EngineState.READING: "#38bdf8",
+            EngineState.EXECUTING: "#3b82f6",
+            EngineState.VERIFYING: "#06b6d4",
+            EngineState.INSPECTING: "#ec4899",
+            EngineState.NAVIGATING: "#8b5cf6",
+        }
+
         if state == EngineState.ERROR:
+            self._stop_status_pulse()
             clean_first_line = detail.split("\n")[0].strip() if detail else "Unknown Error"
             short_msg = clean_first_line if len(clean_first_line) <= 38 else clean_first_line[:35] + "..."
             text = f"Error: {short_msg}"
@@ -694,6 +850,7 @@ class HUDOverlay(ctk.CTkToplevel):
             self.btn_status_details.pack(side="right", padx=4)
             self._render_error_card(detail)
         elif is_unverified:
+            self._stop_status_pulse()
             self.status_dot.configure(text="⚠️", text_color="#f59e0b")
             self.status_label.configure(text="⚠️ Action Missed: Question Not Answered!", text_color="#fde047")
             self.btn_status_details.pack_forget()
@@ -705,24 +862,56 @@ class HUDOverlay(ctk.CTkToplevel):
             if state != EngineState.IDLE or not self.engine.error_message:
                 self.error_actions_frame.pack_forget()
 
+            if state in active_pulse_states:
+                self._start_status_pulse(active_pulse_states[state])
+            else:
+                self._stop_status_pulse()
+
         # Update confirm button label & styling based on state
         hk_confirm = self.config.hotkeys.get("confirm_action", "F9")
         if is_unverified:
             self.btn_confirm.configure(
-                text=f"🔄 Retry Answer ({hk_confirm})",
+                text=f" Retry [{hk_confirm}]",
+                image=get_hud_icon("retry", size=(12, 12), color="#ffffff"),
                 fg_color="#d97706",
                 hover_color="#b45309",
                 border_width=2,
                 border_color="#fbbf24"
             )
         elif state == EngineState.READING:
-            self.btn_confirm.configure(text=f"✓ Skip Wait ({hk_confirm})", fg_color="#0284c7", border_width=2, border_color="#38bdf8")
+            self.btn_confirm.configure(
+                text=f" Skip [{hk_confirm}]",
+                image=get_hud_icon("next", size=(12, 12), color="#ffffff"),
+                fg_color="#0284c7",
+                hover_color="#0369a1",
+                border_width=2,
+                border_color="#38bdf8"
+            )
         elif state == EngineState.WAITING_CONFIRMATION:
-            self.btn_confirm.configure(text=f"✓ Confirm ({hk_confirm})", fg_color="#10b981", border_width=2, border_color="#ffffff")
+            self.btn_confirm.configure(
+                text=f" Execute [{hk_confirm}]",
+                image=get_hud_icon("execute", size=(12, 12), color="#ffffff"),
+                fg_color="#10b981",
+                hover_color="#059669",
+                border_width=2,
+                border_color="#ffffff"
+            )
         elif state == EngineState.VERIFYING:
-            self.btn_confirm.configure(text="🔍 Verifying...", fg_color="#0891b2", border_width=0)
+            self.btn_confirm.configure(
+                text=" Verifying...",
+                image=get_hud_icon("debug", size=(12, 12), color="#ffffff"),
+                fg_color="#0891b2",
+                hover_color="#0e7490",
+                border_width=0
+            )
         else:
-            self.btn_confirm.configure(text=f"✓ Confirm ({hk_confirm})", fg_color="#059669", border_width=0)
+            self.btn_confirm.configure(
+                text=f" Execute [{hk_confirm}]",
+                image=get_hud_icon("execute", size=(12, 12), color="#ffffff"),
+                fg_color="#059669",
+                hover_color="#047857",
+                border_width=0
+            )
 
     def _render_error_card(self, detail: str):
         """Displays rich error diagnostics inside the Q&A card for debug users."""
@@ -804,14 +993,17 @@ class HUDOverlay(ctk.CTkToplevel):
         rethink_reasoning = result.get("rethink_reasoning") or ""
         platform_feedback = result.get("platform_feedback") or ""
 
-        self.lbl_question.configure(text=f"Q: {q}", text_color="#e4e4e7")
+        self._animate_typewriter_text(self.lbl_question, f"Q: {q}")
 
         if eval_status == "incorrect" or is_rethinking:
-            self.lbl_answer.configure(text=f"New Solution ({int(conf * 100)}%): {ans}", text_color="#fde047")
+            self.lbl_answer.configure(text_color="#fde047")
+            self._animate_typewriter_text(self.lbl_answer, f"New Solution ({int(conf * 100)}%): {ans}")
         elif eval_status == "correct":
-            self.lbl_answer.configure(text=f"Verified Solution: {ans}", text_color="#34d399")
+            self.lbl_answer.configure(text_color="#34d399")
+            self._animate_typewriter_text(self.lbl_answer, f"Verified Solution: {ans}")
         else:
-            self.lbl_answer.configure(text=f"Answer ({int(conf * 100)}%): {ans}", text_color="#38bdf8")
+            self.lbl_answer.configure(text_color="#38bdf8")
+            self._animate_typewriter_text(self.lbl_answer, f"Answer ({int(conf * 100)}%): {ans}")
 
         self.lbl_reasoning.configure(text=f"Reasoning: {reasoning}", text_color="#9ca3af")
 
@@ -1022,14 +1214,18 @@ class HUDOverlay(ctk.CTkToplevel):
         self.is_collapsed = not self.is_collapsed
         if self.is_collapsed:
             self.content_container.pack_forget()
-            self.btn_frame.pack_forget()
-            self.btn_collapse.configure(text="▼")
-            self.geometry(f"460x86")
+            self.dock_frame.pack_forget()
+            self.btn_collapse.configure(
+                image=get_hud_icon("collapse_down", size=(self.icon_size, self.icon_size), color="#e4e4e7")
+            )
+            self.geometry("460x86")
         else:
             self.content_container.pack(fill="both", expand=True, padx=8, pady=2)
-            self.btn_frame.pack(fill="x", padx=6, pady=(0, 6))
-            self.btn_collapse.configure(text="▲")
-            self.geometry(f"460x320")
+            self.dock_frame.pack(fill="x", padx=6, pady=(0, 6))
+            self.btn_collapse.configure(
+                image=get_hud_icon("collapse_up", size=(self.icon_size, self.icon_size), color="#e4e4e7")
+            )
+            self.geometry("460x320")
 
     def minimize_overlay(self):
         """Minimizes the HUD overlay to the Windows taskbar normally without exposing native titlebar."""
@@ -1144,6 +1340,7 @@ class HUDOverlay(ctk.CTkToplevel):
 
     def _handle_close(self):
         """Handles close button click from HUD header."""
+        self._cancel_animations()
         if self.on_close_app:
             self.on_close_app()
         else:
@@ -1152,29 +1349,38 @@ class HUDOverlay(ctk.CTkToplevel):
     def set_header_icon_size(self, size: int):
         """Dynamically resizes all header bar action icons and container buttons."""
         self.icon_size = max(8, min(18, int(size)))
-        btn_wh = self.icon_size + 11
+        btn_wh = max(24, self.icon_size + 12)
         corner_rad = btn_wh // 2
-        btn_font = ctk.CTkFont(size=self.icon_size)
 
-        # Cutout button is smaller
-        snip_wh = max(18, btn_wh - 4)
+        snip_wh = max(20, btn_wh - 2)
         snip_corner = snip_wh // 2
-        snip_font = ctk.CTkFont(size=max(8, self.icon_size - 2))
+        snip_icon_sz = max(9, self.icon_size - 1)
 
         if hasattr(self, "btn_snip") and self.btn_snip and self.btn_snip.winfo_exists():
-            self.btn_snip.configure(width=snip_wh, height=snip_wh, corner_radius=snip_corner, font=snip_font)
+            self.btn_snip.configure(
+                width=snip_wh,
+                height=snip_wh,
+                corner_radius=snip_corner,
+                image=get_hud_icon("snip", size=(snip_icon_sz, snip_icon_sz), color="#f0f9ff")
+            )
 
-        standard_buttons = [
-            getattr(self, "btn_playground", None),
-            getattr(self, "btn_debug", None),
-            getattr(self, "btn_settings", None),
-            getattr(self, "btn_collapse", None),
-            getattr(self, "btn_hide", None),
-            getattr(self, "btn_close", None),
+        btn_specs = [
+            ("btn_playground", "playground", "#c7d2fe"),
+            ("btn_debug", "debug", "#7dd3fc"),
+            ("btn_settings", "settings", "#bfdbfe"),
+            ("btn_collapse", "collapse_down" if getattr(self, "is_collapsed", False) else "collapse_up", "#e4e4e7"),
+            ("btn_hide", "minimize", "#e4e4e7"),
+            ("btn_close", "close", "#fecdd3"),
         ]
-        for b in standard_buttons:
+        for attr_name, icon_name, color in btn_specs:
+            b = getattr(self, attr_name, None)
             if b and b.winfo_exists():
-                b.configure(width=btn_wh, height=btn_wh, corner_radius=corner_rad, font=btn_font)
+                b.configure(
+                    width=btn_wh,
+                    height=btn_wh,
+                    corner_radius=corner_rad,
+                    image=get_hud_icon(icon_name, size=(self.icon_size, self.icon_size), color=color)
+                )
 
         # Persist to configuration
         try:
@@ -1198,15 +1404,15 @@ class HUDOverlay(ctk.CTkToplevel):
         hk_stop = hk.get("emergency_stop", "F12")
 
         if hasattr(self, "btn_solve"):
-            self.btn_solve.configure(text=f"▶ Solve ({hk_solve})")
+            self.btn_solve.configure(text=f" Solve [{hk_solve}]")
         if hasattr(self, "btn_confirm"):
-            self.btn_confirm.configure(text=f"✓ Confirm ({hk_confirm})")
+            self.btn_confirm.configure(text=f" Execute [{hk_confirm}]")
         if hasattr(self, "btn_next"):
-            self.btn_next.configure(text=f"⏭ Next ({hk_next})")
+            self.btn_next.configure(text=f" Next [{hk_next}]")
         if hasattr(self, "btn_pause"):
-            self.btn_pause.configure(text=f"⏸ Pause ({hk_pause})")
+            self.btn_pause.configure(text=f" Pause [{hk_pause}]")
         if hasattr(self, "btn_stop"):
-            self.btn_stop.configure(text=f"⏹ Killswitch ({hk_stop})")
+            self.btn_stop.configure(text=f" Stop [{hk_stop}]")
 
     def _on_drag_start(self, event):
         self._drag_start_x = event.x

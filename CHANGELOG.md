@@ -8,6 +8,24 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.0.a] - 2026-09-21
+
+### Added & Improved
+- **Automated Worker (HUD) Cosmetic Rework**:
+  - **Seamless Rounded Window Smoothing**:
+    - Applied Windows transparent color-keying (`-transparentcolor` `#010203`) to [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py), perfectly eliminating black outer rectangular window corners and allowing the rounded blue card (`corner_radius=14`, `padx=4, pady=4`) to float smoothly on the desktop.
+  - **High-DPI Vector Icons System**:
+    - Created [ui/hud_icons.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_icons.py) providing high-DPI procedural PIL vector rendering with 4x supersampling, Lanczos downscaling, and caching.
+    - Replaced emojis and text characters with crisp vector icons across HUD header buttons (Close, Minimize, Collapse, Settings, Debug, Snip, Playground) and action controls.
+  - **Dynamic Status & Text Animations**:
+    - Implemented `_start_status_pulse()` and `_stop_status_pulse()` in [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py), giving active working states (Scanning, Thinking, Reading, Executing, Verifying, Inspecting, Navigating) an organic breathing glow transition on the status indicator.
+    - Added `_animate_typewriter_text()` with automatic task scheduling and cleanup, smoothly revealing question and answer solutions chunk-by-chunk upon reception.
+  - **Modern Unified Floating Control Dock**:
+    - Replaced legacy button grid with a modern floating action dock (`dock_frame`):
+      - Primary Hero Action Row (`actions_dock_frame`): Pill-styled buttons for **Solve [F8]**, **Execute [F9]**, **Next [F10]**, and **Stop [F12]** with embedded hotkey badges and vector icons.
+      - Auxiliary Utilities Row (`aux_dock_frame`): Sleek compact buttons for **Pause [F7]**, **▲ Scroll**, **▼ Scroll**, **Inspect**, and **Cloak Proof**.
+      - Maintained full backwards compatibility with hotkey listeners, auto-execution routines, and collapse toggling.
+
 ## [2.1.6.a] - 2026-09-21
 
 ### Added & Improved

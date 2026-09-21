@@ -31,6 +31,7 @@ hiddenimports = [
     'ui.changelog_viewer',
     'ui.asset_loader',
     'ui.window_utils',
+    'ui.hud_icons',
     'core.single_instance',
     'humanizer',
     'docx',

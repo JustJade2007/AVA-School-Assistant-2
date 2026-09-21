@@ -8,6 +8,27 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.1.a] - 2026-09-21
+
+### Added
+- **Automated Worker One-Click GitHub Issue Reporting**:
+  - Added a dedicated `🐛 Report on GitHub` action button inside the Automated Worker HUD error card ([ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py)) and the Debug Inspector Error Diagnostics panel ([ui/debug_window.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/debug_window.py)).
+  - Implemented `generate_github_issue_url` in [core/error_handler.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/error_handler.py) to automatically pre-fill GitHub bug reports according to `.github/ISSUE_TEMPLATE/bug_report.md` with:
+    - Target repository: `https://github.com/JustJade2007/AVA-School-Assistant-2/issues/new`.
+    - Automated bug title matching failing component and error summary.
+    - Application version (`2.2.1.a`).
+    - AI Provider and AI Model (`gemini-3.8-flash`, etc.).
+    - Automated troubleshooting recommendations and formatted error traceback.
+- **Comprehensive Privacy & Secret Sanitization**:
+  - Implemented `sanitize_sensitive_info` in [core/error_handler.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/error_handler.py), strictly masking:
+    - All configured API keys (`gemini_api_key`, `openai_api_key`, `anthropic_api_key`, `custom_api_key`, `api_key`).
+    - API key token patterns (`AIza...`, `sk-...`, `sk-ant-...`, Bearer auth tokens).
+    - Local filesystem usernames in paths (`C:\Users\<username>\...` -> `C:\Users\[USERNAME]\...`).
+    - Local machine hostnames and email addresses.
+  - Added dual-clipboard integration: clicking "Report on GitHub" simultaneously copies the full sanitized diagnostic report to the user's clipboard while safely capping browser query length below HTTP 414 URL limits.
+- **Unit Test Coverage**:
+  - Added [tests/test_github_issue_reporting.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/tests/test_github_issue_reporting.py) testing key redaction, user path sanitization, issue URL formatting, and diagnostic object helpers.
+
 ## [2.2.0.b] - 2026-09-21
 
 ### Fixed

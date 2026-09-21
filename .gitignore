@@ -252,3 +252,6 @@ TODO.md
 todo.md
 todo.txt
 
+# Temp build output
+%TEMP%/
+

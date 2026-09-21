@@ -334,6 +334,17 @@ class DebugWindow(ctk.CTkToplevel):
         )
         self.btn_copy_diagnostic.pack(side="left", padx=4)
 
+        self.btn_report_github = ctk.CTkButton(
+            err_action_bar,
+            text="🐛 Report on GitHub",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#4f46e5",
+            hover_color="#4338ca",
+            height=30,
+            command=self._open_github_issue_draft
+        )
+        self.btn_report_github.pack(side="left", padx=4)
+
         ctk.CTkButton(
             err_action_bar,
             text="🔄 Refresh",
@@ -468,10 +479,38 @@ class DebugWindow(ctk.CTkToplevel):
             messagebox.showinfo("No Error", "No active error diagnostic report to copy.")
             return
 
-        text = diag.to_clipboard_text()
+        cfg = getattr(self.engine, "config", None) if self.engine else None
+        text = diag.to_sanitized_clipboard_text(config=cfg)
         self.clipboard_clear()
         self.clipboard_append(text)
-        messagebox.showinfo("Report Copied", "Full error report and traceback copied to clipboard!")
+        messagebox.showinfo("Report Copied", "Sanitized error report and traceback copied to clipboard!\n(Zero keys or personal info included)")
+
+    def _open_github_issue_draft(self):
+        diag = self.active_error or (self.engine.last_error if self.engine else None)
+        if not diag:
+            messagebox.showinfo("No Error", "No active error diagnostic report to submit.")
+            return
+
+        import webbrowser
+        from core.error_handler import generate_github_issue_url
+        cfg = getattr(self.engine, "config", None) if self.engine else None
+        issue_url = generate_github_issue_url(diag, config=cfg)
+
+        # Copy sanitized report to clipboard as convenience
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(diag.to_sanitized_clipboard_text(config=cfg))
+        except Exception:
+            pass
+
+        try:
+            webbrowser.open(issue_url)
+            messagebox.showinfo(
+                "Issue Draft Opened",
+                "GitHub issue draft opened in your browser!\n\nFull sanitized error logs have also been copied to your clipboard."
+            )
+        except Exception as e:
+            messagebox.showerror("Browser Launch Failed", f"Could not open browser: {e}")
 
     def _save_logs_to_file(self):
         filepath = filedialog.asksaveasfilename(

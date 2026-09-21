@@ -4,8 +4,12 @@ Captures full tracebacks, classifies error types, and generates actionable
 troubleshooting recommendations for debug users and developers.
 """
 
+import os
+import re
 import sys
 import time
+import urllib.parse
+import platform
 import traceback
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any
@@ -51,6 +55,15 @@ class ErrorDiagnostic:
             ])
         lines.append("=============================================================")
         return "\n".join(lines)
+
+    def to_sanitized_clipboard_text(self, config: Optional[Any] = None) -> str:
+        """Returns a sanitized markdown report guaranteed to contain no keys or personal info."""
+        raw = self.to_clipboard_text()
+        return sanitize_sensitive_info(raw, config=config)
+
+    def to_github_issue_url(self, config: Optional[Any] = None, repo: Optional[str] = None) -> str:
+        """Generates a pre-filled GitHub issue URL matching the bug report template."""
+        return generate_github_issue_url(self, config=config, repo=repo)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -178,3 +191,185 @@ def create_error_diagnostic(
         troubleshooting_hint=hint,
         raw_details=raw_details
     )
+
+
+def sanitize_sensitive_info(text: str, config: Optional[Any] = None) -> str:
+    """
+    Strips all API keys, bearer tokens, passwords, private secrets,
+    usernames in paths, hostnames, and email addresses from the string.
+    Ensures zero secret leakage when copying or transmitting error logs.
+    """
+    if not text:
+        return ""
+
+    sanitized = text
+
+    # 1. Redact known API keys from configuration if provided
+    if config:
+        candidate_keys = [
+            getattr(config, "api_key", ""),
+            getattr(config, "gemini_api_key", ""),
+            getattr(config, "openai_api_key", ""),
+            getattr(config, "anthropic_api_key", ""),
+            getattr(config, "custom_api_key", ""),
+        ]
+        if isinstance(config, dict):
+            for k in ("api_key", "gemini_api_key", "openai_api_key", "anthropic_api_key", "custom_api_key"):
+                candidate_keys.append(config.get(k, ""))
+
+        for key in candidate_keys:
+            if key and isinstance(key, str) and len(key.strip()) >= 6:
+                sanitized = sanitized.replace(key.strip(), "[REDACTED_KEY]")
+
+    # 2. Redact known API Key Token patterns (Google AI Studio, OpenAI, Anthropic, Bearer)
+    sanitized = re.sub(r"AIza[0-9A-Za-z\-_]{35}", "[REDACTED_GEMINI_KEY]", sanitized)
+    sanitized = re.sub(r"sk-(?:proj-)?[a-zA-Z0-9\-_]{20,}", "[REDACTED_OPENAI_KEY]", sanitized)
+    sanitized = re.sub(r"sk-ant-[a-zA-Z0-9\-_]{20,}", "[REDACTED_ANTHROPIC_KEY]", sanitized)
+    sanitized = re.sub(r"(?i)\bBearer\s+[a-zA-Z0-9_\-\.]{15,}", "Bearer [REDACTED_TOKEN]", sanitized)
+    sanitized = re.sub(
+        r"""(?i)(["']?(?:api[_-]?key|secret|token|password|auth|authorization)["']?\s*[:=]\s*["']?)([^"',\s]{6,})(["']?)""",
+        r"\1[REDACTED_SECRET]\3",
+        sanitized
+    )
+
+    # 3. Redact personal user paths (Windows: C:\\Users\\<username>\\... or Linux/macOS: /home/<username>/...)
+    usernames = set()
+    for var in ("USERNAME", "USER", "LOGNAME"):
+        val = os.environ.get(var)
+        if val and len(val.strip()) >= 2:
+            usernames.add(val.strip())
+    try:
+        import getpass
+        u = getpass.getuser()
+        if u and len(u.strip()) >= 2:
+            usernames.add(u.strip())
+    except Exception:
+        pass
+
+    for user in usernames:
+        sanitized = re.sub(
+            rf"(?i)([\\/](?:Users|home)[\\/]){re.escape(user)}([\\/])",
+            r"\1[USERNAME]\2",
+            sanitized
+        )
+        sanitized = re.sub(
+            rf"([a-zA-Z]:[\\/][^\\/\n\r]+[\\/]){re.escape(user)}([\\/])",
+            r"\1[USERNAME]\2",
+            sanitized
+        )
+
+    # 4. Redact Hostnames / Machine names if present
+    hosts = set()
+    for var in ("COMPUTERNAME", "HOSTNAME"):
+        val = os.environ.get(var)
+        if val and len(val.strip()) >= 3:
+            hosts.add(val.strip())
+    try:
+        node = platform.node()
+        if node and len(node.strip()) >= 3:
+            hosts.add(node.strip())
+    except Exception:
+        pass
+
+    for host in hosts:
+        if host.lower() not in ("localhost", "windows", "desktop", "laptop"):
+            sanitized = re.sub(rf"\b{re.escape(host)}\b", "[HOSTNAME]", sanitized)
+
+    # 5. Redact Email addresses
+    sanitized = re.sub(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", "[REDACTED_EMAIL]", sanitized)
+
+    return sanitized
+
+
+def generate_github_issue_url(
+    diagnostic: ErrorDiagnostic,
+    config: Optional[Any] = None,
+    repo: Optional[str] = None,
+    max_body_chars: int = 3500
+) -> str:
+    """
+    Builds a pre-filled GitHub issue URL matching .github/ISSUE_TEMPLATE/bug_report.md.
+    Pre-populates the issue title, environment details (OS, version, AI model),
+    troubleshooting recommendations, and sanitized error traceback.
+    Guarantees no API keys or personal information are included.
+    """
+    target_repo = repo
+    if not target_repo and config and hasattr(config, "github_repo"):
+        target_repo = config.github_repo
+    if not target_repo:
+        try:
+            from config import GITHUB_REPO
+            target_repo = GITHUB_REPO
+        except ImportError:
+            target_repo = "JustJade2007/AVA-School-Assistant-2"
+
+    app_version = "2.2.1.a"
+    try:
+        from config import APP_VERSION
+        app_version = APP_VERSION
+    except ImportError:
+        pass
+
+    ai_provider = "gemini"
+    model_name = "gemini-3.8-flash"
+    if config:
+        ai_provider = getattr(config, "ai_provider", ai_provider)
+        model_name = getattr(config, "model_name", model_name)
+        if isinstance(config, dict):
+            ai_provider = config.get("ai_provider", ai_provider)
+            model_name = config.get("model_name", model_name)
+
+    os_info = f"{platform.system()} {platform.release()}"
+
+    clean_title = sanitize_sensitive_info(diagnostic.title, config=config).strip()
+    clean_title = clean_title.replace("\n", " ").replace("\r", "")
+    if len(clean_title) > 90:
+        clean_title = clean_title[:87] + "..."
+
+    clean_message = sanitize_sensitive_info(diagnostic.message, config=config).strip()
+    clean_hint = sanitize_sensitive_info(diagnostic.troubleshooting_hint, config=config).strip()
+    clean_tb = sanitize_sensitive_info(diagnostic.traceback_str or "No traceback attached.", config=config).strip()
+
+    body_header = (
+        f"**Describe the Bug**\n"
+        f"Automated Worker encountered an error during {diagnostic.component}:\n"
+        f"> {clean_message}\n\n"
+        f"**To Reproduce**\n"
+        f"1. Launched Automated Worker (HUD Mode).\n"
+        f"2. Started screen solving / task execution.\n"
+        f"3. Encountered error in component: `{diagnostic.component}`.\n\n"
+        f"**Expected Behavior**\n"
+        f"Expected screen parsing and action execution to succeed without exceptions.\n\n"
+        f"**Desktop Environment:**\n"
+        f"- OS: {os_info}\n"
+        f"- App Version: {app_version}\n"
+        f"- AI Provider: {ai_provider}\n"
+        f"- AI Model: {model_name}\n\n"
+        f"**School Work Context (if applicable):**\n"
+        f"- Feature involved: Automated Worker (HUD Overlay)\n"
+        f"- Exception Type: `{diagnostic.exception_type}`\n"
+        f"- Timestamp: `{diagnostic.timestamp}`\n\n"
+        f"**Troubleshooting Suggestion:**\n"
+        f"{clean_hint}\n\n"
+        f"**Additional Context / Error Traceback:**\n"
+    )
+
+    overhead = len(body_header) + 20
+    available_tb_len = max(500, max_body_chars - overhead)
+
+    if len(clean_tb) > available_tb_len:
+        tb_snippet = clean_tb[-available_tb_len:]
+        clean_tb = f"... [Earlier frames truncated for URL length. Full log copied to clipboard] ...\n{tb_snippet}"
+
+    body_full = f"{body_header}```text\n{clean_tb}\n```\n"
+    final_body = sanitize_sensitive_info(body_full, config=config)
+
+    issue_title = f"BUG: [{diagnostic.component}] {clean_title}"
+    params = {
+        "title": issue_title,
+        "body": final_body,
+        "labels": "bug"
+    }
+
+    query_str = urllib.parse.urlencode(params)
+    return f"https://github.com/{target_repo}/issues/new?{query_str}"

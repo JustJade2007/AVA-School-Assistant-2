@@ -99,6 +99,10 @@ CONFIG_DIR = get_base_directory()
 CONFIG_FILE_PATH = get_config_file_path()
 DEFAULT_CONFIG_FILE_PATH = get_default_config_file_path()
 
+# Application metadata
+APP_VERSION = "2.2.1.a"
+GITHUB_REPO = "JustJade2007/AVA-School-Assistant-2"
+
 # Available default model choices
 AVAILABLE_MODELS = {
     "gemini": [

@@ -489,14 +489,14 @@ class HUDOverlay(ctk.CTkToplevel):
 
         self.btn_inspect_full_error = ctk.CTkButton(
             self.error_actions_frame,
-            text="🔍 Full Diagnostic & Logs",
+            text="🔍 Diagnostics",
             font=ctk.CTkFont(size=10, weight="bold"),
             fg_color="#2563eb",
             hover_color="#1d4ed8",
             height=26,
             command=lambda: self.open_debug_window(open_error_tab=True)
         )
-        self.btn_inspect_full_error.pack(side="left", padx=4, pady=4)
+        self.btn_inspect_full_error.pack(side="left", padx=3, pady=4)
 
         self.btn_copy_quick_error = ctk.CTkButton(
             self.error_actions_frame,
@@ -507,7 +507,18 @@ class HUDOverlay(ctk.CTkToplevel):
             height=26,
             command=self._copy_current_error_report
         )
-        self.btn_copy_quick_error.pack(side="left", padx=4, pady=4)
+        self.btn_copy_quick_error.pack(side="left", padx=3, pady=4)
+
+        self.btn_github_issue = ctk.CTkButton(
+            self.error_actions_frame,
+            text="🐛 Report on GitHub",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            fg_color="#6366f1",
+            hover_color="#4f46e5",
+            height=26,
+            command=self._open_github_issue_draft
+        )
+        self.btn_github_issue.pack(side="left", padx=3, pady=4)
 
         self.btn_retry_error = ctk.CTkButton(
             self.error_actions_frame,
@@ -518,7 +529,7 @@ class HUDOverlay(ctk.CTkToplevel):
             height=26,
             command=self.engine.trigger_solve
         )
-        self.btn_retry_error.pack(side="left", padx=4, pady=4)
+        self.btn_retry_error.pack(side="left", padx=3, pady=4)
 
         # --- Interactive Controls & Modern Floating Action Dock ---
         self.dock_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
@@ -954,12 +965,40 @@ class HUDOverlay(ctk.CTkToplevel):
     def _copy_current_error_report(self):
         diag = self.engine.last_error
         if diag:
-            text = diag.to_clipboard_text()
+            text = diag.to_sanitized_clipboard_text(config=self.config)
         else:
             text = self.engine.error_message or "No error details available."
         self.clipboard_clear()
         self.clipboard_append(text)
-        messagebox.showinfo("Copied", "Error diagnostic report copied to clipboard!")
+        messagebox.showinfo("Copied", "Sanitized error diagnostic report copied to clipboard!\n(Zero keys or private info included)")
+
+    def _open_github_issue_draft(self):
+        """Opens a pre-filled GitHub issue draft in the browser and copies full sanitized logs to clipboard."""
+        import webbrowser
+        from core.error_handler import generate_github_issue_url, create_error_diagnostic
+
+        diag = self.engine.last_error
+        if not diag:
+            err_msg = self.engine.error_message or "Unknown Automated Worker error"
+            diag = create_error_diagnostic(RuntimeError(err_msg), component="Automated Worker")
+
+        # 1. Generate sanitized GitHub issue URL with bug template prefill
+        issue_url = generate_github_issue_url(diag, config=self.config)
+
+        # 2. Copy full sanitized diagnostic logs to clipboard as convenience fallback
+        sanitized_report = diag.to_sanitized_clipboard_text(config=self.config)
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(sanitized_report)
+        except Exception:
+            pass
+
+        # 3. Open issue draft in default browser
+        try:
+            webbrowser.open(issue_url)
+            self._show_adjustment_toast("GitHub draft opened! (Logs copied to clipboard)")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open browser: {e}")
 
     def open_debug_window(self, open_error_tab: bool = False):
         """Opens or focuses the cloaked Debug Console & Error Inspector."""

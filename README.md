@@ -182,7 +182,7 @@ AVA-School-Assistant-2/
 │   ├── automation.py             # Humanized Bézier curves, smart typos, click jitter & failsafes
 │   ├── capture.py                # High-DPI screen capture & coordinate scaling
 │   ├── cloaking.py               # Win32 SetWindowDisplayAffinity wrapper
-│   ├── error_handler.py          # Rich error diagnostics, classification & advice generator
+│   ├── error_handler.py          # Rich error diagnostics, GitHub bug draft builder & secret sanitizer
 │   ├── hotkeys.py                # Global keybind listener (pynput)
 │   ├── local_verifier.py         # Zero-AI-token local ROI verification & layout shift tracking
 │   ├── logger.py                 # Core logger with memory buffer & rotating file handler
@@ -202,6 +202,7 @@ AVA-School-Assistant-2/
 │   └── visualizer.py             # Cloaked on-screen target highlight canvas
 └── tests/
     ├── test_core.py              # Core unit & integration test suite
+    ├── test_github_issue_reporting.py # GitHub issue drafting & secret sanitization tests
     └── test_logging_and_errors.py # Dedicated logging & error diagnostic test suite
 ```
 

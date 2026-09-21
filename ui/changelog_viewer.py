@@ -204,8 +204,8 @@ class ChangelogViewer(ctk.CTkToplevel):
         footer = ctk.CTkFrame(self, fg_color="#121215", corner_radius=0, height=48)
         footer.pack(fill="x", side="bottom")
 
-        # Active version badge at bottom
-        latest_ver = self.parsed_releases[0]["version"] if self.parsed_releases else "2.1.2.a"
+        from config import APP_VERSION
+        latest_ver = self.parsed_releases[0]["version"] if self.parsed_releases else APP_VERSION
         ctk.CTkLabel(
             footer,
             text=f"Current Application Release: v{latest_ver}",

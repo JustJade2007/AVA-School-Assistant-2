@@ -6,6 +6,7 @@ and Anti-Screen Capture Cloaking.
 
 import sys
 import argparse
+from config import APP_VERSION
 from ui.app import AVASchoolAssistantApp
 from ui.asset_loader import set_windows_app_user_model_id
 
@@ -30,7 +31,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="AVA School Assistant 2 v2.2.0.b"
+        version=f"AVA School Assistant 2 v{APP_VERSION}"
     )
     parser.add_argument(
         "--worker",

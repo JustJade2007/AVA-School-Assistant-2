@@ -834,6 +834,32 @@ class AIClient:
                 action["screen_to_x"] = tx
                 action["screen_to_y"] = ty
 
+        def _process_choice(choice: Dict[str, Any]):
+            if "box_2d" in choice and isinstance(choice["box_2d"], (list, tuple)) and len(choice["box_2d"]) == 4:
+                b = choice["box_2d"]
+                ymin, xmin, ymax, xmax = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+                if max(ymin, xmin, ymax, xmax) <= 1.0:
+                    ymin *= 1000.0
+                    xmin *= 1000.0
+                    ymax *= 1000.0
+                    xmax *= 1000.0
+                choice["box_2d"] = [ymin, xmin, ymax, xmax]
+                if "x" not in choice or "y" not in choice:
+                    choice["x"] = (xmin + xmax) / 2.0
+                    choice["y"] = (ymin + ymax) / 2.0
+                bx1, by1 = _translate_point(xmin, ymin)
+                bx2, by2 = _translate_point(xmax, ymax)
+                choice["box_screen"] = [min(bx1, bx2), min(by1, by2), max(bx1, bx2), max(by1, by2)]
+            if "x" in choice and "y" in choice:
+                sx, sy = _translate_point(float(choice["x"]), float(choice["y"]))
+                choice["screen_x"] = sx
+                choice["screen_y"] = sy
+
+        # Process top-level choices if present
+        if "choices" in result and isinstance(result["choices"], list):
+            for ch in result["choices"]:
+                _process_choice(ch)
+
         # Process multi-part items if present
         items = result.get("items", [])
         combined_actions = []
@@ -841,9 +867,16 @@ class AIClient:
             for item in items:
                 part_id = item.get("part_id", "Part")
                 needs_action = item.get("needs_action", True)
+                item_choices = item.get("choices", [])
+                if isinstance(item_choices, list):
+                    for ch in item_choices:
+                        _process_choice(ch)
+
                 item_actions = item.get("actions", [])
                 if isinstance(item_actions, list):
                     for act in item_actions:
+                        if item_choices:
+                            act["choices"] = item_choices
                         _process_action(act, context_label=part_id)
                         if needs_action:
                             combined_actions.append(act)
@@ -852,6 +885,8 @@ class AIClient:
         top_actions = result.get("actions", [])
         if isinstance(top_actions, list) and top_actions:
             for act in top_actions:
+                if "choices" in result and "choices" not in act:
+                    act["choices"] = result["choices"]
                 _process_action(act)
         else:
             result["actions"] = combined_actions

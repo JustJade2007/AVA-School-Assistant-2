@@ -838,7 +838,8 @@ class HUDOverlay(ctk.CTkToplevel):
             EngineState.PAUSED: ("■", "#ef4444", f"Paused {f'({detail})' if detail else ''}")
         }
 
-        is_unverified = (state == EngineState.WAITING_CONFIRMATION and detail.startswith("UNVERIFIED"))
+        is_unverified_retry = (state == EngineState.WAITING_CONFIRMATION and detail.startswith("UNVERIFIED_RETRY:"))
+        is_unverified = (state == EngineState.WAITING_CONFIRMATION and detail.startswith("UNVERIFIED") and not is_unverified_retry)
 
         # Manage pulsing breathing glow for active processing states
         active_pulse_states = {
@@ -860,6 +861,12 @@ class HUDOverlay(ctk.CTkToplevel):
             self.status_label.configure(text=text, text_color="#f3f4f6")
             self.btn_status_details.pack(side="right", padx=4)
             self._render_error_card(detail)
+        elif is_unverified_retry:
+            self._start_status_pulse("#f59e0b")
+            clean_msg = detail.replace("UNVERIFIED_RETRY:", "").strip()
+            self.status_dot.configure(text="⏳", text_color="#f59e0b")
+            self.status_label.configure(text=f"⚠️ {clean_msg}", text_color="#fde047")
+            self.btn_status_details.pack_forget()
         elif is_unverified:
             self._stop_status_pulse()
             self.status_dot.configure(text="⚠️", text_color="#f59e0b")
@@ -880,9 +887,10 @@ class HUDOverlay(ctk.CTkToplevel):
 
         # Update confirm button label & styling based on state
         hk_confirm = self.config.hotkeys.get("confirm_action", "F9")
-        if is_unverified:
+        if is_unverified or is_unverified_retry:
+            btn_text = " Retrying..." if is_unverified_retry else f" Retry [{hk_confirm}]"
             self.btn_confirm.configure(
-                text=f" Retry [{hk_confirm}]",
+                text=btn_text,
                 image=get_hud_icon("retry", size=(16, 16)),
                 fg_color="#d97706",
                 hover_color="#b45309",

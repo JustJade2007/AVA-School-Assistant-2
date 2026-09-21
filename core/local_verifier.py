@@ -489,11 +489,311 @@ class LocalVisualVerifier:
 
         return None
 
-    def is_radio_or_checkbox_selected(self, roi_img: Optional[Image.Image]) -> Tuple[bool, str, float]:
+    def _extract_control_features(self, roi_img: Optional[Image.Image]) -> Dict[str, float]:
+        """
+        Extracts structural, contrast, saturation, and luminance descriptors from a choice control ROI.
+        """
+        if roi_img is None:
+            return {"contrast": 0.0, "sat": 0.0, "inner_std": 0.0, "inner_mean": 128.0, "edge_hits": 0.0}
+
+        w, h = roi_img.size
+        if w < 10 or h < 10:
+            return {"contrast": 0.0, "sat": 0.0, "inner_std": 0.0, "inner_mean": 128.0, "edge_hits": 0.0}
+
+        try:
+            gray = roi_img.convert("L")
+            rgb = roi_img.convert("RGB")
+            g_pixels = gray.load()
+            rgb_pixels = rgb.load()
+
+            mid_x = w // 2
+            mid_y = h // 2
+
+            best_contrast = 0.0
+            best_sat = 0.0
+
+            scan_r = min(2, max(0, mid_x - 6), max(0, mid_y - 6))
+            for cx in range(mid_x - scan_r, mid_x + scan_r + 1):
+                for cy in range(mid_y - scan_r, mid_y + scan_r + 1):
+                    core_vals = []
+                    core_sats = []
+                    for dx in range(-3, 4):
+                        for dy in range(-3, 4):
+                            if dx * dx + dy * dy <= 12:
+                                px, py = cx + dx, cy + dy
+                                if 0 <= px < w and 0 <= py < h:
+                                    core_vals.append(g_pixels[px, py])
+                                    r, g, b = rgb_pixels[px, py]
+                                    sat = max(abs(r - g), abs(g - b), abs(r - b))
+                                    core_sats.append(sat)
+
+                    gap_vals = []
+                    for dx in range(-6, 7):
+                        for dy in range(-6, 7):
+                            dist_sq = dx * dx + dy * dy
+                            if 18 <= dist_sq <= 36:
+                                px, py = cx + dx, cy + dy
+                                if 0 <= px < w and 0 <= py < h:
+                                    gap_vals.append(g_pixels[px, py])
+
+                    if core_vals and gap_vals:
+                        avg_core = sum(core_vals) / len(core_vals)
+                        avg_gap = sum(gap_vals) / len(gap_vals)
+                        contrast = abs(avg_gap - avg_core)
+                        avg_sat = sum(core_sats) / len(core_sats)
+
+                        if contrast > best_contrast:
+                            best_contrast = contrast
+                        if avg_sat > best_sat:
+                            best_sat = avg_sat
+
+            box_r = min(7, max(1, mid_x - 3), max(1, mid_y - 3))
+            inner_box = gray.crop((mid_x - box_r, mid_y - box_r, mid_x + box_r, mid_y + box_r))
+            stat = ImageStat.Stat(inner_box)
+            inner_std = stat.stddev[0] if stat.stddev else 0.0
+            inner_mean = stat.mean[0] if stat.mean else 128.0
+
+            return {
+                "contrast": best_contrast,
+                "sat": best_sat,
+                "inner_std": inner_std,
+                "inner_mean": inner_mean
+            }
+        except Exception as e:
+            logger.debug(f"_extract_control_features error: {e}")
+            return {"contrast": 0.0, "sat": 0.0, "inner_std": 0.0, "inner_mean": 128.0, "edge_hits": 0.0}
+
+    def compare_choice_to_siblings(
+        self,
+        target_roi: Optional[Image.Image],
+        sibling_rois: List[Image.Image]
+    ) -> Tuple[bool, str, float, float]:
+        """
+        Determines whether target_roi is selected by comparing it against sibling multiple choice points.
+        Because unselected options on the same webpage share identical styling, the target's deviation
+        from the sibling baseline provides reliable zero-token selection detection regardless of website theme.
+        Returns: (is_selected, reason, confidence, diff_score)
+        """
+        if target_roi is None or not sibling_rois:
+            return False, "no_sibling_data", 0.0, 0.0
+
+        valid_sibs = [s for s in sibling_rois if s is not None and s.size[0] >= 10 and s.size[1] >= 10]
+        if not valid_sibs:
+            return False, "no_valid_siblings", 0.0, 0.0
+
+        try:
+            target_feat = self._extract_control_features(target_roi)
+            sib_feats = [self._extract_control_features(s) for s in valid_sibs]
+
+            # Compute median unselected baseline across siblings
+            def _median(vals: List[float]) -> float:
+                if not vals:
+                    return 0.0
+                sv = sorted(vals)
+                n = len(sv)
+                return sv[n // 2] if n % 2 != 0 else (sv[n // 2 - 1] + sv[n // 2]) / 2.0
+
+            base_contrast = _median([f["contrast"] for f in sib_feats])
+            base_sat = _median([f["sat"] for f in sib_feats])
+            base_std = _median([f["inner_std"] for f in sib_feats])
+            base_mean = _median([f["inner_mean"] for f in sib_feats])
+
+            # Measure deviations from unselected baseline
+            d_contrast = target_feat["contrast"] - base_contrast
+            d_sat = target_feat["sat"] - base_sat
+            d_std = target_feat["inner_std"] - base_std
+            d_lum = abs(target_feat["inner_mean"] - base_mean)
+
+            # Direct image pixel difference against sibling average
+            t_gray = target_roi.convert("L")
+            img_diffs = []
+            for s in valid_sibs:
+                s_gray = s.convert("L")
+                if s_gray.size != t_gray.size:
+                    s_gray = s_gray.resize(t_gray.size)
+                diff = ImageChops.difference(t_gray, s_gray)
+                stat = ImageStat.Stat(diff)
+                img_diffs.append(stat.mean[0] if stat.mean else 0.0)
+
+            mean_img_diff = sum(img_diffs) / len(img_diffs) if img_diffs else 0.0
+
+            # Inter-sibling similarity check: verify that siblings themselves look like each other
+            inter_sib_diffs = []
+            if len(valid_sibs) >= 2:
+                for idx_a in range(len(valid_sibs) - 1):
+                    s_a = valid_sibs[idx_a].convert("L")
+                    s_b = valid_sibs[idx_a + 1].convert("L")
+                    if s_a.size != s_b.size:
+                        s_b = s_b.resize(s_a.size)
+                    d_ab = ImageStat.Stat(ImageChops.difference(s_a, s_b)).mean[0]
+                    inter_sib_diffs.append(d_ab)
+            inter_sib_baseline_variance = max(inter_sib_diffs) if inter_sib_diffs else 2.0
+
+            # Evaluation 1: Radio bullet dot present in target compared to hollow siblings
+            if d_contrast >= 13.0 and target_feat["contrast"] >= 16.0:
+                conf = min(0.98, 0.78 + (d_contrast / 60.0))
+                reason = f"sibling_diff_bullet (d_contrast=+{d_contrast:.1f}, base={base_contrast:.1f})"
+                return True, reason, conf, d_contrast
+
+            # Evaluation 2: Colored active dot (saturation deviation)
+            if d_sat >= 14.0 and target_feat["sat"] >= 18.0:
+                conf = 0.94
+                reason = f"sibling_diff_colored_dot (d_sat=+{d_sat:.1f}, base_sat={base_sat:.1f})"
+                return True, reason, conf, d_sat
+
+            # Evaluation 3: Checkbox checkmark / stroke density deviation
+            if d_std >= 9.0 and (d_contrast >= 6.0 or d_lum >= 12.0):
+                conf = 0.92
+                reason = f"sibling_diff_checkmark (d_std=+{d_std:.1f}, base_std={base_std:.1f})"
+                return True, reason, conf, d_std
+
+            # Evaluation 4: Solid fill or inverted luminance relative to hollow unselected siblings
+            if d_lum >= 24.0 and mean_img_diff >= max(4.0, inter_sib_baseline_variance * 1.5):
+                conf = 0.90
+                reason = f"sibling_diff_fill_lum (d_lum={d_lum:.1f}, img_diff={mean_img_diff:.1f})"
+                return True, reason, conf, mean_img_diff
+
+            # Evaluation 5: Distinct holistic pixel divergence from consistent sibling baseline
+            if mean_img_diff >= 7.5 and mean_img_diff >= (inter_sib_baseline_variance * 2.0):
+                conf = 0.88
+                reason = f"sibling_diff_holistic (mean_diff={mean_img_diff:.1f}, sib_var={inter_sib_baseline_variance:.1f})"
+                return True, reason, conf, mean_img_diff
+
+            # Unselected state: target closely matches the unselected sibling baseline
+            return False, f"sibling_matches_unselected (diff={mean_img_diff:.1f})", 0.0, mean_img_diff
+
+        except Exception as e:
+            logger.debug(f"Error in compare_choice_to_siblings: {e}")
+            return False, f"error_{e}", 0.0, 0.0
+
+    def find_sibling_choice_points(
+        self,
+        target_x: int,
+        target_y: int,
+        max_scan_dist: int = 320,
+        min_spacing: int = 18
+    ) -> List[Tuple[int, int]]:
+        """
+        Discovers vertically aligned sibling multiple-choice options (e.g. radio buttons or checkboxes)
+        along the same column as (target_x, target_y).
+        Returns a list of screen coordinates [(x1, y1), (x2, y2), ...] of sibling choices.
+        """
+        siblings: List[Tuple[int, int]] = []
+        try:
+            # Capture vertical strip around target_x
+            strip_top = max(0, target_y - max_scan_dist)
+            strip_bottom = target_y + max_scan_dist
+            strip_left = max(0, target_x - 16)
+            strip_w = 32
+            strip_h = strip_bottom - strip_top
+
+            strip_img = self.capture_roi(target_x, target_y, radius_w=16, radius_h=max_scan_dist)
+            if strip_img is None:
+                return []
+
+            sw, sh = strip_img.size
+            mid_strip_y = sh // 2  # target_y in strip space
+            gray = strip_img.convert("L")
+            edges = gray.filter(ImageFilter.FIND_EDGES)
+            ep = edges.load()
+
+            # Scan upward and downward from target_y
+            found_rel_ys: List[int] = []
+
+            # Check for repeating circular / box perimeter edge signatures
+            for step_dir in [-1, 1]:
+                y_range = range(mid_strip_y + (step_dir * min_spacing),
+                                (0 if step_dir == -1 else sh - 10),
+                                step_dir * 3)
+                for cur_y in y_range:
+                    if cur_y < 10 or cur_y >= sh - 10:
+                        continue
+
+                    # Avoid clustering too close to already found points
+                    if any(abs(cur_y - fy) < min_spacing for fy in found_rel_ys):
+                        continue
+
+                    best_hits = 0
+                    cx = sw // 2
+                    for r in [7, 8, 9]:
+                        if cx - r < 0 or cx + r >= sw or cur_y - r < 0 or cur_y + r >= sh:
+                            continue
+                        pts = [
+                            ep[cx, cur_y - r], ep[cx, cur_y + r],
+                            ep[cx - r, cur_y], ep[cx + r, cur_y],
+                            ep[cx - int(r*0.7), cur_y - int(r*0.7)],
+                            ep[cx + int(r*0.7), cur_y + int(r*0.7)]
+                        ]
+                        hits = sum(1 for p in pts if p >= 26)
+                        if hits > best_hits:
+                            best_hits = hits
+
+                    if best_hits >= 4:
+                        found_rel_ys.append(cur_y)
+                        rel_diff = cur_y - mid_strip_y
+                        cand_x = target_x
+                        cand_y = target_y + rel_diff
+                        siblings.append((cand_x, cand_y))
+                        if len(siblings) >= 5:
+                            break
+
+            if siblings:
+                logger.info(f"Discovered {len(siblings)} sibling choice point(s) on screen near ({target_x}, {target_y}): {siblings}")
+
+        except Exception as e:
+            logger.debug(f"find_sibling_choice_points error: {e}")
+
+        return siblings
+
+    def get_sibling_choice_coordinates(
+        self,
+        target_x: int,
+        target_y: int,
+        result_data: Optional[Dict[str, Any]] = None
+    ) -> List[Tuple[int, int]]:
+        """
+        Retrieves sibling choice coordinates from result_data (if AI provided choices)
+        or automatically discovers them on screen via vertical column scanning.
+        """
+        sibling_coords: List[Tuple[int, int]] = []
+
+        # 1. Check if explicit choices were returned by the AI
+        if result_data and isinstance(result_data, dict):
+            # Check top-level choices
+            choices = result_data.get("choices")
+            if not choices and isinstance(result_data.get("items"), list):
+                # Search items
+                for itm in result_data.get("items", []):
+                    if itm.get("choices"):
+                        choices = itm.get("choices")
+                        break
+
+            if isinstance(choices, list) and len(choices) >= 2:
+                for c in choices:
+                    cx = c.get("screen_x", c.get("x"))
+                    cy = c.get("screen_y", c.get("y"))
+                    if cx is not None and cy is not None:
+                        icx, icy = int(cx), int(cy)
+                        # Exclude the target point itself (within 12px tolerance)
+                        if abs(icx - target_x) > 12 or abs(icy - target_y) > 12:
+                            sibling_coords.append((icx, icy))
+
+        # 2. If no explicit choices from AI, discover on-screen sibling points
+        if not sibling_coords:
+            sibling_coords = self.find_sibling_choice_points(target_x, target_y)
+
+        return sibling_coords
+
+    def is_radio_or_checkbox_selected(
+        self,
+        roi_img: Optional[Image.Image],
+        sibling_rois: Optional[List[Image.Image]] = None
+    ) -> Tuple[bool, str, float]:
         """
         Evaluates whether an ROI crop contains an active/selected radio button (inner bullet dot or color fill)
         or checked checkbox (checkmark/fill).
-        Zero-token computer vision heuristic with light and dark theme support.
+        First utilizes relative comparison against sibling_rois if provided,
+        falling back to high-fidelity standalone zero-token computer vision heuristics.
         Returns (is_selected, reason, confidence).
         """
         if roi_img is None:
@@ -503,6 +803,13 @@ class LocalVisualVerifier:
         if w < 12 or h < 12:
             return False, "image_too_small", 0.0
 
+        # Tier 1: Relative comparative verification against sibling choices
+        if sibling_rois and len(sibling_rois) >= 1:
+            is_comp_sel, comp_reason, comp_conf, diff_score = self.compare_choice_to_siblings(roi_img, sibling_rois)
+            if is_comp_sel:
+                return True, comp_reason, comp_conf
+
+        # Tier 2: Standalone computer vision heuristics (with light and dark theme support)
         try:
             gray = roi_img.convert("L")
             rgb = roi_img.convert("RGB")
@@ -534,7 +841,6 @@ class LocalVisualVerifier:
                                     core_sats.append(sat)
 
                     # 2. Gap ring pixels (radius 4.2 to 6.0 px, 18 <= dx^2 + dy^2 <= 36)
-                    # Stays safely inside the 8-11 px outer border ring
                     gap_vals = []
                     for dx in range(-6, 7):
                         for dy in range(-6, 7):
@@ -556,16 +862,15 @@ class LocalVisualVerifier:
                             best_sat = avg_sat
 
             # Evaluation 1: Radio button inner bullet dot
-            if best_contrast >= 28.0:
+            if best_contrast >= 25.0:
                 conf = min(1.0, 0.70 + (best_contrast / 100.0))
                 return True, f"radio_inner_bullet (contrast={best_contrast:.1f})", conf
 
             # Evaluation 2: Colored active bullet dot (blue, green, purple active dots)
-            if best_sat >= 25.0 and best_contrast >= 14.0:
+            if best_sat >= 22.0 and best_contrast >= 12.0:
                 return True, f"radio_colored_bullet (sat={best_sat:.1f}, contrast={best_contrast:.1f})", 0.90
 
             # Evaluation 3: Checkbox checkmark or solid fill
-            # Inner square has high variance / checkmark strokes (both light and dark modes)
             box_r = min(7, mid_x - 3, mid_y - 3)
             inner_box = gray.crop((mid_x - box_r, mid_y - box_r, mid_x + box_r, mid_y + box_r))
             stat = ImageStat.Stat(inner_box)
@@ -574,7 +879,7 @@ class LocalVisualVerifier:
             dark_px = sum(inner_hist[:140])
             bright_px = sum(inner_hist[160:])
 
-            if inner_std >= 25.0 and (dark_px >= 10 or bright_px >= 10):
+            if inner_std >= 22.0 and (dark_px >= 8 or bright_px >= 8):
                 return True, f"checkbox_checkmark (std={inner_std:.1f})", 0.88
 
         except Exception as e:
@@ -771,9 +1076,13 @@ class LocalVisualVerifier:
                 sx = act.get("screen_x", act.get("x"))
                 sy = act.get("screen_y", act.get("y"))
                 if sx is not None and sy is not None:
-                    live_roi = self.capture_roi(int(sx), int(sy))
+                    isx, isy = int(sx), int(sy)
+                    live_roi = self.capture_roi(isx, isy)
                     if act_type in ["click", "double_click"]:
-                        sel, r_reason, conf = self.is_radio_or_checkbox_selected(live_roi)
+                        # Fetch sibling choice coordinates (from AI choices or on-screen vertical scan)
+                        sib_coords = self.get_sibling_choice_coordinates(isx, isy, result_data)
+                        sibling_rois = [self.capture_roi(cx, cy) for cx, cy in sib_coords]
+                        sel, r_reason, conf = self.is_radio_or_checkbox_selected(live_roi, sibling_rois=sibling_rois)
                         if sel:
                             is_act_verified = True
                             reason = f"live_{r_reason}"

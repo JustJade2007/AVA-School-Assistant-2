@@ -79,6 +79,11 @@ class AssistantEngine:
         # Written question solver & humanizer (AVA 2.0)
         self.written_solver: Optional[WrittenSolver] = None
 
+        # Click offset memory & automatic retry tracking
+        self._action_offset_memory: Dict[str, Dict[str, Any]] = {}
+        self._max_auto_miss_retries: int = 3
+        self._retry_countdown_seconds: int = 5
+
         # Update executor parameters on init
         self._sync_config()
         self.config_manager.add_listener(lambda cfg: self._sync_config())
@@ -977,6 +982,35 @@ class AssistantEngine:
             self.last_error = None
             self._notify_result(result)
 
+            # Check if all returned actions are already selected on screen (comparative sibling check)
+            actions_to_check = result.get("actions", [])
+            if self.config.local_verification_enabled and actions_to_check and not eval_info["is_rethinking"]:
+                all_already_done = True
+                for act in actions_to_check:
+                    act_t = str(act.get("type", "")).lower()
+                    if act_t in ["click", "double_click"]:
+                        sx = act.get("screen_x", act.get("x"))
+                        sy = act.get("screen_y", act.get("y"))
+                        if sx is not None and sy is not None:
+                            isx, isy = int(sx), int(sy)
+                            roi = self.verifier.capture_roi(isx, isy)
+                            sib_coords = self.verifier.get_sibling_choice_coordinates(isx, isy, result)
+                            sib_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
+                            is_sel, reason, _ = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sib_rois)
+                            if not is_sel:
+                                all_already_done = False
+                        else:
+                            all_already_done = False
+                    else:
+                        all_already_done = False
+
+                if all_already_done and actions_to_check:
+                    logger.info("Local verifier confirmed that all options are ALREADY selected on screen! Suppressing redundant actions.")
+                    self._handle_adjustment("✓ Options confirmed already selected on screen (Zero-Token Verified)")
+                    result["needs_action"] = False
+                    result["actions"] = []
+                    result["ready_to_advance"] = True
+
             # If all parts are already confirmed CORRECT by platform and no actions are required,
             # OR if question answer is already in place on screen (needs_action=False, actions=0) and ready to advance
             is_already_filled = (
@@ -1194,22 +1228,64 @@ class AssistantEngine:
                 self.set_state(EngineState.WAITING_CONFIRMATION, "Unanswered question (no actions). Advancing blocked.")
                 return
 
+        q_key = str(self.last_result.get("question", "current_question"))[:60]
+        # Pre-Execution Check: Verify if proposed answer options are ALREADY selected on screen
+        if self.config.local_verification_enabled and actions and not was_rethinking:
+            all_already_selected = True
+            for act in actions:
+                act_type = str(act.get("type", "")).lower()
+                if act_type in ["click", "double_click"]:
+                    sx = act.get("screen_x", act.get("x"))
+                    sy = act.get("screen_y", act.get("y"))
+                    if sx is not None and sy is not None:
+                        isx, isy = int(sx), int(sy)
+                        roi = self.verifier.capture_roi(isx, isy)
+                        sib_coords = self.verifier.get_sibling_choice_coordinates(isx, isy, self.last_result)
+                        sibling_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
+                        is_sel, reason, conf = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sibling_rois)
+                        if is_sel:
+                            act["verified"] = True
+                            act["verification_reason"] = f"pre_check_{reason}"
+                        else:
+                            all_already_selected = False
+                    else:
+                        all_already_selected = False
+                elif act_type == "type_text":
+                    all_already_selected = False
+
+            if all_already_selected and actions:
+                logger.info("Pre-execution check: Target options are ALREADY selected on screen (Zero-Token Confirmed)! Skipping duplicate clicks.")
+                self._handle_adjustment("✓ Answer options already selected on screen. Proceeding to navigation...")
+                self.last_result["ready_to_advance"] = True
+                self.last_result["needs_action"] = False
+                self.last_result["actions"] = []
+                actions = []
+
+        # Pass prior attempted coordinates into actions to avoid repeated clicks on same coordinates
+        if q_key in self._action_offset_memory:
+            prior_coords = self._action_offset_memory[q_key].get("attempted_coords", set())
+            for act in actions:
+                act["prior_attempted_coords"] = prior_coords
+
         phase = "Action Execution"
         try:
-            self.set_state(EngineState.EXECUTING)
-            logger.info(f"Executing sequence of {len(actions)} actions...")
-            seq_summary = self.executor.execute_action_sequence(actions, delay_between=self.config.action_delay)
-            if isinstance(seq_summary, dict) and seq_summary.get("error") == "concurrent_input_prevented":
-                logger.warning("execute_current_solution: execution aborted because another input stream is already active.")
-                return
+            if actions:
+                self.set_state(EngineState.EXECUTING)
+                logger.info(f"Executing sequence of {len(actions)} actions...")
+                seq_summary = self.executor.execute_action_sequence(actions, delay_between=self.config.action_delay)
+                if isinstance(seq_summary, dict) and seq_summary.get("error") == "concurrent_input_prevented":
+                    logger.warning("execute_current_solution: execution aborted because another input stream is already active.")
+                    return
 
-            if isinstance(seq_summary, dict):
-                logger.info(
-                    f"Action sequence completed: {seq_summary.get('verified_count', 0)}/"
-                    f"{seq_summary.get('total_verifiable', 0)} actions verified."
-                )
+                if isinstance(seq_summary, dict):
+                    logger.info(
+                        f"Action sequence completed: {seq_summary.get('verified_count', 0)}/"
+                        f"{seq_summary.get('total_verifiable', 0)} actions verified."
+                    )
+                else:
+                    logger.info("Action sequence completed.")
             else:
-                logger.info("Action sequence completed.")
+                seq_summary = {"all_verified": True, "verified_count": 0, "total_verifiable": 0}
 
             # Zero-Token Post-Execution Verification: Ensure question was actually answered before going idle!
             phase = "Zero-Token Answer Verification"
@@ -1228,9 +1304,9 @@ class AssistantEngine:
                     "details": f"input_failsafe_failed ({len(failed_inputs)} inputs unconfirmed: {failed_inputs})",
                     "failed_inputs": failed_inputs
                 }
-            elif not self.config.local_verification_enabled:
+            elif not self.config.local_verification_enabled or not actions:
                 is_answered = True
-                verification = {"is_answered": True, "details": "verification_disabled_by_config", "all_verified": True}
+                verification = {"is_answered": True, "details": "verification_disabled_or_no_actions", "all_verified": True}
             elif isinstance(seq_summary, dict) and seq_summary.get("all_verified", False):
                 is_answered = True
                 verification = {"is_answered": True, "details": "all_actions_verified_in_sequence", "all_verified": True}
@@ -1248,6 +1324,9 @@ class AssistantEngine:
                     f"Details: {verification.get('details', '')}"
                 )
                 self._handle_adjustment("✓ Answer verified (Zero-Token Confirmed)")
+
+                # Reset offset memory & retry count on confirmed answer
+                self._action_offset_memory.pop(q_key, None)
 
                 # Written response verification (AVA 2.0)
                 if self.last_result.get("is_written_response") and self.config.written_verification_enabled:
@@ -1290,19 +1369,69 @@ class AssistantEngine:
                 if was_rethinking and not has_pending_items:
                     self.last_result["ready_to_advance"] = True
             else:
+                # Record click offset telemetry for retry attempt
+                if q_key not in self._action_offset_memory:
+                    self._action_offset_memory[q_key] = {"retry_count": 0, "attempted_coords": set(), "last_offset": (0, 0)}
+
+                mem = self._action_offset_memory[q_key]
+                last_off_x, last_off_y = 0, 0
+                for act in actions:
+                    intended_x = act.get("intended_x", act.get("x"))
+                    intended_y = act.get("intended_y", act.get("y"))
+                    last_x = act.get("last_clicked_x", intended_x)
+                    last_y = act.get("last_clicked_y", intended_y)
+                    if intended_x is not None and last_x is not None:
+                        last_off_x = int(last_x) - int(intended_x)
+                    if intended_y is not None and last_y is not None:
+                        last_off_y = int(last_y) - int(intended_y)
+                    for att in act.get("attempted_clicks", []):
+                        mem["attempted_coords"].add((att["x"], att["y"]))
+
+                mem["last_offset"] = (last_off_x, last_off_y)
+
+                if mem["retry_count"] < self._max_auto_miss_retries and not self.executor.is_stopped():
+                    mem["retry_count"] += 1
+                    attempt_num = mem["retry_count"]
+                    msg = (
+                        f"⚠️ Action unconfirmed. Recorded click offset ({last_off_x:+d}px, {last_off_y:+d}px). "
+                        f"Waiting 5s before auto-retrying (attempt {attempt_num}/{self._max_auto_miss_retries})..."
+                    )
+                    logger.warning(msg)
+                    self._handle_adjustment(msg)
+
+                    for s in range(self._retry_countdown_seconds, 0, -1):
+                        if self.executor.is_stopped():
+                            return
+                        self.set_state(
+                            EngineState.WAITING_CONFIRMATION,
+                            f"UNVERIFIED_RETRY: Retrying in {s}s... (Offset: {last_off_x:+d}px, {last_off_y:+d}px)"
+                        )
+                        time.sleep(1.0)
+
+                    if self.executor.is_stopped():
+                        return
+
+                    logger.info(f"Auto-retrying missed action sequence with recorded offset telemetry (attempt {attempt_num})...")
+                    self.execute_current_solution()
+                    return
+
+                # If all auto-retries exhausted
                 logger.warning(
-                    f"[!] Zero-token verification FAILED: Question was NOT confirmed answered after execution and 3 readjustments! "
+                    f"[!] Zero-token verification FAILED after {self._max_auto_miss_retries} auto-retries! "
                     f"Details: {verification.get('details', '')}"
                 )
                 self.last_result["ready_to_advance"] = False
                 self.last_result["action_missed"] = True
-                unver_msg = "⚠️ Action missed after 3 readjustments: Question is NOT answered! Press F9 to retry or click manually."
+                unver_msg = (
+                    f"⚠️ Action missed after {self._max_auto_miss_retries} readjustment attempts "
+                    f"[offset: {last_off_x:+d}px, {last_off_y:+d}px]. Press F9 to retry or click manually."
+                )
                 self._handle_adjustment(unver_msg)
 
                 # CRITICAL INVARIANT: DO NOT GO IDLE! DO NOT ADVANCE!
                 self.set_state(
                     EngineState.WAITING_CONFIRMATION,
-                    "UNVERIFIED: Click missed answer after 3 readjustments. Press F9 to retry."
+                    "UNVERIFIED: Click missed answer after retries. Press F9 to retry."
                 )
                 return
 
@@ -1495,6 +1624,18 @@ class AssistantEngine:
                     if not advanced:
                         logger.info("Auto-advance: Scanning screen to detect newly revealed 'Next' / navigation button...")
                         advanced = self._discover_and_click_next_button(override_region=self.last_region)
+
+                    if not advanced:
+                        logger.warning(
+                            "Auto-advance: Next button not found or transition unconfirmed after answering all questions. "
+                            "Pausing autonomous loop to prevent re-answering already answered questions."
+                        )
+                        self._handle_adjustment("⚠️ All questions answered! Click Next or advance manually to continue.")
+                        self.set_state(
+                            EngineState.WAITING_CONFIRMATION,
+                            "All questions answered. Ready to advance."
+                        )
+                        return
 
                 # Step 3: Multi-part continuation or autonomous loop
                 if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():

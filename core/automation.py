@@ -420,6 +420,19 @@ class AutomationExecutor:
         if action_type in ["click", "double_click"] and x is not None and y is not None:
             target_x, target_y = int(x), int(y)
             is_double = (action_type == "double_click")
+            action["intended_x"] = target_x
+            action["intended_y"] = target_y
+
+            # Fetch sibling choice points to empower comparative verification across custom website themes
+            sibling_coords = []
+            sibling_rois = None
+            if self.local_verification_enabled and hasattr(self.verifier, "get_sibling_choice_coordinates"):
+                try:
+                    sibling_coords = self.verifier.get_sibling_choice_coordinates(target_x, target_y, action.get("result_data"))
+                    if sibling_coords:
+                        sibling_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sibling_coords]
+                except Exception as e:
+                    logger.debug(f"Could not prepare sibling choice coordinates: {e}")
 
             # Local verification setup: capture baseline ROI and option row band
             before_roi = None
@@ -434,9 +447,19 @@ class AutomationExecutor:
             # Perform primary click
             self.click(target_x, target_y, double=is_double)
 
+            attempted_clicks = [{
+                "x": target_x,
+                "y": target_y,
+                "offset_x": 0,
+                "offset_y": 0,
+                "verified": False,
+                "reason": "primary_click"
+            }]
+
             # Post-action local verification
             is_confirmed = False
             verification_reason = "unverified"
+            last_clicked_x, last_clicked_y = target_x, target_y
 
             if self.local_verification_enabled and before_roi:
                 time.sleep(0.09)
@@ -445,23 +468,30 @@ class AutomationExecutor:
                     target_x, target_y, offset_left=85, offset_right=35, radius_h=25
                 )
 
-                # 1. Direct radio / checkbox selection check at click location
-                sel, r_reason, conf = self.verifier.is_radio_or_checkbox_selected(after_roi)
+                # 1. Direct radio / checkbox selection check at click location (using sibling comparison if available)
+                sel, r_reason, conf = self.verifier.is_radio_or_checkbox_selected(after_roi, sibling_rois=sibling_rois)
                 if sel:
                     is_confirmed = True
                     verification_reason = r_reason
+                    attempted_clicks[0]["verified"] = True
+                    attempted_clicks[0]["reason"] = r_reason
                 else:
                     # 2. Check for option row background highlight
                     row_hl, hl_score = self.verifier.is_option_row_highlighted(before_band, after_band)
                     if row_hl:
                         is_confirmed = True
                         verification_reason = f"row_highlight (diff={hl_score:.1f})"
+                        attempted_clicks[0]["verified"] = True
+                        attempted_clicks[0]["reason"] = verification_reason
                     else:
                         # 3. Check for general pixel difference
                         diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
                         if diff_ok and diff_score >= 1.6:
                             is_confirmed = True
                             verification_reason = f"pixel_diff (score={diff_score:.1f})"
+                            attempted_clicks[0]["verified"] = True
+                            attempted_clicks[0]["reason"] = verification_reason
+
                 # --- SMART ZERO-TOKEN RECOVERY PROBING (EXACTLY UP TO 3 READJUSTMENTS) ---
                 # If primary click missed (e.g. coordinates landed on text label instead of radio circle):
                 if not is_confirmed:
@@ -484,7 +514,7 @@ class AutomationExecutor:
                     if (snapped_x, snapped_y) != (target_x, target_y) and (snapped_x, snapped_y) not in raw_candidates:
                         raw_candidates.append((snapped_x, snapped_y))
 
-                    # 4. Standard leftward web radio/checkbox offsets (common distances from label text to input control)
+                    # 4. Standard leftward web radio/checkbox offsets
                     for dx in [-35, -50, -22, -65, -15]:
                         cand = (target_x + dx, target_y)
                         if cand not in raw_candidates and cand != (target_x, target_y):
@@ -497,8 +527,19 @@ class AutomationExecutor:
                         if cand not in raw_candidates and cand != (target_x, target_y):
                             raw_candidates.append(cand)
 
+                    # Filter out any coordinates that have already been tried previously (from action history)
+                    prior_tried = action.get("prior_attempted_coords", set())
+                    if not isinstance(prior_tried, (set, list)):
+                        prior_tried = set()
+                    available_candidates = [
+                        c for c in raw_candidates
+                        if c not in prior_tried and c != (target_x, target_y)
+                    ]
+                    if not available_candidates:
+                        available_candidates = raw_candidates
+
                     # Select exactly up to 3 distinct readjustment attempts
-                    readjustment_candidates = raw_candidates[:3]
+                    readjustment_candidates = available_candidates[:3]
                     max_attempts = len(readjustment_candidates)
 
                     logger.warning(
@@ -508,6 +549,7 @@ class AutomationExecutor:
 
                     for attempt_idx, (probe_x, probe_y) in enumerate(readjustment_candidates, 1):
                         self._check_stop()
+                        last_clicked_x, last_clicked_y = probe_x, probe_y
                         offset_x = probe_x - target_x
                         offset_y = probe_y - target_y
                         msg = (
@@ -531,8 +573,8 @@ class AutomationExecutor:
                             target_x, target_y, offset_left=85, offset_right=35, radius_h=25
                         )
 
-                        # 1. Direct radio / checkbox selection check at probe location
-                        p_sel, p_reason, p_conf = self.verifier.is_radio_or_checkbox_selected(after_probe_roi)
+                        # 1. Direct radio / checkbox selection check at probe location (with sibling comparison)
+                        p_sel, p_reason, p_conf = self.verifier.is_radio_or_checkbox_selected(after_probe_roi, sibling_rois=sibling_rois)
 
                         # 2. Local pixel difference between before and after at probe location
                         p_diff_ok, p_diff_score = self.verifier.verify_action_completion(
@@ -542,6 +584,15 @@ class AutomationExecutor:
                         # 3. Check for option row highlight
                         p_row_hl, p_hl_score = self.verifier.is_option_row_highlighted(before_band, after_probe_band)
 
+                        attempt_rec = {
+                            "x": probe_x,
+                            "y": probe_y,
+                            "offset_x": offset_x,
+                            "offset_y": offset_y,
+                            "verified": False,
+                            "reason": "unverified"
+                        }
+
                         if p_sel or (p_diff_ok and p_diff_score >= 1.6) or p_row_hl:
                             reason_str = p_reason if p_sel else ("row_highlight" if p_row_hl else f"diff_confirmed={p_diff_score:.1f}")
                             logger.info(
@@ -550,12 +601,17 @@ class AutomationExecutor:
                             )
                             is_confirmed = True
                             verification_reason = f"readjustment_attempt_{attempt_idx}_{reason_str}"
+                            attempt_rec["verified"] = True
+                            attempt_rec["reason"] = verification_reason
+                            attempted_clicks.append(attempt_rec)
                             action["screen_x"] = probe_x
                             action["screen_y"] = probe_y
                             if "x" in action: action["x"] = probe_x
                             if "y" in action: action["y"] = probe_y
                             break
                         else:
+                            attempt_rec["reason"] = "unconfirmed_probe"
+                            attempted_clicks.append(attempt_rec)
                             logger.warning(
                                 f"Readjustment attempt {attempt_idx}/{max_attempts} at ({probe_x}, {probe_y}) "
                                 f"failed to confirm selection."
@@ -563,13 +619,23 @@ class AutomationExecutor:
 
                     if not is_confirmed:
                         logger.warning(
-                            f"Action [{action_type}] missed after {max_attempts} readjustments. Giving up."
+                            f"Action [{action_type}] missed after {max_attempts} readjustments. Telemetry recorded: "
+                            f"intended=({target_x}, {target_y}), last_clicked=({last_clicked_x}, {last_clicked_y}), "
+                            f"offset=({last_clicked_x - target_x:+d}, {last_clicked_y - target_y:+d})"
                         )
                         if self.on_adjustment_callback:
-                            self.on_adjustment_callback(f"⚠️ Action missed after {max_attempts} readjustments. Press F9 to retry.")
+                            self.on_adjustment_callback(
+                                f"⚠️ Action missed at ({target_x}, {target_y}) [offset {last_clicked_x - target_x:+d}px, {last_clicked_y - target_y:+d}px]. Preparing retry..."
+                            )
 
+            # Record full click telemetry on the action dictionary
             action["verified"] = is_confirmed
             action["verification_reason"] = verification_reason
+            action["last_clicked_x"] = last_clicked_x
+            action["last_clicked_y"] = last_clicked_y
+            action["click_offset_x"] = last_clicked_x - target_x
+            action["click_offset_y"] = last_clicked_y - target_y
+            action["attempted_clicks"] = attempted_clicks
 
         elif action_type == "drag":
             fx = action.get("screen_from_x", action.get("from_x"))
@@ -902,7 +968,18 @@ class AutomationExecutor:
             all_verified = (verified_count == len(verifiable_actions)) if verifiable_actions else True
 
             failed_inputs = [
-                {"index": i, "type": a.get("type"), "reason": a.get("verification_reason")}
+                {
+                    "index": i,
+                    "type": a.get("type"),
+                    "reason": a.get("verification_reason"),
+                    "intended_x": a.get("intended_x", a.get("x")),
+                    "intended_y": a.get("intended_y", a.get("y")),
+                    "last_clicked_x": a.get("last_clicked_x"),
+                    "last_clicked_y": a.get("last_clicked_y"),
+                    "click_offset_x": a.get("click_offset_x", 0),
+                    "click_offset_y": a.get("click_offset_y", 0),
+                    "attempted_clicks": a.get("attempted_clicks", [])
+                }
                 for i, a in enumerate(actions)
                 if a.get("type", "").lower() in ["click", "double_click", "type_text"] and not a.get("verified", False)
             ]

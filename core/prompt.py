@@ -37,16 +37,24 @@ Your tasks are:
         3. OUTPUT RETHOUGHT SOLUTION: Set "is_rethinking": true, provide detailed "rethink_reasoning", and output corrective actions with clear_first = true to completely wipe the incorrect answer and type/select the new rethought answer.
    - "unsubmitted": The question has NOT yet been graded or evaluated by the platform (e.g. a fresh question, or input is entered/selected but waiting for the user to click 'Check Answer' / 'Submit').
      CRITICAL RULES FOR DETERMINING IF AN ANSWER IS FILLED OUT:
-     * UNFILLED / EMPTY INPUTS:
-       - Any input field that is blank, white, dark, or contains placeholder / watermark / prompt guidance text (such as "Type your answer here...", "Enter response", "Write an essay...", "Type here...", "Click to add text...", "e.g. 10", "Select an option...", "Choose...", or faint gray text) is UNFILLED!
-       - Multiple choice questions where no radio button has a solid filled dot or no checkbox has a checkmark are UNFILLED!
-       - For ANY unfilled question or sub-part, you MUST set needs_action = true, provide the exact click / type actions to answer it, and set ready_to_advance = false.
-     * FILLED INPUTS:
-       - An input is ONLY considered filled out if actual non-placeholder student text is visibly typed in the box, or a radio button visibly has a solid selected dot, or a checkbox is checked.
-       - Placeholder text is NEVER an answer and must NEVER be treated as existing_answer or existing_written_text!
-       - If an answer is genuinely filled out on an unsubmitted question:
-         - If WRONG: Set needs_action = true, and provide corrective actions with clear_first = true.
-         - If RIGHT: Set needs_action = false, actions = []. (NOTE: evaluation_status remains "unsubmitted" until the platform grades it!).
+      * MULTIPLE CHOICE & SIBLING POINT COMPARISON:
+        - DIFFERENT WEBSITES HAVE DIFFERENT SELECTION STYLES: Depending on the website, an answered multiple choice option might use a solid black/blue dot, an inner colored ring, a checkmark, an inverted fill, a colored outline, or a tinted row background.
+        - COMPARE CHOICES TO EACH OTHER: To accurately determine if a multiple choice question is already answered, COMPARE the choices on screen to one another!
+          * If ALL choice points look identical (all hollow, uncolored, or empty), the question is UNANSWERED.
+          * If ONE choice looks visually distinct from the other unselected options (e.g. dot, check, color fill, or highlight), that choice is ALREADY ANSWERED!
+        - For multiple-choice or checkbox questions, provide "choices" in the item containing the bounding boxes and coordinates of all options on screen so AVA can cross-verify them.
+      * UNFILLED / EMPTY INPUTS:
+        - Any input field that is blank, white, dark, or contains placeholder / watermark / prompt guidance text (such as "Type your answer here...", "Enter response", "Write an essay...", "Type here...", "Click to add text...", "e.g. 10", "Select an option...", "Choose...", or faint gray text) is UNFILLED!
+        - For ANY unfilled question or sub-part, you MUST set needs_action = true, provide the exact click / type actions to answer it, and set ready_to_advance = false.
+      * FILLED INPUTS & PREVENTING REDUNDANT RE-CLICKS:
+        - An input is considered filled out if actual non-placeholder student text is visibly typed in the box, or a multiple choice option is selected (distinct from sibling options).
+        - Placeholder text is NEVER an answer and must NEVER be treated as existing_answer or existing_written_text!
+        - If an answer is ALREADY correctly selected or filled out on an unsubmitted question:
+          * Set needs_action = false, actions = [].
+          * DO NOT generate click actions to re-click an already selected choice! Re-clicking an already selected option can deselect it or trigger error loops.
+          * If all questions visible on screen are already answered correctly: set needs_action = false, actions = [], ready_to_advance = true, and provide "next_button" (or "check_button").
+        - If an answer is visibly filled out but WRONG:
+          * Set needs_action = true, and provide corrective actions with clear_first = true.
 
 3. 100% ACADEMIC PRECISION:
    - Solve each problem step-by-step with rigorous academic accuracy.
@@ -191,6 +199,11 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
       "correct_answer": "Option B",
       "needs_action": true,
       "reasoning": "Question is unsubmitted and unselected (radio buttons have empty circles). Clicking Option B.",
+      "choices": [
+        {{"label": "Option A", "box_2d": [280, 240, 305, 520], "x": 255, "y": 292}},
+        {{"label": "Option B", "box_2d": [320, 240, 345, 520], "x": 255, "y": 332}},
+        {{"label": "Option C", "box_2d": [360, 240, 385, 520], "x": 255, "y": 372}}
+      ],
       "actions": [
         {{
           "type": "click",

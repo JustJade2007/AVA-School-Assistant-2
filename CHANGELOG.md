@@ -8,6 +8,24 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.2.a] - 2026-09-21
+
+### Fixed & Improved
+- **Automated 5-Second Missed Action Retry & Click Offset Memory Tracking**:
+  - Replaced the static, blocking `"Action Missed: Question Not Answered!"` error state with an autonomous, non-blocking 5-second countdown retry sequence in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py).
+  - Implemented persistent click offset memory (`_action_offset_memory`): tracks intended coordinate $(X, Y)$ vs actual clicked coordinate $(X, Y)$ and relative offset $(\Delta X, \Delta Y)$ across execution attempts in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py) and [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py).
+  - During automatic retries, previously failed coordinates are retained in `prior_attempted_coords` and excluded so the recovery probing algorithm shifts and re-targets accurately rather than repeating the exact same miss.
+  - Added HUD overlay status representation with dynamic countdown timer and offset telemetry: `⚠️ Retrying in {s}s... (Offset: {dx:+d}px, {dy:+d}px)` in [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py).
+- **Website-Agnostic Relative Sibling Multiple-Choice Selection Detection**:
+  - Implemented multi-point relative comparative choice verification (`compare_choice_to_siblings` and `_extract_control_features`) in [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py).
+  - Rather than relying solely on hardcoded contrast or luminance thresholds, AVA extracts feature descriptors (center luminance, border contrast, saturation, glyph edges, and holistic color profiles) across all candidate sibling choices on screen to compute an unselected baseline.
+  - Robustly identifies selections across diverse website design paradigms (filled inner dots, colored radio borders, checkmarks, tinted option rows, SVG fill changes, and dark/light themes) with zero additional AI tokens.
+  - Updated vision system prompt [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) and AI client coordinate mapper [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) to capture sibling choice coordinates (`choices`) directly from the visual breakdown.
+- **Elimination of Infinite Answer Re-Click Loops**:
+  - Fixed an issue where questions already answered and verified on screen were repeatedly clicked until giving up.
+  - Added pre-execution selection guards in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py): before dispatching clicks, AVA checks whether the target choice is already selected relative to siblings. If selected, the action is suppressed, `needs_action` is cleared, and AVA advances immediately.
+  - Fixed post-verification advance looping: if all questions on screen are answered but the platform navigation transition fails or requires manual submission, AVA transitions cleanly into `WAITING_CONFIRMATION` instead of restarting solving on the exact same questions.
+
 ## [2.2.1.a] - 2026-09-21
 
 ### Added

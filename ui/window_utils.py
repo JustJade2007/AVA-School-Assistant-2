@@ -49,16 +49,42 @@ def ensure_taskbar_presence(window) -> bool:
 
     try:
         user32 = ctypes.windll.user32
-        current_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        new_style = (current_style & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW
+        current_exstyle = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        new_exstyle = (current_exstyle & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW
 
+        GWL_STYLE = -16
+        WS_MINIMIZEBOX = 0x00020000
+        WS_SYSMENU = 0x00080000
+        WS_CAPTION = 0x00C00000
+        current_style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+
+        # If borderless overrideredirect window, strip WS_CAPTION while ensuring WS_MINIMIZEBOX
+        is_borderless = False
+        try:
+            if hasattr(window, "wm_overrideredirect") and str(window.wm_overrideredirect()) in ("1", "True"):
+                is_borderless = True
+        except Exception:
+            pass
+
+        if is_borderless:
+            new_style = (current_style | WS_MINIMIZEBOX | WS_SYSMENU) & ~WS_CAPTION
+        else:
+            new_style = current_style | WS_MINIMIZEBOX | WS_SYSMENU
+
+        changed = False
+        if new_exstyle != current_exstyle:
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_exstyle)
+            changed = True
         if new_style != current_style:
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+            user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
+            changed = True
+
+        if changed:
             user32.SetWindowPos(
                 hwnd, 0, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE
             )
-            logger.debug(f"WS_EX_APPWINDOW successfully applied to HWND {hwnd}")
+            logger.debug(f"Taskbar presence styles updated for HWND {hwnd}")
         return True
     except Exception as e:
         logger.debug(f"Failed to set WS_EX_APPWINDOW for HWND {hwnd}: {e}")
@@ -168,8 +194,8 @@ def attach_minimize_restore_handlers(
 
     try:
         # Bind Unmap (occurs when window is minimized or withdrawn)
-        window.bind("<Unmap>", lambda e: window.after(10, _check_state_change), add="+")
+        window.bind("<Unmap>", lambda e: window.after(10, _check_state_change) if e.widget == window else None, add="+")
         # Bind Map (occurs when window is restored / mapped to display)
-        window.bind("<Map>", lambda e: window.after(10, _check_state_change), add="+")
+        window.bind("<Map>", lambda e: window.after(10, _check_state_change) if e.widget == window else None, add="+")
     except Exception as e:
         logger.debug(f"Could not bind state change events on {window}: {e}")

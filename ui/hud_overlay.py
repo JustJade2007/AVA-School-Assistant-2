@@ -83,6 +83,15 @@ class HUDOverlay(ctk.CTkToplevel):
         self.bind("<B1-Motion>", self._on_drag_motion)
         self.bind("<ButtonRelease-1>", self._on_drag_release)
 
+        def _handle_map(e):
+            if e.widget == self:
+                try:
+                    if self.state() == "normal" and not bool(self.overrideredirect()):
+                        self._on_overlay_restored()
+                except Exception:
+                    pass
+        self.bind("<Map>", _handle_map, add="+")
+
     def apply_cloak(self):
         """Applies Win32 WDA_EXCLUDEFROMCAPTURE affinity."""
         success = apply_anti_capture(self, enable=self.config.anti_capture_enabled)
@@ -1035,17 +1044,29 @@ class HUDOverlay(ctk.CTkToplevel):
                 from ui.window_utils import ensure_taskbar_presence
                 hwnd = get_window_hwnd(self)
                 if hwnd:
-                    ensure_taskbar_presence(self)
                     apply_anti_capture(hwnd, enable=False)
-                    # Asynchronously post SC_MINIMIZE to Win32 message queue so overrideredirect is preserved
-                    WM_SYSCOMMAND = 0x0112
-                    SC_MINIMIZE = 0xF020
-                    ctypes.windll.user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0)
-                    return
+                # Temporarily disable overrideredirect so Tkinter and Windows shell
+                # allow the window to minimize normally into the taskbar
+                self.overrideredirect(False)
+                self.update_idletasks()
+                hwnd = get_window_hwnd(self)
+                if hwnd:
+                    ensure_taskbar_presence(self)
+                    user32 = ctypes.windll.user32
+                    GWL_STYLE = -16
+                    WS_CAPTION = 0x00C00000
+                    WS_THICKFRAME = 0x00040000
+                    st = user32.GetWindowLongW(hwnd, GWL_STYLE)
+                    if st & (WS_CAPTION | WS_THICKFRAME):
+                        user32.SetWindowLongW(hwnd, GWL_STYLE, st & ~(WS_CAPTION | WS_THICKFRAME))
+                        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0004 | 0x0020)
             self.iconify()
         except Exception as e:
             logger.debug(f"Error in minimize_overlay: {e}")
-            self.iconify()
+            try:
+                self.iconify()
+            except Exception:
+                pass
 
     def hide_overlay(self):
         """Hides the overlay window from the screen (delegates to minimize_overlay)."""
@@ -1085,11 +1106,13 @@ class HUDOverlay(ctk.CTkToplevel):
             if sys.platform == "win32":
                 import ctypes
                 from core.cloaking import get_window_hwnd
+                from ui.window_utils import ensure_taskbar_presence
                 hwnd = get_window_hwnd(self)
                 if hwnd:
-                    WM_SYSCOMMAND = 0x0112
-                    SC_RESTORE = 0xF120
-                    ctypes.windll.user32.PostMessageW(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0)
+                    ensure_taskbar_presence(self)
+                    SW_RESTORE = 9
+                    ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+            self.state("normal")
             self.deiconify()
             self._on_overlay_restored()
         except Exception as e:

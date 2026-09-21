@@ -181,8 +181,8 @@ class HUDOverlay(ctk.CTkToplevel):
         self.header_actions_frame.bind("<Control-MouseWheel>", self._on_header_mousewheel)
 
         # Calculate initial button dimensions from configurable icon size
-        self.icon_size = getattr(self.config, "header_icon_size", 12)
-        btn_wh = max(24, self.icon_size + 12)
+        self.icon_size = getattr(self.config, "header_icon_size", 14)
+        btn_wh = max(26, self.icon_size + 12)
         corner_rad = btn_wh // 2
 
         # 1. Close button (circular, rightmost)
@@ -256,10 +256,10 @@ class HUDOverlay(ctk.CTkToplevel):
         )
         self.btn_debug.pack(side="right", padx=1)
 
-        # 6. Quick Snip Tool (cutout button) - SMALLER & sleek circular accent
-        snip_wh = max(20, btn_wh - 2)
+        # 6. Quick Snip Tool (cutout button) - sleek circular accent
+        snip_wh = max(22, btn_wh - 2)
         snip_corner = snip_wh // 2
-        snip_icon_sz = max(9, self.icon_size - 1)
+        snip_icon_sz = max(11, self.icon_size - 1)
 
         if self.on_snip_solve:
             self.btn_snip = ctk.CTkButton(
@@ -539,7 +539,7 @@ class HUDOverlay(ctk.CTkToplevel):
         self.btn_pause = ctk.CTkButton(
             self.aux_dock_frame,
             text=f" Pause [{hk_pause}]",
-            image=get_hud_icon("pause", size=(10, 10), color="#9ca3af"),
+            image=get_hud_icon("pause", size=(14, 14)),
             compound="left",
             font=ctk.CTkFont(size=9, weight="bold"),
             fg_color="#27272a",
@@ -580,7 +580,7 @@ class HUDOverlay(ctk.CTkToplevel):
         self.btn_inspect_whole = ctk.CTkButton(
             self.aux_dock_frame,
             text=" Inspect",
-            image=get_hud_icon("debug", size=(10, 10), color="#2dd4bf"),
+            image=get_hud_icon("debug", size=(14, 14)),
             compound="left",
             font=ctk.CTkFont(size=9),
             fg_color="#134e4a",
@@ -595,7 +595,7 @@ class HUDOverlay(ctk.CTkToplevel):
         self.btn_test_cloak = ctk.CTkButton(
             self.aux_dock_frame,
             text=" Cloak Proof",
-            image=get_hud_icon("cloak", size=(10, 10), color="#10b981"),
+            image=get_hud_icon("cloak", size=(14, 14)),
             compound="left",
             font=ctk.CTkFont(size=9),
             fg_color="#064e3b",
@@ -614,7 +614,7 @@ class HUDOverlay(ctk.CTkToplevel):
         self.btn_solve = ctk.CTkButton(
             self.actions_dock_frame,
             text=f" Solve [{hk_solve}]",
-            image=get_hud_icon("solve", size=(12, 12), color="#ffffff"),
+            image=get_hud_icon("solve", size=(16, 16)),
             compound="left",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             fg_color="#2563eb",
@@ -629,7 +629,7 @@ class HUDOverlay(ctk.CTkToplevel):
         self.btn_confirm = ctk.CTkButton(
             self.actions_dock_frame,
             text=f" Execute [{hk_confirm}]",
-            image=get_hud_icon("execute", size=(12, 12), color="#ffffff"),
+            image=get_hud_icon("execute", size=(16, 16)),
             compound="left",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             fg_color="#059669",
@@ -644,7 +644,7 @@ class HUDOverlay(ctk.CTkToplevel):
         self.btn_next = ctk.CTkButton(
             self.actions_dock_frame,
             text=f" Next [{hk_next}]",
-            image=get_hud_icon("next", size=(12, 12), color="#ffffff"),
+            image=get_hud_icon("next", size=(16, 16)),
             compound="left",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             fg_color="#7c3aed",
@@ -659,7 +659,7 @@ class HUDOverlay(ctk.CTkToplevel):
         self.btn_stop = ctk.CTkButton(
             self.actions_dock_frame,
             text=f" Stop [{hk_stop}]",
-            image=get_hud_icon("stop", size=(12, 12), color="#ffffff"),
+            image=get_hud_icon("stop", size=(16, 16)),
             compound="left",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             fg_color="#dc2626",
@@ -676,7 +676,7 @@ class HUDOverlay(ctk.CTkToplevel):
             self.btn_playground_launch = ctk.CTkButton(
                 self.dock_frame,
                 text=" Launch Playground Mode (F3)",
-                image=get_hud_icon("playground", size=(11, 11), color="#c7d2fe"),
+                image=get_hud_icon("playground", size=(14, 14)),
                 compound="left",
                 font=ctk.CTkFont(size=10, weight="bold"),
                 fg_color="#312e81",
@@ -872,7 +872,7 @@ class HUDOverlay(ctk.CTkToplevel):
         if is_unverified:
             self.btn_confirm.configure(
                 text=f" Retry [{hk_confirm}]",
-                image=get_hud_icon("retry", size=(12, 12), color="#ffffff"),
+                image=get_hud_icon("retry", size=(16, 16)),
                 fg_color="#d97706",
                 hover_color="#b45309",
                 border_width=2,
@@ -881,7 +881,7 @@ class HUDOverlay(ctk.CTkToplevel):
         elif state == EngineState.READING:
             self.btn_confirm.configure(
                 text=f" Skip [{hk_confirm}]",
-                image=get_hud_icon("next", size=(12, 12), color="#ffffff"),
+                image=get_hud_icon("next", size=(16, 16)),
                 fg_color="#0284c7",
                 hover_color="#0369a1",
                 border_width=2,
@@ -890,7 +890,7 @@ class HUDOverlay(ctk.CTkToplevel):
         elif state == EngineState.WAITING_CONFIRMATION:
             self.btn_confirm.configure(
                 text=f" Execute [{hk_confirm}]",
-                image=get_hud_icon("execute", size=(12, 12), color="#ffffff"),
+                image=get_hud_icon("execute", size=(16, 16)),
                 fg_color="#10b981",
                 hover_color="#059669",
                 border_width=2,
@@ -899,7 +899,7 @@ class HUDOverlay(ctk.CTkToplevel):
         elif state == EngineState.VERIFYING:
             self.btn_confirm.configure(
                 text=" Verifying...",
-                image=get_hud_icon("debug", size=(12, 12), color="#ffffff"),
+                image=get_hud_icon("debug", size=(16, 16)),
                 fg_color="#0891b2",
                 hover_color="#0e7490",
                 border_width=0
@@ -907,11 +907,27 @@ class HUDOverlay(ctk.CTkToplevel):
         else:
             self.btn_confirm.configure(
                 text=f" Execute [{hk_confirm}]",
-                image=get_hud_icon("execute", size=(12, 12), color="#ffffff"),
+                image=get_hud_icon("execute", size=(16, 16)),
                 fg_color="#059669",
                 hover_color="#047857",
                 border_width=0
             )
+
+        # Update pause/resume button label & icon based on state
+        hk_pause = self.config.hotkeys.get("pause_resume", "F7")
+        if hasattr(self, "btn_pause"):
+            if state == EngineState.PAUSED:
+                self.btn_pause.configure(
+                    text=f" Resume [{hk_pause}]",
+                    image=get_hud_icon("resume", size=(14, 14)),
+                    fg_color="#374151"
+                )
+            else:
+                self.btn_pause.configure(
+                    text=f" Pause [{hk_pause}]",
+                    image=get_hud_icon("pause", size=(14, 14)),
+                    fg_color="#27272a"
+                )
 
     def _render_error_card(self, detail: str):
         """Displays rich error diagnostics inside the Q&A card for debug users."""
@@ -1404,15 +1420,18 @@ class HUDOverlay(ctk.CTkToplevel):
         hk_stop = hk.get("emergency_stop", "F12")
 
         if hasattr(self, "btn_solve"):
-            self.btn_solve.configure(text=f" Solve [{hk_solve}]")
+            self.btn_solve.configure(text=f" Solve [{hk_solve}]", image=get_hud_icon("solve", size=(16, 16)))
         if hasattr(self, "btn_confirm"):
-            self.btn_confirm.configure(text=f" Execute [{hk_confirm}]")
+            self.btn_confirm.configure(text=f" Execute [{hk_confirm}]", image=get_hud_icon("execute", size=(16, 16)))
         if hasattr(self, "btn_next"):
-            self.btn_next.configure(text=f" Next [{hk_next}]")
+            self.btn_next.configure(text=f" Next [{hk_next}]", image=get_hud_icon("next", size=(16, 16)))
         if hasattr(self, "btn_pause"):
-            self.btn_pause.configure(text=f" Pause [{hk_pause}]")
+            is_paused = getattr(self.engine, "state", None) == EngineState.PAUSED
+            pause_txt = f" Resume [{hk_pause}]" if is_paused else f" Pause [{hk_pause}]"
+            pause_img = get_hud_icon("resume", size=(14, 14)) if is_paused else get_hud_icon("pause", size=(14, 14))
+            self.btn_pause.configure(text=pause_txt, image=pause_img)
         if hasattr(self, "btn_stop"):
-            self.btn_stop.configure(text=f" Stop [{hk_stop}]")
+            self.btn_stop.configure(text=f" Stop [{hk_stop}]", image=get_hud_icon("stop", size=(16, 16)))
 
     def _on_drag_start(self, event):
         self._drag_start_x = event.x

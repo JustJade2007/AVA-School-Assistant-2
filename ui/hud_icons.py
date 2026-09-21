@@ -7,17 +7,38 @@ and converts them to CTkImage objects for crisp rendering on any DPI scale.
 from typing import Dict, Tuple, Union
 from PIL import Image, ImageDraw
 import customtkinter as ctk
+import os
 import math
+from ui.asset_loader import get_asset_path
 
 
 _ICON_CACHE: Dict[Tuple[str, Tuple[int, int], str], ctk.CTkImage] = {}
+
+# Mapping from canonical HUD icon keys to dedicated PNG assets in ui/images/icons/
+_IMAGE_ICON_MAP = {
+    "close": "icons8-close-48.png",
+    "minimize": "icons8-minimize-48.png",
+    "settings": "icons8-settings-48.png",
+    "debug": "icons8-console-48.png",
+    "console": "icons8-console-48.png",
+    "snip": "icons8-snip-48.png",
+    "playground": "playground.png",
+    "solve": "icons8-solve-48.png",
+    "execute": "icons8-confirm-48.png",
+    "confirm": "icons8-confirm-48.png",
+    "next": "icons8-next-48.png",
+    "stop": "icons8-stop-48.png",
+    "pause": "icons8-pause-48.png",
+    "resume": "icons8-resume-button-48.png",
+    "retry": "icons8-resume-button-48.png",
+}
 
 
 def get_hud_icon(name: str, size: Union[int, Tuple[int, int]] = 16, color: str = "#ffffff") -> ctk.CTkImage:
     """
     Returns a cached or freshly generated high-DPI CTkImage icon.
-    Icon paths are drawn with 4x supersampling and Lanczos downscaling
-    to produce ultra-crisp anti-aliased lines and shapes.
+    First checks ui/images/icons/ for dedicated high-fidelity PNG assets.
+    If not available, falls back to procedurally drawn 4x supersampled vector shapes.
     Supports size as int or (width, height) tuple.
     """
     if isinstance(size, (tuple, list)):
@@ -29,6 +50,21 @@ def get_hud_icon(name: str, size: Union[int, Tuple[int, int]] = 16, color: str =
     if cache_key in _ICON_CACHE:
         return _ICON_CACHE[cache_key]
 
+    # 1. Attempt loading from ui/images/icons/
+    if name in _IMAGE_ICON_MAP:
+        asset_rel = os.path.join("icons", _IMAGE_ICON_MAP[name])
+        asset_path = get_asset_path(asset_rel)
+        if asset_path and os.path.exists(asset_path):
+            try:
+                raw_img = Image.open(asset_path).convert("RGBA")
+                resized_img = raw_img.resize((w_px, h_px), Image.Resampling.LANCZOS)
+                ctk_icon = ctk.CTkImage(light_image=resized_img, dark_image=resized_img, size=(w_px, h_px))
+                _ICON_CACHE[cache_key] = ctk_icon
+                return ctk_icon
+            except Exception:
+                pass
+
+    # 2. Fallback: Procedural supersampled vector drawing
     dim = max(w_px, h_px)
     scale = 4
     canvas_size = dim * scale

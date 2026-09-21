@@ -303,7 +303,7 @@ def generate_github_issue_url(
         except ImportError:
             target_repo = "JustJade2007/AVA-School-Assistant-2"
 
-    app_version = "2.2.3.a"
+    app_version = "2.2.4.a"
     try:
         from config import APP_VERSION
         app_version = APP_VERSION

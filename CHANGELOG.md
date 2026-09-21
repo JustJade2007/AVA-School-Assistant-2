@@ -8,6 +8,23 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.4.a] - 2026-09-21
+
+### Fixed & Improved
+- **Physical Mouse vs Visual Target Comparison for Precision Readjustments**:
+  - Replaced theoretical/blind offset guessing with real hardware OS cursor position tracking (`pyautogui.position()`) and local computer vision detection of interactive controls on the physical screen in [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py).
+  - **Zero-Token Physical Target Locating (`locate_physical_target_near_mouse` & `detect_controls_in_crop`)**:
+    - Visually captures the physical screen around where the mouse cursor landed.
+    - Scans for physical circular radio buttons (`radio_circle`) with multi-radius (7-11px) perimeter checks and radial tolerance $dr \in [-1, 0, 1]$.
+    - Scans for physical square checkboxes (`checkbox_square`) and rectangular input field containers (`measure_and_target_input_box`).
+    - Calculates the exact physical offset between the hardware cursor and visual target: $\Delta X = X_{target} - X_{mouse}$, $\Delta Y = Y_{target} - Y_{mouse}$.
+  - **Dynamic Physical Readjustments in Execution**:
+    - In [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py), queries actual hardware cursor coordinates after clicking. When a click misses, readjustment attempt 1 targets the visually verified physical control directly on screen rather than using static arbitrary offsets.
+    - Updates physical mouse position after each probe and displays exact measured physical delta in HUD logs: `🎯 Readjusting missed click (attempt 1/3): ({probe_x}, {probe_y}) [{dx:+d}px, {dy:+d}px from mouse]`.
+  - **Persistent Physical Target Application on Retries**:
+    - In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), stores the visually verified `physical_target` and `physical_delta` into `_action_offset_memory`.
+    - When the 5-second countdown triggers an auto-retry, action coordinates are directly mapped to the physically verified target coordinates, guaranteeing the retry lands on the physical control rather than repeating the inaccurate click.
+
 ## [2.2.3.a] - 2026-09-21
 
 ### Fixed & Improved

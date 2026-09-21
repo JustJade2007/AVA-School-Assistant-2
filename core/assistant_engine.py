@@ -1344,11 +1344,35 @@ class AssistantEngine:
                 self.last_result["actions"] = []
                 actions = []
 
-        # Pass prior attempted coordinates into actions to avoid repeated clicks on same coordinates
+        # Pass prior attempted coordinates and apply physically verified target offset if available
         if q_key in self._action_offset_memory:
-            prior_coords = self._action_offset_memory[q_key].get("attempted_coords", set())
+            mem_info = self._action_offset_memory[q_key]
+            prior_coords = mem_info.get("attempted_coords", set())
+            phys_target = mem_info.get("physical_target")
+            phys_delta = mem_info.get("physical_delta")
             for act in actions:
                 act["prior_attempted_coords"] = prior_coords
+                # If a physical control was visually detected on screen, apply it directly!
+                if phys_target and act.get("type") in ["click", "double_click"]:
+                    logger.info(
+                        f"Applying physically verified target on retry: "
+                        f"({act.get('x')}, {act.get('y')}) -> ({phys_target[0]}, {phys_target[1]})"
+                    )
+                    act["x"] = phys_target[0]
+                    act["y"] = phys_target[1]
+                    act["screen_x"] = phys_target[0]
+                    act["screen_y"] = phys_target[1]
+                elif phys_delta and (phys_delta[0] != 0 or phys_delta[1] != 0):
+                    logger.info(
+                        f"Applying physical screen offset on retry: "
+                        f"({act.get('x')}, {act.get('y')}) + ({phys_delta[0]:+d}px, {phys_delta[1]:+d}px)"
+                    )
+                    if act.get("x") is not None:
+                        act["x"] = int(act["x"]) + phys_delta[0]
+                        act["screen_x"] = act["x"]
+                    if act.get("y") is not None:
+                        act["y"] = int(act["y"]) + phys_delta[1]
+                        act["screen_y"] = act["y"]
 
         phase = "Action Execution"
         try:
@@ -1452,12 +1476,15 @@ class AssistantEngine:
                 if was_rethinking and not has_pending_items:
                     self.last_result["ready_to_advance"] = True
             else:
-                # Record click offset telemetry for retry attempt
+                # Record click offset and physical target telemetry for retry attempt
                 if q_key not in self._action_offset_memory:
                     self._action_offset_memory[q_key] = {"retry_count": 0, "attempted_coords": set(), "last_offset": (0, 0)}
 
                 mem = self._action_offset_memory[q_key]
                 last_off_x, last_off_y = 0, 0
+                phys_target = None
+                phys_delta = None
+                phys_mouse = None
                 for act in actions:
                     intended_x = act.get("intended_x", act.get("x"))
                     intended_y = act.get("intended_y", act.get("y"))
@@ -1470,13 +1497,31 @@ class AssistantEngine:
                     for att in act.get("attempted_clicks", []):
                         mem["attempted_coords"].add((att["x"], att["y"]))
 
+                    if act.get("physical_target_x") is not None and act.get("physical_target_y") is not None:
+                        phys_target = (int(act["physical_target_x"]), int(act["physical_target_y"]))
+                    if act.get("physical_delta_x") is not None and act.get("physical_delta_y") is not None:
+                        phys_delta = (int(act["physical_delta_x"]), int(act["physical_delta_y"]))
+                    if act.get("actual_mouse_x") is not None and act.get("actual_mouse_y") is not None:
+                        phys_mouse = (int(act["actual_mouse_x"]), int(act["actual_mouse_y"]))
+
                 mem["last_offset"] = (last_off_x, last_off_y)
+                if phys_target:
+                    mem["physical_target"] = phys_target
+                if phys_delta:
+                    mem["physical_delta"] = phys_delta
+                if phys_mouse:
+                    mem["physical_mouse"] = phys_mouse
+
+                if phys_delta and (phys_delta[0] != 0 or phys_delta[1] != 0):
+                    off_label = f"Physical offset: {phys_delta[0]:+d}px, {phys_delta[1]:+d}px"
+                else:
+                    off_label = f"Offset: {last_off_x:+d}px, {last_off_y:+d}px"
 
                 if mem["retry_count"] < self._max_auto_miss_retries and not self.executor.is_stopped():
                     mem["retry_count"] += 1
                     attempt_num = mem["retry_count"]
                     msg = (
-                        f"⚠️ Action unconfirmed. Recorded click offset ({last_off_x:+d}px, {last_off_y:+d}px). "
+                        f"⚠️ Action unconfirmed. {off_label}. "
                         f"Waiting 5s before auto-retrying (attempt {attempt_num}/{self._max_auto_miss_retries})..."
                     )
                     logger.warning(msg)
@@ -1487,14 +1532,14 @@ class AssistantEngine:
                             return
                         self.set_state(
                             EngineState.WAITING_CONFIRMATION,
-                            f"UNVERIFIED_RETRY: Retrying in {s}s... (Offset: {last_off_x:+d}px, {last_off_y:+d}px)"
+                            f"UNVERIFIED_RETRY: Retrying in {s}s... ({off_label})"
                         )
                         time.sleep(1.0)
 
                     if self.executor.is_stopped():
                         return
 
-                    logger.info(f"Auto-retrying missed action sequence with recorded offset telemetry (attempt {attempt_num})...")
+                    logger.info(f"Auto-retrying missed action sequence with recorded physical target telemetry (attempt {attempt_num})...")
                     self.execute_current_solution()
                     return
 
@@ -1507,7 +1552,7 @@ class AssistantEngine:
                 self.last_result["action_missed"] = True
                 unver_msg = (
                     f"⚠️ Action missed after {self._max_auto_miss_retries} readjustment attempts "
-                    f"[offset: {last_off_x:+d}px, {last_off_y:+d}px]. Press F9 to retry or click manually."
+                    f"[{off_label}]. Press F9 to retry or click manually."
                 )
                 self._handle_adjustment(unver_msg)
 

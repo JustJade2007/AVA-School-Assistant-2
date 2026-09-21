@@ -59,6 +59,9 @@ class TestAVACore(unittest.TestCase):
         self.assertGreater(bounds["width"], 100)
         self.assertGreater(bounds["height"], 100)
 
+        primary = sct.get_primary_monitor()
+        self.assertEqual(primary, bounds)
+
         # In headless test environments or locked screens, BitBlt might be restricted
         try:
             img = sct.capture_screen(region=(0, 0, 100, 100))

@@ -1982,9 +1982,14 @@ class AssistantEngine:
             center_y = ry + (rh // 2)
             scroll_region = region
         else:
-            mon = self.capture.get_primary_monitor()
-            center_x = mon["width"] // 2
-            center_y = mon["height"] // 2
+            if hasattr(self.capture, "get_primary_monitor"):
+                mon = self.capture.get_primary_monitor()
+            elif hasattr(self.capture, "get_screen_bounds"):
+                mon = self.capture.get_screen_bounds(monitor_idx=1)
+            else:
+                mon = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+            center_x = mon.get("left", 0) + (mon.get("width", 1920) // 2)
+            center_y = mon.get("top", 0) + (mon.get("height", 1080) // 2)
             scroll_region = None
 
         logger.info(f"Advancing scroll-down quiz at ({center_x}, {center_y}) by {scroll_amt}px...")

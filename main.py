@@ -30,7 +30,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="AVA School Assistant 2 v2.2.0.a"
+        version="AVA School Assistant 2 v2.2.0.b"
     )
     parser.add_argument(
         "--worker",

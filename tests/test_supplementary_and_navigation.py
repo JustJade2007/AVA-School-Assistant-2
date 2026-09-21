@@ -480,6 +480,22 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
         engine.executor.click.assert_called_with(500, 400, allow_variance=False)
         self.assertEqual(engine.executor.scroll.call_count, 2)
 
+    def test_advance_by_scrolling_down_fallback_to_primary_monitor(self):
+        """Tests that _advance_by_scrolling_down safely defaults to primary monitor when region is None."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.last_region = None
+        engine.executor.scroll = MagicMock()
+        engine.executor.click = MagicMock()
+        engine.capture.get_screen_bounds = MagicMock(return_value={"top": 0, "left": 0, "width": 1920, "height": 1080})
+        engine.capture.capture_screen = MagicMock(return_value=MagicMock())
+        engine.verifier.verify_screen_scrolled = MagicMock(return_value=(True, 3.5))
+
+        success = engine._advance_by_scrolling_down(scroll_amt=500, override_region=None)
+
+        self.assertTrue(success)
+        # Verify scrolling at center of monitor (960, 540)
+        engine.executor.scroll.assert_called_with(-500, 960, 540)
+
     def test_manual_f10_scroll_down_advance(self):
         """Tests that manual F10 advance handles scrolling quizzes properly."""
         engine = AssistantEngine(config_manager=self.config_manager)

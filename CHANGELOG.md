@@ -8,6 +8,15 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.0.b] - 2026-09-21
+
+### Fixed
+- **Scroll-Down Auto-Next Navigation AttributeError**:
+  - Resolved `AttributeError: 'ScreenCapture' object has no attribute 'get_primary_monitor'` during single-page scrolling test progression in [_advance_by_scrolling_down](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py).
+  - Added `get_primary_monitor()` method to [core/capture.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/capture.py) as an alias for `get_screen_bounds(monitor_idx=1)`.
+  - Hardened monitor bounds coordinate calculation in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) to safely support multi-monitor coordinate offsets (`left`, `top`) and fallback safely if bounds retrieval is unavailable.
+  - Added unit test coverage in `tests/test_supplementary_and_navigation.py` and `tests/test_core.py`.
+
 ## [2.2.0.a] - 2026-09-21
 
 ### Added & Improved

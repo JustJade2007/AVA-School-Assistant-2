@@ -63,6 +63,10 @@ class ScreenCapture:
             return {"top": 0, "left": 0, "width": w, "height": h}
         return {"top": 0, "left": 0, "width": 1920, "height": 1080}
 
+    def get_primary_monitor(self) -> Dict[str, int]:
+        """Returns the bounding box dictionary for the primary monitor."""
+        return self.get_screen_bounds(monitor_idx=1)
+
     def capture_screen(
         self,
         region: Optional[Tuple[int, int, int, int]] = None,

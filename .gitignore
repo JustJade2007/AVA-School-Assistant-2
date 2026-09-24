@@ -228,3 +228,30 @@ logs/
 # Explicitly keep repository default configuration templates
 !config.default.json
 !config.example.json
+
+# Antigravity & AI IDE client artifacts
+.antigravity/
+.gemini/
+scratch/
+
+# Keys and secrets documentation
+keys.md
+keys.txt
+keys.json
+api_keys.md
+api_keys.txt
+api_keys.json
+
+# Local Playground projects
+projects/
+*.avaproj
+
+# Todo documents
+TODO
+TODO.md
+todo.md
+todo.txt
+
+# Temp build output
+%TEMP%/
+

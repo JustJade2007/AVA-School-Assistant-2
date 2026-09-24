@@ -59,6 +59,9 @@ class TestAVACore(unittest.TestCase):
         self.assertGreater(bounds["width"], 100)
         self.assertGreater(bounds["height"], 100)
 
+        primary = sct.get_primary_monitor()
+        self.assertEqual(primary, bounds)
+
         # In headless test environments or locked screens, BitBlt might be restricted
         try:
             img = sct.capture_screen(region=(0, 0, 100, 100))
@@ -389,6 +392,8 @@ class TestAVACore(unittest.TestCase):
         engine = AssistantEngine(config_manager=cm)
         engine.trigger_next_button = MagicMock()
         engine.trigger_check_button = MagicMock()
+        engine.trigger_solve = MagicMock()
+        engine._wait_for_page_to_settle = MagicMock()
         engine.executor.execute_action_sequence = MagicMock()
 
         # 1. When ready_to_advance is False, neither button should be called
@@ -420,9 +425,13 @@ class TestAVACore(unittest.TestCase):
         from config import ConfigManager
 
         cm = ConfigManager()
+        cm.update(autonomous_mode=False, chain_multi_parts=False)
         engine = AssistantEngine(config_manager=cm)
         engine.trigger_check_button = MagicMock()
         engine.trigger_next_button = MagicMock()
+        engine._discover_and_click_next_button = MagicMock()
+        engine.trigger_solve = MagicMock()
+        engine._wait_for_page_to_settle = MagicMock()
 
         # Case A: Only check_button is on screen (e.g. before next is revealed)
         engine.last_result = {
@@ -580,6 +589,7 @@ class TestAVACore(unittest.TestCase):
         engine.trigger_check_button = MagicMock()
         engine.trigger_next_button = MagicMock()
         engine.trigger_solve = MagicMock()
+        engine._wait_for_page_to_settle = MagicMock()
 
         # When a multi-part question has finished its current part actions and has a next button:
         engine.last_result = {

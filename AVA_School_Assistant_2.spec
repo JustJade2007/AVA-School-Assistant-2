@@ -1,11 +1,47 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('config.default.json', '.')]
+datas = [('config.default.json', '.'), ('CHANGELOG.md', '.'), ('ui/images', 'ui/images')]
 binaries = []
-hiddenimports = []
+hiddenimports = [
+    'core.written_solver',
+    'core.spellcheck',
+    'core.humanizer',
+    'core.humanizer.client',
+    'core.humanizer.models',
+    'core.humanizer.engine',
+    'core.humanizer.engine.deep',
+    'core.humanizer.engine.generator',
+    'core.humanizer.engine.guardrails',
+    'core.humanizer.engine.prompt',
+    'core.humanizer.engine.readability',
+    'core.humanizer.engine.thesaurus',
+    'core.humanizer.parser',
+    'core.playground',
+    'core.playground.project_model',
+    'core.playground.doc_io',
+    'core.playground.humanizer_bridge',
+    'core.playground.engine',
+    'core.playground.teacher_evaluator',
+    'core.playground.web_source',
+    'ui.playground',
+    'ui.playground.workspace',
+    'ui.playground.rubric_viewer',
+    'ui.home_view',
+    'ui.changelog_viewer',
+    'ui.asset_loader',
+    'ui.window_utils',
+    'ui.hud_icons',
+    'core.visual_grounding',
+    'core.single_instance',
+    'humanizer',
+    'docx',
+    'pypdf',
+]
 tmp_ret = collect_all('customtkinter')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret2 = collect_all('docx')
+datas += tmp_ret2[0]; binaries += tmp_ret2[1]; hiddenimports += tmp_ret2[2]
 
 
 a = Analysis(
@@ -42,4 +78,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['ui/images/icon.ico'],
 )

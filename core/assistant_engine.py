@@ -7,6 +7,7 @@ state transitions, and loop control.
 import time
 import random
 import threading
+import re
 from enum import Enum
 from typing import Dict, Any, Optional, Callable, List, Tuple
 from PIL import Image, ImageStat
@@ -18,6 +19,7 @@ from core.automation import AutomationExecutor, EmergencyStopException
 from core.local_verifier import LocalVisualVerifier
 from core.logger import get_logger
 from core.error_handler import create_error_diagnostic, ErrorDiagnostic
+from core.written_solver import WrittenSolver
 
 logger = get_logger("engine")
 
@@ -74,6 +76,14 @@ class AssistantEngine:
         self._last_next_click_time: float = 0.0
         self._next_click_lock = threading.Lock()
 
+        # Written question solver & humanizer (AVA 2.0)
+        self.written_solver: Optional[WrittenSolver] = None
+
+        # Click offset memory & automatic retry tracking
+        self._action_offset_memory: Dict[str, Dict[str, Any]] = {}
+        self._max_auto_miss_retries: int = 3
+        self._retry_countdown_seconds: int = 5
+
         # Update executor parameters on init
         self._sync_config()
         self.config_manager.add_listener(lambda cfg: self._sync_config())
@@ -91,12 +101,48 @@ class AssistantEngine:
     def config(self) -> AppConfig:
         return self.config_manager.config
 
+    @property
+    def ai_client(self) -> AIClient:
+        """Returns an active AIClient instance configured with current provider and model settings."""
+        if hasattr(self, "_custom_ai_client") and self._custom_ai_client is not None:
+            return self._custom_ai_client
+        return AIClient(
+            provider=self.config.ai_provider,
+            api_key=self.config.get_api_key_for_provider(self.config.ai_provider),
+            model_name=self.config.written_model_name or self.config.model_name,
+            custom_base_url=self.config.custom_api_base
+        )
+
     def _sync_config(self):
         self.executor.humanize = self.config.humanize_mouse
         self.executor.speed_multiplier = self.config.mouse_speed
         self.executor.click_variance_enabled = self.config.click_variance_enabled
         self.executor.smart_typos_enabled = self.config.smart_typos_enabled
         self.executor.local_verification_enabled = self.config.local_verification_enabled
+
+        # Sync WrittenSolver with active AI credentials and user preferences
+        try:
+            ai_c = AIClient(
+                provider=self.config.ai_provider,
+                api_key=self.config.get_api_key_for_provider(self.config.ai_provider),
+                model_name=self.config.written_model_name,
+                custom_base_url=self.config.custom_api_base
+            )
+            self.written_solver = WrittenSolver(
+                ai_client=ai_c,
+                api_key=self.config.gemini_api_key or self.config.api_key,
+                model_name=self.config.written_model_name,
+                quality_preset=self.config.written_quality_preset,
+                word_buffer_pct=self.config.written_word_buffer_pct,
+                max_word_overage=self.config.written_max_word_overage,
+                humanizer_enabled=self.config.humanizer_enabled,
+                humanizer_mode=self.config.humanizer_mode,
+                humanizer_tone=self.config.humanizer_tone,
+                humanizer_reading_level=self.config.humanizer_reading_level,
+                spellcheck_enabled=self.config.spellcheck_enabled,
+            )
+        except Exception as e:
+            logger.debug(f"Could not sync WrittenSolver: {e}")
 
     def add_state_listener(self, cb: Callable[[EngineState, str], None]):
         if cb not in self._state_callbacks:
@@ -126,7 +172,7 @@ class AssistantEngine:
             except Exception as e:
                 logger.error(f"Error in adjustment callback: {e}")
 
-    def _can_click_next(self, min_interval: float = 2.2) -> bool:
+    def _can_click_next(self, min_interval: float = 2.5) -> bool:
         """
         Guards against duplicate/rapid Next button clicks.
         Returns True if enough time has passed since the last Next click, otherwise False.
@@ -148,6 +194,92 @@ class AssistantEngine:
         """Records timestamp of an executed Next click."""
         with self._next_click_lock:
             self._last_next_click_time = time.time()
+
+    def _wait_for_page_to_settle(
+        self,
+        region: Optional[Tuple[int, int, int, int]] = None,
+        max_wait: float = 5.0,
+        check_interval: float = 0.35,
+        min_stable_checks: int = 2
+    ):
+        """
+        Waits for a dynamic web page/quiz to finish loading and rendering before
+        initiating solving or screen analysis.
+        Monitors for:
+        1. Blank/solid loading screens (low pixel standard deviation).
+        2. Frame-to-frame stabilization (ensures progressive layout shifts, MathJax rendering,
+           and animations have ceased).
+        """
+        if not self.config.local_verification_enabled:
+            time.sleep(1.0)
+            return
+
+        start_time = time.time()
+        prev_img = None
+        consecutive_stable = 0
+
+        logger.debug("Waiting for page to settle and stabilize...")
+        while (time.time() - start_time) < max_wait:
+            if self.executor.is_stopped():
+                break
+
+            try:
+                curr_img = self.capture.capture_screen(region=region)
+            except Exception as e:
+                logger.debug(f"_wait_for_page_to_settle capture error: {e}")
+                time.sleep(check_interval)
+                continue
+
+            if curr_img is None:
+                time.sleep(check_interval)
+                continue
+
+            # Check if image is virtually blank (e.g., solid white/gray/black browser loading frame)
+            try:
+                gray = curr_img.convert("L")
+                stat = ImageStat.Stat(gray)
+                stddev = stat.stddev[0] if stat.stddev else 0.0
+                mean_val = stat.mean[0] if stat.mean else 0.0
+
+                # If standard deviation is extremely low (< 5.0) and brightness is high (> 230) or low (< 25),
+                # the browser is showing a blank loading screen.
+                if stddev < 5.0 and (mean_val > 230 or mean_val < 25):
+                    logger.debug(f"Page is blank loading screen (stddev={stddev:.1f}, mean={mean_val:.1f}), waiting...")
+                    consecutive_stable = 0
+                    time.sleep(check_interval)
+                    prev_img = curr_img
+                    continue
+            except Exception as e:
+                logger.debug(f"Blank screen check error: {e}")
+
+            if prev_img is not None:
+                try:
+                    diff_trans = self.verifier.verify_screen_transition(
+                        prev_img, curr_img, min_diff=1.2, min_changed_pixels=25
+                    )
+                    is_changing = (
+                        diff_trans.get("transitioned", False)
+                        if hasattr(diff_trans, "get")
+                        else (bool(diff_trans[0]) if isinstance(diff_trans, (tuple, list)) else bool(diff_trans))
+                    )
+                    if not is_changing:
+                        consecutive_stable += 1
+                        if consecutive_stable >= min_stable_checks:
+                            elapsed = time.time() - start_time
+                            logger.info(f"Page settled and stabilized after {elapsed:.2f}s.")
+                            return
+                    else:
+                        consecutive_stable = 0
+                        logger.debug("Page is still rendering/animating, waiting for stabilization...")
+                except Exception as e:
+                    logger.debug(f"Settling diff check error: {e}")
+                    consecutive_stable += 1
+
+            prev_img = curr_img
+            time.sleep(check_interval)
+
+        elapsed = time.time() - start_time
+        logger.info(f"Page settle wait completed (elapsed {elapsed:.2f}s).")
 
     def set_state(self, new_state: EngineState, detail: str = ""):
         with self._state_lock:
@@ -225,52 +357,98 @@ class AssistantEngine:
                 else:
                     all_items_correct = False
 
-        # Check local visual markers if screen_image is supplied
+        # Check local visual markers if screen_image is supplied (or capture active screen)
         local_markers = {"status": "unsubmitted", "detected": False, "details": ""}
-        if screen_image is not None and hasattr(self.verifier, "detect_platform_evaluation_markers"):
+        if hasattr(self.verifier, "detect_platform_evaluation_markers"):
             try:
-                local_markers = self.verifier.detect_platform_evaluation_markers(screen_image)
+                if screen_image is None and hasattr(self, "capture"):
+                    try:
+                        screen_image = self.capture.capture_screen(region=self.last_region)
+                    except Exception as e:
+                        logger.debug(f"Screen capture for local markers: {e}")
+                local_markers = self.verifier.detect_platform_evaluation_markers(screen_image) or local_markers
             except Exception as e:
                 logger.debug(f"Error checking local evaluation markers: {e}")
 
-        # Combine signals:
-        # 1. If AI explicitly marks correct, prioritize AI semantic understanding over simple pixel color count
-        if eval_status in ["correct", "right"] or (all_items_correct and not any_item_incorrect):
-            final_status = "correct"
-            is_answered = True
-            is_rethinking = False
-            details = f"marked_correct (ai={eval_status}, visual={local_markers.get('details', '')})"
+        # Check for unsubmitted cues: Check Answer / Submit button or pending actions
+        has_check_btn = bool(res.get("check_button"))
+        has_unexecuted_actions = bool(res.get("actions")) and len(res.get("actions", [])) > 0
+        has_items_needing_action = any(bool(itm.get("needs_action")) for itm in items) if isinstance(items, list) else False
 
-        # 2. If AI or visual markers indicate incorrect
-        elif eval_status in ["incorrect", "wrong"] or any_item_incorrect or (local_markers.get("detected") and local_markers.get("status") == "incorrect"):
+        # Filter out placeholder text if reported as existing answer
+        if self.written_solver:
+            existing_w = res.get("existing_written_text")
+            if existing_w and self.written_solver.is_placeholder_text(existing_w):
+                res["existing_written_text"] = None
+
+        # Combine signals:
+        # 1. If AI explicitly indicates incorrect
+        if eval_status in ["incorrect", "wrong"] or any_item_incorrect:
             final_status = "incorrect"
             is_answered = False  # NEVER considered answered when marked incorrect!
             is_rethinking = True
             if not rethink_reasoning:
                 rethink_reasoning = "Question marked incorrect by platform. Rethinking problem and entry format."
-            details = f"marked_incorrect (ai={eval_status}, visual={local_markers.get('details', '')})"
+            details = f"marked_incorrect (ai={eval_status})"
 
-        # 3. If visual markers explicitly indicate correct AND AI did not categorize as unsubmitted
-        elif local_markers.get("detected") and local_markers.get("status") == "correct" and eval_status != "unsubmitted":
+        # 1b. If visual markers indicate incorrect with high confidence & high pixel count (and not contradicted by AI 'correct' or 'needs_action=False')
+        elif (
+            local_markers.get("detected")
+            and local_markers.get("status") == "incorrect"
+            and local_markers.get("confidence", 0) >= 0.88
+            and local_markers.get("red_pixels", 0) >= 1200
+            and eval_status not in ["correct", "right"]
+            and res.get("needs_action") is not False
+        ):
+            final_status = "incorrect"
+            is_answered = False
+            is_rethinking = True
+            if not rethink_reasoning:
+                rethink_reasoning = "Platform visual error indicator detected. Rethinking entry."
+            details = f"marked_incorrect (visual={local_markers.get('details', '')})"
+
+        # 2. If visual markers explicitly indicate correct
+        elif local_markers.get("detected") and local_markers.get("status") == "correct" and local_markers.get("confidence", 0) >= 0.85:
             final_status = "correct"
             is_answered = True
             is_rethinking = False
             details = f"marked_correct (visual={local_markers.get('details', '')})"
 
-        # 4. Otherwise, unsubmitted
+        # 3. If AI explicitly marks correct, verify against unsubmitted indicators
+        elif eval_status in ["correct", "right"] or (all_items_correct and not any_item_incorrect):
+            # Guard against false positive "correct" when question is actually unsubmitted or has unexecuted actions
+            if (has_check_btn or has_unexecuted_actions or has_items_needing_action) and local_markers.get("status") != "correct":
+                final_status = "unsubmitted"
+                is_answered = False
+                is_rethinking = False
+                details = f"unsubmitted_requires_action (check_btn={has_check_btn}, actions={len(res.get('actions', []))})"
+            else:
+                final_status = "correct"
+                is_answered = True
+                is_rethinking = False
+                details = f"marked_correct (ai={eval_status}, visual={local_markers.get('details', '')})"
+
+        # 4. If answer is already in place and confirmed right on screen (needs_action is False, 0 actions required)
+        elif res.get("needs_action") is False and len(res.get("actions", [])) == 0 and not any_item_incorrect:
+            final_status = "unsubmitted"
+            is_answered = True
+            is_rethinking = False
+            details = "already_answered_on_screen (needs_action=False, actions=0)"
+
+        # 5. Otherwise, unsubmitted
         else:
             final_status = "unsubmitted"
             is_rethinking = False
             has_answer = bool(res.get("answer") and res.get("answer") not in ["Answer determined", ""])
-            # Invariant: An unsubmitted question has NOT been answered on screen yet!
             is_answered = False
             details = f"unsubmitted (draft_ready={has_answer})"
 
-        # Invariant: Unsubmitted questions cannot advance until actions are executed on screen!
+        # Determine ready_to_advance:
         if final_status == "correct":
             ready_to_advance = True
+        elif is_answered and (res.get("next_button") or str(res.get("advance_action", "")).lower() == "scroll_down"):
+            ready_to_advance = True
         else:
-            # For unsubmitted or incorrect questions, advancing is strictly gated
             ready_to_advance = False
 
         self.last_verification_detail = details
@@ -285,6 +463,108 @@ class AssistantEngine:
             "is_incorrect": (final_status == "incorrect"),
             "details": details
         }
+
+    def _is_final_submission_button(self, btn: Optional[Dict[str, Any]]) -> bool:
+        """
+        Determines whether a button represents a final quiz/assignment submission
+        (e.g., 'Submit Quiz', 'Submit Assignment', 'Turn In', 'Finish Quiz', 'Hand In', 'Submit All'),
+        as opposed to a single-question verification ('Check', 'Check Answer', 'Submit Answer')
+        or a navigation button ('Next', 'Continue').
+        """
+        if not btn or not isinstance(btn, dict):
+            return False
+
+        btn_type = str(btn.get("button_type", btn.get("type", ""))).lower().strip()
+        if btn_type == "submit":
+            return True
+
+        desc = str(btn.get("description", "")).lower().strip()
+
+        # Problem-level check answer buttons should NOT be treated as final assessment submit
+        if any(c in desc for c in ["check answer", "check", "verify", "submit answer"]):
+            return False
+
+        # Assessment-level / final submission keywords
+        final_keywords = [
+            "submit quiz", "submit assignment", "finish quiz", "finish test",
+            "turn in", "hand in", "submit all", "complete quiz", "complete test",
+            "end test", "end quiz", "submit exam", "finish exam"
+        ]
+        if any(k in desc for k in final_keywords):
+            return True
+
+        # Pure "submit" or "finish" or "turn in" without "answer" qualifier
+        if desc in ["submit", "finish", "turn in", "hand in"]:
+            return True
+
+        return False
+
+    def _has_unfinished_work(self) -> Tuple[bool, str]:
+        """
+        Safety guard: checks whether there is unfinished, unverified, or incorrect work
+        on the current question or assessment page that must NOT be submitted.
+        Returns (has_unfinished: bool, reason: str).
+        """
+        if not self.last_result:
+            return True, "No question result available"
+
+        eval_status = str(self.last_result.get("evaluation_status", "")).lower()
+
+        # 1. Platform evaluation: question marked incorrect or currently rethinking
+        if eval_status in ["incorrect", "wrong"]:
+            return True, f"Question marked incorrect by platform (status='{eval_status}')"
+        if bool(self.last_result.get("is_rethinking")):
+            return True, "Question solution is actively being rethought"
+
+        # 2. If explicitly marked ready_to_advance = False (unless confirmed correct)
+        if self.last_result.get("ready_to_advance") is False and eval_status != "correct":
+            return True, "ready_to_advance is False"
+
+        # 3. Check multi-part items for incomplete/unanswered/incorrect parts
+        items = self.last_result.get("items", [])
+        if isinstance(items, list) and items:
+            for item in items:
+                part_id = item.get("part_id", "part")
+                if item.get("needs_action") is True:
+                    # Check if action was provided and executed
+                    item_actions = item.get("actions", [])
+                    if not item_actions:
+                        return True, f"Part '{part_id}' requires action but has no actions"
+                item_state = str(item.get("current_state", "")).lower()
+                if item_state in ["unanswered", "answered_incorrect", "wrong", "pending"]:
+                    return True, f"Part '{part_id}' state is '{item_state}'"
+                item_eval = str(item.get("evaluation_status", "")).lower()
+                if item_eval in ["incorrect", "wrong"]:
+                    return True, f"Part '{part_id}' is marked incorrect"
+
+        # 4. Check top-level actions for unsubmitted question
+        actions = self.last_result.get("actions", [])
+        is_correct = eval_status == "correct"
+        needs_act = self.last_result.get("needs_action", True)
+        if not is_correct and not actions and needs_act:
+            # Check if this is an interstitial screen
+            q_text = str(self.last_result.get("question", "")).strip().lower()
+            is_interstitial = (
+                not q_text
+                or any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
+                and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation"])
+            )
+            if not is_interstitial:
+                return True, "Question is unsubmitted and requires actions, but 0 actions were provided"
+
+        # 5. Written response checks
+        if self.last_result.get("is_written_response"):
+            written_details = self.last_result.get("written_details", {})
+            min_words = written_details.get("min_words")
+            txt = written_details.get("text", "")
+            if not txt:
+                return True, "Written response text is empty"
+            if min_words:
+                words = len(re.findall(r"\b[A-Za-z0-9'-]+\b", txt))
+                if words < min_words:
+                    return True, f"Written response has {words} words (minimum required is {min_words})"
+
+        return False, ""
 
     def trigger_solve(self, region: Optional[Tuple[int, int, int, int]] = None):
         """Initiates screen capture and AI solution resolution, optionally for a specific region."""
@@ -337,16 +617,30 @@ class AssistantEngine:
             self.last_region = region
             logger.debug(f"Capturing screen (mode={self.config.capture_mode}, region={region})...")
 
-            (base64_data,
-             curr_w,
-             curr_h,
-             scale_x,
-             scale_y,
-             offset_x,
-             offset_y) = self.capture.capture_and_encode(
-                 region=region,
-                 max_dimension=self.config.max_capture_dimension
-             )
+            mark_registry = {}
+            if hasattr(self.capture, "capture_and_ground"):
+                (base64_data,
+                 curr_w,
+                 curr_h,
+                 scale_x,
+                 scale_y,
+                 offset_x,
+                 offset_y,
+                 mark_registry) = self.capture.capture_and_ground(
+                     region=region,
+                     max_dimension=self.config.max_capture_dimension
+                 )
+            else:
+                (base64_data,
+                 curr_w,
+                 curr_h,
+                 scale_x,
+                 scale_y,
+                 offset_x,
+                 offset_y) = self.capture.capture_and_encode(
+                     region=region,
+                     max_dimension=self.config.max_capture_dimension
+                 )
 
             # Blank screen render guard: if screen is completely blank (e.g. white loading screen), pause and re-capture
             try:
@@ -356,20 +650,33 @@ class AssistantEngine:
                     logger.warning("Blank screen detected (stddev < 1.8). Page is likely loading. Waiting 1.0s before capturing...")
                     self._handle_adjustment("⏳ Waiting for page to finish loading...")
                     time.sleep(1.0)
-                    (base64_data,
-                     curr_w,
-                     curr_h,
-                     scale_x,
-                     scale_y,
-                     offset_x,
-                     offset_y) = self.capture.capture_and_encode(
-                         region=region,
-                         max_dimension=self.config.max_capture_dimension
-                     )
+                    if hasattr(self.capture, "capture_and_ground"):
+                        (base64_data,
+                         curr_w,
+                         curr_h,
+                         scale_x,
+                         scale_y,
+                         offset_x,
+                         offset_y,
+                         mark_registry) = self.capture.capture_and_ground(
+                             region=region,
+                             max_dimension=self.config.max_capture_dimension
+                         )
+                    else:
+                        (base64_data,
+                         curr_w,
+                         curr_h,
+                         scale_x,
+                         scale_y,
+                         offset_x,
+                         offset_y) = self.capture.capture_and_encode(
+                             region=region,
+                             max_dimension=self.config.max_capture_dimension
+                         )
             except Exception as e:
                 logger.debug(f"Blank screen check skipped: {e}")
 
-            logger.debug(f"Capture successful ({curr_w}x{curr_h}, base64 len={len(base64_data)}).")
+            logger.debug(f"Capture successful ({curr_w}x{curr_h}, base64 len={len(base64_data)}, marks={len(mark_registry)}).")
 
             # 2. AI Reasoning Phase
             phase = f"AI Vision ({self.config.ai_provider}:{self.config.model_name})"
@@ -395,13 +702,17 @@ class AssistantEngine:
                 calibration_offset_y=self.config.calibration_offset_y,
                 calibration_scale_x=self.config.calibration_scale_x,
                 calibration_scale_y=self.config.calibration_scale_y,
-                coordinate_mode=self.config.coordinate_mode
+                coordinate_mode=self.config.coordinate_mode,
+                mark_registry=mark_registry
             )
+
+            extra_images: List[str] = []
+            self.executor._viewport_is_scrolled = False
+            self.executor._last_scroll_center = (offset_x + curr_w // 2, offset_y + curr_h // 2)
 
             # 3. Supplementary Information Inspection Phase (reference sheet modal or scrolled content)
             if result.get("status") == "needs_more_info" and self.config.auto_inspect_references and not self.executor.is_stopped():
                 info_type = result.get("info_type", "")
-                extra_images = []
 
                 if info_type == "open_reference":
                     ref_btn = result.get("reference_button")
@@ -513,8 +824,8 @@ class AssistantEngine:
                                     logger.debug(f"Error verifying dropdown close: {e}")
 
                 elif info_type == "scroll_down":
-                    scroll_amt = int(result.get("scroll_amount", 400))
-                    scroll_amt = max(150, min(800, scroll_amt))
+                    scroll_amt = abs(int(result.get("scroll_amount", 500)))
+                    scroll_amt = max(200, min(900, scroll_amt))
                     logger.info(f"Inspecting content below viewport fold (scrolling down {scroll_amt}px)...")
                     self.set_state(EngineState.INSPECTING, f"Scrolling down {scroll_amt}px...")
                     self._handle_adjustment(f"🔍 Scrolling down {scroll_amt}px to inspect content...")
@@ -546,28 +857,19 @@ class AssistantEngine:
                             logger.debug(f"Error checking scroll displacement: {e}")
 
                     # Capture scrolled content
+                    time.sleep(0.3)
                     scrolled_b64, _, _, _, _, _, _ = self.capture.capture_and_encode(
                         region=region,
                         max_dimension=self.config.max_capture_dimension
                     )
                     extra_images.append(scrolled_b64)
 
-                    # Restore exact scroll position to align coordinate frame with top
-                    logger.info(f"Restoring viewport fold scroll (scrolling up {scroll_amt}px)...")
-                    self.executor.scroll(scroll_amt, center_x, center_y)
-                    time.sleep(0.4)
-
-                    # Zero-token verification: verify scroll restoration matches pre-scroll baseline
-                    if self.config.local_verification_enabled and baseline_scroll_img:
-                        try:
-                            restored_img = self.capture.capture_screen(region=region)
-                            restored_ok, r_diff = self.verifier.verify_modal_dismissed(baseline_scroll_img, restored_img, threshold_diff=4.0)
-                            if not restored_ok:
-                                logger.info(f"Fine-tuning scroll restoration alignment (diff={r_diff:.1f})...")
-                                self.executor.scroll(100, center_x, center_y)
-                                time.sleep(0.3)
-                        except Exception as e:
-                            logger.debug(f"Error checking scroll restoration: {e}")
+                    # Retain scrolled viewport position: do NOT immediately scroll back up!
+                    # Keeping the viewport aligned with the lower view prevents viewport jitter
+                    # and avoids scroll inertia drift when executing actions on lower view elements.
+                    self.executor._viewport_is_scrolled = True
+                    self.executor._last_scroll_center = (center_x, center_y)
+                    logger.info(f"Retaining scrolled view ({scroll_amt}px) for stable action execution without viewport jitter.")
 
                 if extra_images and not self.executor.is_stopped():
                     logger.info("Re-evaluating question with supplementary imagery...")
@@ -592,6 +894,157 @@ class AssistantEngine:
             ans = result.get('answer')
             actions_count = len(result.get('actions', []))
             logger.info(f"AI Solution returned: Answer='{ans}', Actions={actions_count}, Question='{q_snippet}'")
+
+            # Choice-to-Action Guard:
+            # If actions is still 0 but choices and answer exist, synthesize the click action targeting the matching choice
+            if actions_count == 0 and result.get("needs_action") is not False:
+                choices = result.get("choices", [])
+                ans_str = str(ans or "").strip().lower()
+                if isinstance(choices, list) and choices and ans_str:
+                    matched_choice = None
+                    for ch in choices:
+                        lbl = str(ch.get("label", "")).strip().lower()
+                        txt = str(ch.get("text", "")).strip().lower()
+                        if (lbl and (lbl in ans_str or ans_str in lbl)) or (txt and (txt in ans_str or ans_str in txt)):
+                            matched_choice = ch
+                            break
+                    if not matched_choice:
+                        for ch in choices:
+                            lbl = str(ch.get("label", "")).strip().lower()
+                            for letter in ["a", "b", "c", "d", "e"]:
+                                if (f"option {letter}" in ans_str or f"({letter})" in ans_str
+                                    or ans_str.startswith(f"{letter}.") or ans_str.startswith(f"{letter})")
+                                    or ans_str == letter or ans_str.startswith(f"choice {letter}")):
+                                    if (f"option {letter}" in lbl or f"({letter})" in lbl
+                                        or lbl.startswith(f"{letter}.") or lbl.startswith(f"{letter})")
+                                        or lbl == letter or lbl.startswith(f"choice {letter}")):
+                                        matched_choice = ch
+                                        break
+                            if matched_choice:
+                                break
+                    if matched_choice:
+                        cx = matched_choice.get("screen_x", matched_choice.get("x"))
+                        cy = matched_choice.get("screen_y", matched_choice.get("y"))
+                        if cx is not None and cy is not None:
+                            synth_act = {
+                                "type": "click",
+                                "x": matched_choice.get("x"),
+                                "y": matched_choice.get("y"),
+                                "screen_x": int(cx),
+                                "screen_y": int(cy),
+                                "box_2d": matched_choice.get("box_2d"),
+                                "description": f"Select {matched_choice.get('label', 'chosen option')}",
+                                "in_scrolled_view": False,
+                                "choices": choices
+                            }
+                            result["actions"] = [synth_act]
+                            actions_count = 1
+                            logger.info(f"Synthesized click action for choice '{matched_choice.get('label')}' at ({cx}, {cy})")
+
+            # Automatic Cut-Off Question Detection Guard:
+            # ONLY scroll down to inspect if 0 actions were found AND no valid choices/answers exist.
+            # Never scroll down if answer choices or an answer are already present on screen!
+            has_explicit_choices = bool(result.get("choices") and len(result.get("choices")) >= 2)
+            ans_val = str(result.get("answer", "")).strip().lower()
+            placeholder_phrases = ["cut off", "view below", "scroll down", "need to view", "choices below", "not visible", "more info", "see below"]
+            has_explicit_answer = bool(ans_val and not any(p in ans_val for p in placeholder_phrases))
+            q_text = str(result.get("question", "")).strip().lower()
+            is_interstitial = (
+                not q_text
+                or any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
+                and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation", "explain", "describe"])
+            )
+            if (
+                actions_count == 0
+                and not has_explicit_choices
+                and not has_explicit_answer
+                and not is_interstitial
+                and not extra_images
+                and not result.get("next_button")
+                and result.get("needs_action") is not False
+                and not self.executor.is_stopped()
+            ):
+                logger.info("No input actions or choices detected in top view. Possible cut-off question; scrolling down 500px to inspect lower area...")
+                self.set_state(EngineState.INSPECTING, "Scrolling down to inspect lower question area...")
+                self._handle_adjustment("📜 Cut-off question check: scrolling down to view remainder...")
+
+                auto_scroll_amt = 500
+                center_x = offset_x + curr_w // 2
+                center_y = offset_y + curr_h // 2
+
+                self.executor.scroll(-auto_scroll_amt, center_x, center_y)
+                self.executor._viewport_is_scrolled = True
+                self.executor._last_scroll_center = (center_x, center_y)
+                time.sleep(0.5)
+
+                scrolled_b64, _, _, _, _, _, _ = self.capture.capture_and_encode(
+                    region=region,
+                    max_dimension=self.config.max_capture_dimension
+                )
+
+                logger.info("Re-evaluating question with lower scrolled view...")
+                self.set_state(EngineState.THINKING, "Analyzing question with lower scrolled view...")
+                scrolled_result = ai_client.solve_screen(
+                    base64_image=base64_data,
+                    image_width=curr_w,
+                    image_height=curr_h,
+                    scale_x=scale_x,
+                    scale_y=scale_y,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                    calibration_offset_x=self.config.calibration_offset_x,
+                    calibration_offset_y=self.config.calibration_offset_y,
+                    calibration_scale_x=self.config.calibration_scale_x,
+                    calibration_scale_y=self.config.calibration_scale_y,
+                    coordinate_mode=self.config.coordinate_mode,
+                    extra_images=[scrolled_b64]
+                )
+                if scrolled_result and len(scrolled_result.get("actions", [])) > 0:
+                    logger.info(f"Lower view inspection found {len(scrolled_result.get('actions', []))} action(s)! Retaining scrolled viewport.")
+                    extra_images = [scrolled_b64]
+                    result = scrolled_result
+                    # Auto-tag actions and navigation buttons as belonging to the scrolled view
+                    for act in result.get("actions", []):
+                        if "in_scrolled_view" not in act:
+                            act["in_scrolled_view"] = True
+                        if "scroll_amount" not in act:
+                            act["scroll_amount"] = auto_scroll_amt
+                    items = result.get("items", [])
+                    if isinstance(items, list):
+                        for itm in items:
+                            for act in itm.get("actions", []):
+                                if "in_scrolled_view" not in act:
+                                    act["in_scrolled_view"] = True
+                                if "scroll_amount" not in act:
+                                    act["scroll_amount"] = auto_scroll_amt
+                    for btn_name in ["check_button", "next_button", "submit_button"]:
+                        btn = result.get(btn_name)
+                        if btn and isinstance(btn, dict):
+                            if "in_scrolled_view" not in btn:
+                                btn["in_scrolled_view"] = True
+                            if "scroll_amount" not in btn:
+                                btn["scroll_amount"] = auto_scroll_amt
+                    q_snippet = (result.get('question') or '')[:80]
+                    ans = result.get('answer')
+                    actions_count = len(result.get('actions', []))
+                else:
+                    # If lower view inspection did not reveal actions, restore viewport to top
+                    logger.info("Lower view inspection did not reveal new actions. Restoring viewport to top...")
+                    self.executor.scroll(auto_scroll_amt, center_x, center_y)
+                    self.executor._viewport_is_scrolled = False
+                    time.sleep(0.35)
+
+            # Viewport Restoration Guard:
+            # If supplementary scrolling occurred, verify whether returned actions target the upper view.
+            # If so, restore the viewport to top before proceeding to deliberation and action execution!
+            if self.executor._viewport_is_scrolled and not self.executor.is_stopped():
+                actions_require_scrolled = any(bool(a.get("in_scrolled_view")) for a in result.get("actions", []))
+                if not actions_require_scrolled:
+                    logger.info("Actions target top view elements. Restoring viewport to top before execution...")
+                    self.executor.ensure_scrolled_view(scrolled=False, scroll_amount=500)
+                    time.sleep(0.35)
+
+            result["extra_images_used"] = bool(extra_images and len(extra_images) > 0)
 
             # Check question evaluation status (correct, incorrect, unsubmitted)
             eval_info = self.check_question_evaluation_status(result)
@@ -619,13 +1072,62 @@ class AssistantEngine:
             # Measure physical boundaries of input boxes on screen and snap to middle 50%
             self._refine_input_box_targets(result)
 
+            # Written Questions & Jade's AI Humanizer Pipeline (AVA 2.0)
+            self._process_written_question_if_applicable(result)
+
             self.last_result = result
             self.last_error = None
             self._notify_result(result)
 
-            # If all parts are already confirmed CORRECT by platform and no actions are required
-            if eval_info["status"] == "correct" and (not result.get("needs_action") or len(result.get("actions", [])) == 0):
-                logger.info("Question is already marked CORRECT by platform on screen. No input actions needed.")
+            # Check if all returned actions are already selected on screen (comparative sibling check)
+            actions_to_check = result.get("actions", [])
+            if self.config.local_verification_enabled and actions_to_check and not eval_info["is_rethinking"]:
+                all_already_done = True
+                for act in actions_to_check:
+                    act_t = str(act.get("type", "")).lower()
+                    if act_t in ["click", "double_click"]:
+                        sx = act.get("screen_x", act.get("x"))
+                        sy = act.get("screen_y", act.get("y"))
+                        if sx is not None and sy is not None:
+                            isx, isy = int(sx), int(sy)
+                            roi = self.verifier.capture_roi(isx, isy)
+                            sib_coords = self.verifier.get_sibling_choice_coordinates(isx, isy, result)
+                            sib_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
+                            is_sel, reason, _ = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sib_rois)
+                            if not is_sel:
+                                all_already_done = False
+                        else:
+                            all_already_done = False
+                    else:
+                        all_already_done = False
+
+                if all_already_done and actions_to_check:
+                    logger.info("Local verifier confirmed that all options are ALREADY selected on screen! Suppressing redundant actions.")
+                    self._handle_adjustment("✓ Options confirmed already selected on screen (Zero-Token Verified)")
+                    result["needs_action"] = False
+                    result["actions"] = []
+                    result["ready_to_advance"] = True
+
+            # If all parts are already confirmed CORRECT by platform and no actions are required,
+            # OR if question answer is already in place on screen (needs_action=False, actions=0) and ready to advance
+            is_already_filled = (
+                result.get("needs_action") is False
+                and len(result.get("actions", [])) == 0
+                and not result.get("check_button")
+                and not result.get("submit_button")
+                and eval_info["status"] != "incorrect"
+                and not bool(result.get("is_rethinking"))
+                and bool(result.get("next_button") or str(result.get("advance_action", "")).lower() == "scroll_down")
+                and not self._is_final_submission_button(result.get("next_button"))
+            )
+            if (
+                (eval_info["status"] == "correct" and (not result.get("needs_action") or len(result.get("actions", [])) == 0) and not result.get("check_button"))
+                or is_already_filled
+            ):
+                if eval_info["status"] == "correct":
+                    logger.info("Question is already marked CORRECT by platform on screen. No input actions needed.")
+                else:
+                    logger.info("Question answer is already in place on screen (needs_action=False). Advancing to next question...")
                 if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
                     time.sleep(0.4)
                     advance_action = str(result.get("advance_action", "")).lower()
@@ -639,12 +1141,18 @@ class AssistantEngine:
                         else:
                             self._discover_and_click_next_button(override_region=self.last_region)
                     if self.config.autonomous_mode and not self.executor.is_stopped():
-                        time.sleep(1.2)
+                        load_delay = max(2.5, self.config.auto_next_delay + 1.0)
+                        logger.info(f"Advancing to next question: Waiting {load_delay:.1f}s for page to render...")
+                        self._handle_adjustment("⏳ Waiting for next question to load...")
+                        time.sleep(load_delay)
+                        self._wait_for_page_to_settle(region=self.last_region)
+                        self.executor._viewport_is_scrolled = False
                         self.set_state(EngineState.IDLE)
                         self.trigger_solve()
                     return
                 else:
-                    self.set_state(EngineState.IDLE, "Question confirmed correct")
+                    msg = "Question confirmed correct" if eval_info["status"] == "correct" else "Question already answered on screen"
+                    self.set_state(EngineState.IDLE, msg)
                     return
 
             is_multi_part = result.get("is_multi_part", False)
@@ -675,12 +1183,31 @@ class AssistantEngine:
                 return
 
             # Proceed to execute if autonomous mode, or if user skipped reading via F9,
-            # or if currently in an active multi-part chain
-            if self.config.autonomous_mode or self._force_execute_after_reading or (self.config.chain_multi_parts and self._multi_part_active):
+            # or if currently in an active multi-part chain.
+            # MANDATORY SAFEGUARD (AVA 2.0): Written questions (>= 10 words) ALWAYS require confirmation
+            # unless specifically opted in via auto_confirm_written_responses!
+            is_written = bool(result.get("is_written_response", False))
+            can_auto_proceed = (
+                (self.config.autonomous_mode or self._force_execute_after_reading or (self.config.chain_multi_parts and self._multi_part_active))
+                and not (is_written and not self.config.auto_confirm_written_responses)
+            )
+
+            if can_auto_proceed:
                 self._force_execute_after_reading = False
                 self.execute_current_solution()
             else:
-                self.set_state(EngineState.WAITING_CONFIRMATION)
+                self._force_execute_after_reading = False
+                if is_written:
+                    wd = result.get("written_details", {})
+                    cnt = wd.get("word_count", 0)
+                    min_w = wd.get("min_words")
+                    min_str = f" | Min: {min_w}" if min_w else ""
+                    self.set_state(
+                        EngineState.WAITING_CONFIRMATION,
+                        f"Written Response Ready ({cnt} words{min_str}) - Press F9 to Confirm"
+                    )
+                else:
+                    self.set_state(EngineState.WAITING_CONFIRMATION)
 
         except EmergencyStopException:
             logger.warning("Emergency stop halted the solve pipeline.")
@@ -770,9 +1297,15 @@ class AssistantEngine:
         # CRITICAL SAFETY INVARIANT: Prevent skipping unanswered questions
         # If there are zero actions, no submission check button, and the question is unsubmitted/needs action
         has_submission_action = bool(self.last_result.get("check_button"))
+        is_already_answered = (
+            self.last_result.get("needs_action") is False
+            and not actions
+            and not bool(self.last_result.get("is_rethinking"))
+            and self.last_result.get("evaluation_status") != "incorrect"
+        )
         is_unsubmitted = (
-            self.last_result.get("evaluation_status") == "unsubmitted"
-            or self.last_result.get("needs_action") is True
+            (self.last_result.get("evaluation_status") == "unsubmitted" or self.last_result.get("needs_action") is True)
+            and not is_already_answered
         )
         if not actions and not has_submission_action and is_unsubmitted:
             q_text = str(self.last_result.get("question", "")).strip().lower()
@@ -792,22 +1325,102 @@ class AssistantEngine:
                 self.set_state(EngineState.WAITING_CONFIRMATION, "Unanswered question (no actions). Advancing blocked.")
                 return
 
+        q_key = str(self.last_result.get("question", "current_question"))[:60]
+
+        # Ensure viewport is aligned with the first action's target view BEFORE capturing ROIs or clicking!
+        if actions:
+            first_act = actions[0]
+            first_is_scrolled = bool(first_act.get("in_scrolled_view", False))
+            first_scroll_amt = abs(int(first_act.get("scroll_amount", 500)))
+            if self.executor._viewport_is_scrolled != first_is_scrolled:
+                logger.info(
+                    f"execute_current_solution: Aligning viewport to {'lower scrolled' if first_is_scrolled else 'top'} view "
+                    f"before pre-check and click execution..."
+                )
+                self.executor.ensure_scrolled_view(first_is_scrolled, first_scroll_amt)
+                time.sleep(0.35)
+
+        # Pre-Execution Check: Verify if proposed answer options are ALREADY selected on screen
+        if self.config.local_verification_enabled and actions and not was_rethinking:
+            all_already_selected = True
+            for act in actions:
+                act_type = str(act.get("type", "")).lower()
+                if act_type in ["click", "double_click"]:
+                    sx = act.get("screen_x", act.get("x"))
+                    sy = act.get("screen_y", act.get("y"))
+                    if sx is not None and sy is not None:
+                        isx, isy = int(sx), int(sy)
+                        roi = self.verifier.capture_roi(isx, isy)
+                        sib_coords = self.verifier.get_sibling_choice_coordinates(isx, isy, self.last_result)
+                        sibling_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
+                        is_sel, reason, conf = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sibling_rois)
+                        if is_sel:
+                            act["verified"] = True
+                            act["verification_reason"] = f"pre_check_{reason}"
+                        else:
+                            all_already_selected = False
+                    else:
+                        all_already_selected = False
+                elif act_type == "type_text":
+                    all_already_selected = False
+
+            if all_already_selected and actions:
+                logger.info("Pre-execution check: Target options are ALREADY selected on screen (Zero-Token Confirmed)! Skipping duplicate clicks.")
+                self._handle_adjustment("✓ Answer options already selected on screen. Proceeding to navigation...")
+                self.last_result["ready_to_advance"] = True
+                self.last_result["needs_action"] = False
+                self.last_result["actions"] = []
+                actions = []
+
+        # Pass prior attempted coordinates and apply physically verified target offset if available
+        if q_key in self._action_offset_memory:
+            mem_info = self._action_offset_memory[q_key]
+            prior_coords = mem_info.get("attempted_coords", set())
+            phys_target = mem_info.get("physical_target")
+            phys_delta = mem_info.get("physical_delta")
+            for act in actions:
+                act["prior_attempted_coords"] = prior_coords
+                # If a physical control was visually detected on screen, apply it directly!
+                if phys_target and act.get("type") in ["click", "double_click"]:
+                    logger.info(
+                        f"Applying physically verified target on retry: "
+                        f"({act.get('x')}, {act.get('y')}) -> ({phys_target[0]}, {phys_target[1]})"
+                    )
+                    act["x"] = phys_target[0]
+                    act["y"] = phys_target[1]
+                    act["screen_x"] = phys_target[0]
+                    act["screen_y"] = phys_target[1]
+                elif phys_delta and (phys_delta[0] != 0 or phys_delta[1] != 0):
+                    logger.info(
+                        f"Applying physical screen offset on retry: "
+                        f"({act.get('x')}, {act.get('y')}) + ({phys_delta[0]:+d}px, {phys_delta[1]:+d}px)"
+                    )
+                    if act.get("x") is not None:
+                        act["x"] = int(act["x"]) + phys_delta[0]
+                        act["screen_x"] = act["x"]
+                    if act.get("y") is not None:
+                        act["y"] = int(act["y"]) + phys_delta[1]
+                        act["screen_y"] = act["y"]
+
         phase = "Action Execution"
         try:
-            self.set_state(EngineState.EXECUTING)
-            logger.info(f"Executing sequence of {len(actions)} actions...")
-            seq_summary = self.executor.execute_action_sequence(actions, delay_between=self.config.action_delay)
-            if isinstance(seq_summary, dict) and seq_summary.get("error") == "concurrent_input_prevented":
-                logger.warning("execute_current_solution: execution aborted because another input stream is already active.")
-                return
+            if actions:
+                self.set_state(EngineState.EXECUTING)
+                logger.info(f"Executing sequence of {len(actions)} actions...")
+                seq_summary = self.executor.execute_action_sequence(actions, delay_between=self.config.action_delay)
+                if isinstance(seq_summary, dict) and seq_summary.get("error") == "concurrent_input_prevented":
+                    logger.warning("execute_current_solution: execution aborted because another input stream is already active.")
+                    return
 
-            if isinstance(seq_summary, dict):
-                logger.info(
-                    f"Action sequence completed: {seq_summary.get('verified_count', 0)}/"
-                    f"{seq_summary.get('total_verifiable', 0)} actions verified."
-                )
+                if isinstance(seq_summary, dict):
+                    logger.info(
+                        f"Action sequence completed: {seq_summary.get('verified_count', 0)}/"
+                        f"{seq_summary.get('total_verifiable', 0)} actions verified."
+                    )
+                else:
+                    logger.info("Action sequence completed.")
             else:
-                logger.info("Action sequence completed.")
+                seq_summary = {"all_verified": True, "verified_count": 0, "total_verifiable": 0}
 
             # Zero-Token Post-Execution Verification: Ensure question was actually answered before going idle!
             phase = "Zero-Token Answer Verification"
@@ -826,9 +1439,9 @@ class AssistantEngine:
                     "details": f"input_failsafe_failed ({len(failed_inputs)} inputs unconfirmed: {failed_inputs})",
                     "failed_inputs": failed_inputs
                 }
-            elif not self.config.local_verification_enabled:
+            elif not self.config.local_verification_enabled or not actions:
                 is_answered = True
-                verification = {"is_answered": True, "details": "verification_disabled_by_config", "all_verified": True}
+                verification = {"is_answered": True, "details": "verification_disabled_or_no_actions", "all_verified": True}
             elif isinstance(seq_summary, dict) and seq_summary.get("all_verified", False):
                 is_answered = True
                 verification = {"is_answered": True, "details": "all_actions_verified_in_sequence", "all_verified": True}
@@ -846,6 +1459,30 @@ class AssistantEngine:
                     f"Details: {verification.get('details', '')}"
                 )
                 self._handle_adjustment("✓ Answer verified (Zero-Token Confirmed)")
+
+                # Reset offset memory & retry count on confirmed answer
+                self._action_offset_memory.pop(q_key, None)
+
+                # Written response verification (AVA 2.0)
+                if self.last_result.get("is_written_response") and self.config.written_verification_enabled:
+                    written_info = self.last_result.get("written_details", {})
+                    min_w = written_info.get("min_words")
+                    typed_text = written_info.get("text", "")
+                    for act in actions:
+                        if act.get("type") == "type_text" and act.get("x") is not None:
+                            bx, by = int(act.get("x")), int(act.get("y"))
+                            after_roi = self.verifier.capture_roi(bx, by, radius_w=60, radius_h=35)
+                            v_ok, v_reason, v_metrics = self.verifier.verify_written_input_area(
+                                before_roi=None,
+                                after_roi=after_roi,
+                                expected_min_words=min_w,
+                                expected_chars=len(typed_text)
+                            )
+                            if not v_ok:
+                                logger.warning(f"Written input area verification flagged: {v_reason}")
+                                self._handle_adjustment(f"⚠️ Written input check: {v_reason}")
+                            else:
+                                logger.info(f"Written input area verified: {v_metrics}")
 
                 # If this was a retry or rethink, the corrective answer is now confirmed in place!
                 if was_rethinking:
@@ -867,24 +1504,108 @@ class AssistantEngine:
                 if was_rethinking and not has_pending_items:
                     self.last_result["ready_to_advance"] = True
             else:
+                # Record click offset and physical target telemetry for retry attempt
+                if q_key not in self._action_offset_memory:
+                    self._action_offset_memory[q_key] = {"retry_count": 0, "attempted_coords": set(), "last_offset": (0, 0)}
+
+                mem = self._action_offset_memory[q_key]
+                last_off_x, last_off_y = 0, 0
+                phys_target = None
+                phys_delta = None
+                phys_mouse = None
+                for act in actions:
+                    intended_x = act.get("intended_x", act.get("x"))
+                    intended_y = act.get("intended_y", act.get("y"))
+                    last_x = act.get("last_clicked_x", intended_x)
+                    last_y = act.get("last_clicked_y", intended_y)
+                    if intended_x is not None and last_x is not None:
+                        last_off_x = int(last_x) - int(intended_x)
+                    if intended_y is not None and last_y is not None:
+                        last_off_y = int(last_y) - int(intended_y)
+                    for att in act.get("attempted_clicks", []):
+                        mem["attempted_coords"].add((att["x"], att["y"]))
+
+                    if act.get("physical_target_x") is not None and act.get("physical_target_y") is not None:
+                        phys_target = (int(act["physical_target_x"]), int(act["physical_target_y"]))
+                    if act.get("physical_delta_x") is not None and act.get("physical_delta_y") is not None:
+                        phys_delta = (int(act["physical_delta_x"]), int(act["physical_delta_y"]))
+                    if act.get("actual_mouse_x") is not None and act.get("actual_mouse_y") is not None:
+                        phys_mouse = (int(act["actual_mouse_x"]), int(act["actual_mouse_y"]))
+
+                mem["last_offset"] = (last_off_x, last_off_y)
+                if phys_target:
+                    mem["physical_target"] = phys_target
+                if phys_delta:
+                    mem["physical_delta"] = phys_delta
+                if phys_mouse:
+                    mem["physical_mouse"] = phys_mouse
+
+                if phys_delta and (phys_delta[0] != 0 or phys_delta[1] != 0):
+                    off_label = f"Physical offset: {phys_delta[0]:+d}px, {phys_delta[1]:+d}px"
+                else:
+                    off_label = f"Offset: {last_off_x:+d}px, {last_off_y:+d}px"
+
+                if mem["retry_count"] < self._max_auto_miss_retries and not self.executor.is_stopped():
+                    mem["retry_count"] += 1
+                    attempt_num = mem["retry_count"]
+                    msg = (
+                        f"⚠️ Action unconfirmed. {off_label}. "
+                        f"Waiting 5s before auto-retrying (attempt {attempt_num}/{self._max_auto_miss_retries})..."
+                    )
+                    logger.warning(msg)
+                    self._handle_adjustment(msg)
+
+                    for s in range(self._retry_countdown_seconds, 0, -1):
+                        if self.executor.is_stopped():
+                            return
+                        self.set_state(
+                            EngineState.WAITING_CONFIRMATION,
+                            f"UNVERIFIED_RETRY: Retrying in {s}s... ({off_label})"
+                        )
+                        time.sleep(1.0)
+
+                    if self.executor.is_stopped():
+                        return
+
+                    logger.info(f"Auto-retrying missed action sequence with recorded physical target telemetry (attempt {attempt_num})...")
+                    self.execute_current_solution()
+                    return
+
+                # If all auto-retries exhausted
                 logger.warning(
-                    f"[!] Zero-token verification FAILED: Question was NOT confirmed answered after execution and 3 readjustments! "
+                    f"[!] Zero-token verification FAILED after {self._max_auto_miss_retries} auto-retries! "
                     f"Details: {verification.get('details', '')}"
                 )
                 self.last_result["ready_to_advance"] = False
                 self.last_result["action_missed"] = True
-                unver_msg = "⚠️ Action missed after 3 readjustments: Question is NOT answered! Press F9 to retry or click manually."
+                unver_msg = (
+                    f"⚠️ Action missed after {self._max_auto_miss_retries} readjustment attempts "
+                    f"[{off_label}]. Press F9 to retry or click manually."
+                )
                 self._handle_adjustment(unver_msg)
 
                 # CRITICAL INVARIANT: DO NOT GO IDLE! DO NOT ADVANCE!
                 self.set_state(
                     EngineState.WAITING_CONFIRMATION,
-                    "UNVERIFIED: Click missed answer after 3 readjustments. Press F9 to retry."
+                    "UNVERIFIED: Click missed answer after retries. Press F9 to retry."
                 )
                 return
 
+            # Visual Double-Check Phase (AVA QA):
+            # Visually verify that the on-screen selected options/inputs genuinely match the intended answer
+            # after choosing all answers and before hitting Next, Check Answer, or Submit!
+            if is_answered and actions:
+                double_check_ok = self._double_check_answers_on_screen(actions)
+                if not double_check_ok:
+                    self.last_result["ready_to_advance"] = False
+                    self.set_state(
+                        EngineState.WAITING_CONFIRMATION,
+                        "Double-check flagged selection discrepancy. Press F9 to retry or click manually."
+                    )
+                    return
+
             # Check if auto next or multi-part continuation is applicable
-            if (is_answered or verification.get("all_verified", False) or verification.get("verified_count", 0) > 0) and not has_pending_items:
+            if (is_answered or is_already_answered or verification.get("all_verified", False) or verification.get("verified_count", 0) > 0) and not has_pending_items:
                 self.last_result["ready_to_advance"] = True
             elif has_pending_items:
                 self.last_result["ready_to_advance"] = False
@@ -970,7 +1691,20 @@ class AssistantEngine:
                             self._handle_adjustment("✓ Platform confirmed answer CORRECT!")
 
                     # Step 2: Click "Next" button if known, or dynamically locate the revealed button
+                    submit_btn = self.last_result.get("submit_button")
                     if not advanced and next_btn and isinstance(next_btn, dict):
+                        # Safeguard: if next_btn is actually an assessment-level submit button, check for unfinished work!
+                        if self._is_final_submission_button(next_btn):
+                            unfinished, reason = self._has_unfinished_work()
+                            if unfinished:
+                                logger.warning(
+                                    f"Auto-advance: Blocked clicking final submit button ('{next_btn.get('description')}') "
+                                    f"because unfinished work remains: {reason}"
+                                )
+                                self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                                self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                                return
+
                         logger.info("Auto-advance: Checking screen state before clicking identified 'Next' button...")
                         before_next_img = None
                         if self.config.local_verification_enabled:
@@ -1001,37 +1735,72 @@ class AssistantEngine:
                         # Zero-token verification: verify if screen transitioned to next question
                         if self.config.local_verification_enabled and before_next_img:
                             transition_confirmed = False
-                            for attempt in range(4):
+                            for attempt in range(12):
                                 time.sleep(0.35)
                                 try:
                                     after_next_img = self.capture.capture_screen(region=self.last_region)
                                     trans = self.verifier.verify_screen_transition(before_next_img, after_next_img)
-                                    if trans.get("transitioned", False):
+                                    t_ok = (
+                                        trans.get("transitioned", False)
+                                        if hasattr(trans, "get")
+                                        else (bool(trans[0]) if isinstance(trans, (tuple, list)) else bool(trans))
+                                    )
+                                    if t_ok:
                                         transition_confirmed = True
                                         advanced = True
-                                        logger.info(f"[OK] Screen transition to next question verified on check {attempt + 1}: {trans.get('details')}")
+                                        t_details = trans.get("details", "") if hasattr(trans, "get") else ""
+                                        logger.info(f"[OK] Screen transition to next question verified on check {attempt + 1}: {t_details}")
                                         break
                                 except Exception as e:
                                     logger.debug(f"Transition check exception: {e}")
-                                    break
+                                    continue
                             if not transition_confirmed:
                                 logger.warning(
-                                    "Next button click did not transition screen after polling. "
+                                    "Next button click did not transition screen after polling (4.2s). "
                                     "Falling back to dynamic navigation button discovery..."
                                 )
                         else:
                             advanced = True
 
+                    # Step 2b: If no Next button, but final Submit button is present
+                    elif not advanced and submit_btn and isinstance(submit_btn, dict):
+                        unfinished, reason = self._has_unfinished_work()
+                        if unfinished:
+                            logger.warning(
+                                f"Auto-advance: Final submit button ('{submit_btn.get('description')}') detected, "
+                                f"but blocked because unfinished work remains: {reason}"
+                            )
+                            self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                            self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                            return
+                        logger.info("Auto-advance: Assessment completed and verified. Submitting final work...")
+                        self.trigger_submit_button()
+                        advanced = True
+
                     if not advanced:
                         logger.info("Auto-advance: Scanning screen to detect newly revealed 'Next' / navigation button...")
                         advanced = self._discover_and_click_next_button(override_region=self.last_region)
 
+                    if not advanced:
+                        logger.warning(
+                            "Auto-advance: Next button not found or transition unconfirmed after answering all questions. "
+                            "Pausing autonomous loop to prevent re-answering already answered questions."
+                        )
+                        self._handle_adjustment("⚠️ All questions answered! Click Next or advance manually to continue.")
+                        self.set_state(
+                            EngineState.WAITING_CONFIRMATION,
+                            "All questions answered. Ready to advance."
+                        )
+                        return
+
                 # Step 3: Multi-part continuation or autonomous loop
                 if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
-                    load_delay = max(2.0, self.config.auto_next_delay + 0.8)
+                    load_delay = max(2.5, self.config.auto_next_delay + 1.0)
                     logger.info(f"Advancing to next question: Waiting {load_delay:.1f}s for page to render...")
                     self._handle_adjustment("⏳ Waiting for next question to load...")
                     time.sleep(load_delay)
+                    self._wait_for_page_to_settle(region=self.last_region)
+                    self.executor._viewport_is_scrolled = False
                     logger.info("Continuing solve pipeline for next part/question...")
                     self.set_state(EngineState.IDLE)
                     self.trigger_solve()
@@ -1054,6 +1823,139 @@ class AssistantEngine:
             self.last_error = diag
             self.set_state(EngineState.ERROR, diag.message)
             self._notify_error(diag)
+
+    def _double_check_answers_on_screen(self, executed_actions: list) -> bool:
+        """
+        Visually double-checks the question and all selected answers on screen
+        after choosing answers and before hitting Next, Check Answer, or Submit.
+        Detects if the bot messed up (e.g. clicked the wrong option, didn't click
+        an option, or entered incorrect input), and executes corrective actions.
+
+        Returns True if double-check passed (or was corrected), False otherwise.
+        """
+        if not getattr(self.config, "double_check_enabled", True):
+            return True
+
+        if not self.last_result:
+            return True
+
+        # If question was already marked correct by platform, no double-check needed
+        if self.last_result.get("evaluation_status") == "correct" and not executed_actions:
+            return True
+
+        # Only double-check if actions were executed or question was supposed to have an answer
+        if not executed_actions and not self.last_result.get("needs_action", True):
+            return True
+
+        question_text = str(self.last_result.get("question", "")).strip()
+        answer_text = str(self.last_result.get("answer", "")).strip()
+        if not question_text and not answer_text:
+            return True
+
+        retries = 0
+        max_retries = max(1, getattr(self.config, "max_double_check_retries", 2))
+
+        while retries <= max_retries:
+            if self.executor.is_stopped():
+                return False
+
+            self.set_state(EngineState.VERIFYING, "Double-checking selected answers on screen...")
+            logger.info(
+                f"Double-checking selected answers on screen (attempt {retries + 1}/{max_retries + 1}): "
+                f"Question='{question_text[:50]}...', Expected='{answer_text[:50]}'..."
+            )
+
+            # Brief pause for UI rendering / selection animations to finish
+            time.sleep(0.25)
+
+            # Fresh capture of the current state with visual grounding and mark anchors
+            mark_registry = {}
+            try:
+                if hasattr(self.capture, "capture_and_ground"):
+                    (base64_data,
+                     curr_w,
+                     curr_h,
+                     scale_x,
+                     scale_y,
+                     offset_x,
+                     offset_y,
+                     mark_registry) = self.capture.capture_and_ground(
+                         region=self.last_region,
+                         max_dimension=self.config.max_capture_dimension,
+                         prior_actions=executed_actions
+                     )
+                else:
+                    (base64_data,
+                     curr_w,
+                     curr_h,
+                     scale_x,
+                     scale_y,
+                     offset_x,
+                     offset_y) = self.capture.capture_and_encode(
+                         region=self.last_region,
+                         max_dimension=self.config.max_capture_dimension
+                     )
+            except Exception as e:
+                logger.warning(f"_double_check_answers_on_screen: screen capture failed: {e}")
+                return True
+
+            check_res = self.ai_client.double_check_solution(
+                base64_image=base64_data,
+                question=question_text,
+                intended_answer=answer_text,
+                intended_actions=executed_actions,
+                image_width=curr_w,
+                image_height=curr_h,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                calibration_offset_x=self.config.calibration_offset_x,
+                calibration_offset_y=self.config.calibration_offset_y,
+                calibration_scale_x=self.config.calibration_scale_x,
+                calibration_scale_y=self.config.calibration_scale_y,
+                coordinate_mode=self.config.coordinate_mode,
+                mark_registry=mark_registry
+            )
+
+            is_correct = check_res.get("double_check_passed", True)
+            messed_up = check_res.get("messed_up", False)
+            issue_type = check_res.get("issue_type", "none")
+            details = check_res.get("details", "")
+            summary = check_res.get("currently_selected_summary", "")
+            corrective_actions = check_res.get("corrective_actions", [])
+
+            if is_correct and not messed_up:
+                logger.info(
+                    f"[OK] Visual double-check PASSED: {details or 'Selected answers visibly match target answer.'} "
+                    f"({summary})"
+                )
+                self._handle_adjustment("✓ Double-check verified: Selected answers match correct answer")
+                return True
+
+            # Mistake detected!
+            retries += 1
+            err_msg = f"⚠️ Double-check detected mistake ({issue_type}): {details or summary}"
+            logger.warning(
+                f"[!] Visual double-check FAILED (attempt {retries}): issue_type={issue_type}, "
+                f"details='{details}', summary='{summary}', corrective_actions={len(corrective_actions)}"
+            )
+            self._handle_adjustment(f"{err_msg} -> Applying corrections...")
+
+            if corrective_actions:
+                logger.info(f"Executing {len(corrective_actions)} corrective actions from double-check...")
+                self.set_state(EngineState.EXECUTING, f"Correcting {issue_type}...")
+                self.executor.execute_action_sequence(corrective_actions, delay_between=self.config.action_delay)
+                # Loop back to verify again
+                executed_actions = corrective_actions
+            else:
+                logger.warning("Double-check reported a mistake but provided no corrective actions.")
+                break
+
+        # If retries exhausted and still messed up
+        logger.warning("Double-check retries exhausted. Question may still have selection discrepancies.")
+        self._handle_adjustment("⚠️ Double-check warning: Could not fully confirm selection on screen.")
+        return False
 
     def _refine_input_box_targets(self, result: Dict[str, Any]):
         """
@@ -1211,28 +2113,31 @@ class AssistantEngine:
                 nx = detected_btn.get("screen_x", detected_btn.get("x"))
                 ny = detected_btn.get("screen_y", detected_btn.get("y"))
                 if nx is not None and ny is not None:
+                    desc = detected_btn.get("description", "Next Question")
+
+                    # FINAL SUBMIT SAFEGUARD:
+                    # Distinguish between Next Question vs Final Assessment Submit!
+                    # Never click final submit if there is unfinished, unverified, or incorrect work!
+                    if self._is_final_submission_button(detected_btn):
+                        unfinished, reason = self._has_unfinished_work()
+                        if unfinished:
+                            logger.warning(
+                                f"Auto-advance: Refusing to click final submission button ('{desc}') at ({nx}, {ny}) "
+                                f"because unfinished work was detected: {reason}"
+                            )
+                            self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                            self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                            return False
+
                     # Enforce navigation debounce: never click Next multiple times within minimum interval!
-                    if not self._can_click_next(min_interval=2.0):
+                    if not self._can_click_next(min_interval=2.5):
                         return False
 
-                    desc = detected_btn.get("description", "Next Question")
                     logger.info(f"Auto-advance: Successfully detected '{desc}' button at ({nx}, {ny})")
                     self._handle_adjustment(f"Found Next button: ({nx}, {ny})")
-                    before_roi = None
-                    if self.config.local_verification_enabled:
-                        before_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
 
                     self.executor.click(int(nx), int(ny))
                     self._record_next_click()
-
-                    if self.config.local_verification_enabled and before_roi:
-                        time.sleep(0.15)
-                        after_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
-                        diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
-                        if not diff_ok and diff_score < 1.0:
-                            logger.warning(f"Auto-advance Next click unconfirmed (diff={diff_score:.1f}). Retrying firmly...")
-                            self.executor.click(int(nx), int(ny), allow_variance=False)
-                            self._record_next_click()
 
                     # If the clicked button was Submit/Check, the platform validates and reveals the Next button
                     b_type = str(detected_btn.get("type", "")).lower()
@@ -1334,21 +2239,26 @@ class AssistantEngine:
                     nx = detected_btn_scrolled.get("screen_x", detected_btn_scrolled.get("x"))
                     ny = detected_btn_scrolled.get("screen_y", detected_btn_scrolled.get("y"))
                     if nx is not None and ny is not None:
+                        desc_s = detected_btn_scrolled.get("description", "Next Question")
+                        if self._is_final_submission_button(detected_btn_scrolled):
+                            unfinished, reason = self._has_unfinished_work()
+                            if unfinished:
+                                logger.warning(
+                                    f"Auto-advance: Refusing to click scrolled final submission button ('{desc_s}') at ({nx}, {ny}) "
+                                    f"because unfinished work was detected: {reason}"
+                                )
+                                self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                                self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                                return False
+
+                        if not self._can_click_next(min_interval=2.5):
+                            scrolled_clicked = True
+                            return True
                         logger.info(f"Auto-advance: Detected Next button below fold at ({nx}, {ny})")
                         self._handle_adjustment(f"Found Next button below fold: ({nx}, {ny})")
-                        before_roi = None
-                        if self.config.local_verification_enabled:
-                            before_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
 
                         self.executor.click(int(nx), int(ny))
-
-                        if self.config.local_verification_enabled and before_roi:
-                            time.sleep(0.15)
-                            after_roi = self.verifier.capture_roi(int(nx), int(ny), radius_w=45, radius_h=25)
-                            diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
-                            if not diff_ok and diff_score < 1.0:
-                                logger.warning(f"Auto-advance Next below fold click unconfirmed (diff={diff_score:.1f}). Retrying firmly...")
-                                self.executor.click(int(nx), int(ny), allow_variance=False)
+                        self._record_next_click()
                         scrolled_clicked = True
                         return True
             finally:
@@ -1385,9 +2295,14 @@ class AssistantEngine:
             center_y = ry + (rh // 2)
             scroll_region = region
         else:
-            mon = self.capture.get_primary_monitor()
-            center_x = mon["width"] // 2
-            center_y = mon["height"] // 2
+            if hasattr(self.capture, "get_primary_monitor"):
+                mon = self.capture.get_primary_monitor()
+            elif hasattr(self.capture, "get_screen_bounds"):
+                mon = self.capture.get_screen_bounds(monitor_idx=1)
+            else:
+                mon = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+            center_x = mon.get("left", 0) + (mon.get("width", 1920) // 2)
+            center_y = mon.get("top", 0) + (mon.get("height", 1080) // 2)
             scroll_region = None
 
         logger.info(f"Advancing scroll-down quiz at ({center_x}, {center_y}) by {scroll_amt}px...")
@@ -1550,6 +2465,20 @@ class AssistantEngine:
             logger.debug("trigger_check_button: No valid check_button in last result.")
             return
 
+        is_scrolled = bool(check_btn.get("in_scrolled_view", False))
+        scroll_amt = abs(int(check_btn.get("scroll_amount", 500)))
+        btn_y = float(check_btn.get("y", 1000))
+        # Viewport alignment safeguard:
+        # If the viewport is already scrolled down, avoid scrolling back up away from the Check button
+        # unless the button was explicitly detected in the top header (y < 250).
+        if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
+            is_scrolled = True
+            check_btn["in_scrolled_view"] = True
+        elif not self.executor._viewport_is_scrolled and not (self.last_result and self.last_result.get("extra_images_used", False)):
+            is_scrolled = False
+            check_btn["in_scrolled_view"] = False
+        self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
+
         x = check_btn.get("screen_x", check_btn.get("x"))
         y = check_btn.get("screen_y", check_btn.get("y"))
         if x is not None and y is not None:
@@ -1587,32 +2516,81 @@ class AssistantEngine:
             logger.warning("trigger_next_button: No valid next_button in last result.")
             return
 
+        # FINAL SUBMIT SAFEGUARD:
+        # If this button is an assessment-level submit button, verify that no unfinished work remains!
+        if self._is_final_submission_button(next_btn):
+            unfinished, reason = self._has_unfinished_work()
+            if unfinished:
+                logger.warning(
+                    f"trigger_next_button: Blocked click on final submission button because unfinished work exists: {reason}"
+                )
+                self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+                self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                return
+
         # Enforce navigation debounce / rate-limiting
-        if not self._can_click_next(min_interval=2.0):
+        if not self._can_click_next(min_interval=2.5):
             return
+
+        is_scrolled = bool(next_btn.get("in_scrolled_view", False))
+        scroll_amt = abs(int(next_btn.get("scroll_amount", 500)))
+        btn_y = float(next_btn.get("y", 1000))
+        # Viewport alignment safeguard:
+        # If the viewport is already scrolled down (e.g. after answering lower view elements),
+        # avoid scrolling back up away from the Next button unless it was explicitly detected in the top header (y < 250).
+        if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
+            is_scrolled = True
+            next_btn["in_scrolled_view"] = True
+        elif not self.executor._viewport_is_scrolled and not (self.last_result and self.last_result.get("extra_images_used", False)):
+            is_scrolled = False
+            next_btn["in_scrolled_view"] = False
+        self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
 
         x = next_btn.get("screen_x", next_btn.get("x"))
         y = next_btn.get("screen_y", next_btn.get("y"))
         if x is not None and y is not None:
             nx, ny = int(x), int(y)
             logger.info(f"Clicking Next Question button at ({nx}, {ny})")
-            before_roi = None
-            if self.config.local_verification_enabled:
-                before_roi = self.verifier.capture_roi(nx, ny, radius_w=45, radius_h=25)
-
             self.executor.click(nx, ny)
             self._record_next_click()
 
-            if self.config.local_verification_enabled and before_roi:
-                time.sleep(0.15)
-                after_roi = self.verifier.capture_roi(nx, ny, radius_w=45, radius_h=25)
-                diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
-                if not diff_ok and diff_score < 1.0:
-                    logger.warning(f"Next button click unconfirmed (diff={diff_score:.1f}). Retrying firmly without variance...")
-                    self.executor.click(nx, ny, allow_variance=False)
-                    self._record_next_click()
-                else:
-                    logger.info(f"[OK] Next button click verified (diff={diff_score:.1f})")
+    def trigger_submit_button(self):
+        """Clicks the identified final 'Submit' / 'Turn In' button if known with zero-token verification, guarding against unfinished work."""
+        if not self.last_result:
+            return
+
+        submit_btn = self.last_result.get("submit_button")
+        if not submit_btn or not isinstance(submit_btn, dict):
+            logger.debug("trigger_submit_button: No valid submit_button in last result.")
+            return
+
+        # FINAL SUBMIT SAFEGUARD:
+        unfinished, reason = self._has_unfinished_work()
+        if unfinished:
+            logger.warning(f"trigger_submit_button: Blocked submitting unfinished work! Reason: {reason}")
+            self._handle_adjustment("⚠️ Final Submit blocked: Unfinished work remains!")
+            self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+            return
+
+        is_scrolled = bool(submit_btn.get("in_scrolled_view", False))
+        scroll_amt = abs(int(submit_btn.get("scroll_amount", 500)))
+        btn_y = float(submit_btn.get("y", 1000))
+        if self.executor._viewport_is_scrolled and not is_scrolled and btn_y >= 250:
+            is_scrolled = True
+            submit_btn["in_scrolled_view"] = True
+        elif not self.executor._viewport_is_scrolled and not (self.last_result and self.last_result.get("extra_images_used", False)):
+            is_scrolled = False
+            submit_btn["in_scrolled_view"] = False
+        self.executor.ensure_scrolled_view(is_scrolled, scroll_amt)
+
+        x = submit_btn.get("screen_x", submit_btn.get("x"))
+        y = submit_btn.get("screen_y", submit_btn.get("y"))
+        if x is not None and y is not None:
+            sx, sy = int(x), int(y)
+            logger.info(f"Submitting assignment/quiz: Clicking final Submit button at ({sx}, {sy})")
+            self._handle_adjustment(f"Submitting assignment at ({sx}, {sy})...")
+            self.executor.click(sx, sy)
+            self._record_next_click()
 
     def trigger_next_question(self):
         """User manual trigger for Next Question (F10). Supports both button advancing and scroll-down quizzes."""
@@ -1634,6 +2612,7 @@ class AssistantEngine:
             self.set_state(EngineState.NAVIGATING)
             check_btn = self.last_result.get("check_button") if self.last_result else None
             next_btn = self.last_result.get("next_button") if self.last_result else None
+            submit_btn = self.last_result.get("submit_button") if self.last_result else None
             is_multi_part = self.last_result.get("is_multi_part", False) if self.last_result else False
             advance_action = str(self.last_result.get("advance_action", "")).lower() if self.last_result else ""
 
@@ -1641,7 +2620,7 @@ class AssistantEngine:
                 scroll_amt = int(self.last_result.get("scroll_amount", 450)) if self.last_result else 450
                 logger.info(f"Manual advance: AI detected scrolling quiz, scrolling down {scroll_amt}px...")
                 self._advance_by_scrolling_down(scroll_amt=scroll_amt, override_region=self.last_region)
-            elif check_btn and not next_btn:
+            elif check_btn and not next_btn and not submit_btn:
                 # Platform only has Check Answer currently displayed
                 self.trigger_check_button()
                 time.sleep(1.0)
@@ -1653,20 +2632,122 @@ class AssistantEngine:
                 self.trigger_next_button()
             elif next_btn:
                 self.trigger_next_button()
+            elif submit_btn:
+                # Final quiz submission
+                unfinished, reason = self._has_unfinished_work()
+                if unfinished:
+                    logger.warning(f"Manual advance: Submit blocked due to unfinished work: {reason}")
+                    self._handle_adjustment("⚠️ Cannot Submit: Incomplete or unverified work remains!")
+                    self.set_state(EngineState.WAITING_CONFIRMATION, f"Submit blocked: {reason}")
+                    return
+                self.trigger_submit_button()
             else:
                 self._discover_and_click_next_button(override_region=self.last_region)
 
             # If in autonomous mode or chain multi-parts is enabled on a multi-part question, continue!
             if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
-                load_delay = max(2.0, self.config.auto_next_delay + 0.8)
+                load_delay = max(2.5, self.config.auto_next_delay + 1.0)
                 logger.info(f"Manual advance: Waiting {load_delay:.1f}s for next question to render...")
                 self._handle_adjustment("⏳ Waiting for next question to load...")
                 time.sleep(load_delay)
+                self._wait_for_page_to_settle(region=self.last_region)
+                self.executor._viewport_is_scrolled = False
                 logger.info("Continuing solve pipeline for next part/question after manual advance...")
                 self.set_state(EngineState.IDLE)
                 self.trigger_solve()
             else:
                 self.set_state(EngineState.IDLE)
+
+    def _process_written_question_if_applicable(self, result: Dict[str, Any]):
+        """
+        Detects if the solved question requires a written response (>=10 words).
+        If so, routes through WrittenSolver (Gemini 3.8 Flash, Jade's AI Humanizer, spellcheck, word buffer).
+        """
+        actions = result.get("actions", [])
+        type_actions = [a for a in actions if a.get("type") == "type_text"]
+
+        # Check if vision tagged is_written_response or if any typed text has >= 10 words
+        is_written = bool(result.get("is_written_response"))
+        if not is_written and type_actions:
+            for act in type_actions:
+                txt = act.get("text", "")
+                word_count = len(re.findall(r"\b[A-Za-z0-9'-]+\b", txt))
+                if word_count >= 10:
+                    is_written = True
+                    break
+
+        if not is_written:
+            result.setdefault("is_written_response", False)
+            return
+
+        result["is_written_response"] = True
+        prompt_q = result.get("question", "") or result.get("summary", "")
+        existing_text = result.get("existing_written_text")
+        errors = " | ".join(result.get("written_errors_detected", []))
+        if result.get("rethink_reasoning"):
+            errors = f"{errors} | {result.get('rethink_reasoning')}".strip(" |")
+
+        min_words = result.get("min_word_count")
+        max_words = result.get("max_word_count")
+        logger.info(f"Written question detected (Min: {min_words}, Max: {max_words}). Invoking WrittenSolver...")
+
+        if not self.written_solver:
+            self._sync_config()
+
+        if self.written_solver:
+            try:
+                written_res = self.written_solver.process_solution(
+                    prompt_text=prompt_q,
+                    existing_text=existing_text,
+                    error_feedback=errors,
+                    override_min_words=min_words,
+                    override_max_words=max_words,
+                )
+                result["written_details"] = written_res
+                final_text = written_res.get("text", "")
+
+                # Update type_text actions with humanized text
+                for act in type_actions:
+                    act["text"] = final_text
+                    act["clear_first"] = True
+                for itm in result.get("items", []):
+                    if isinstance(itm, dict):
+                        for act in itm.get("actions", []):
+                            if act.get("type") == "type_text":
+                                act["text"] = final_text
+                                act["clear_first"] = True
+
+                result["answer"] = final_text[:120] + ("..." if len(final_text) > 120 else "")
+                logger.info(
+                    f"Written answer drafted: {written_res.get('word_count')} words "
+                    f"(Humanized={written_res.get('humanized')})"
+                )
+            except Exception as e:
+                logger.error(f"Error in written solver processing: {e}")
+
+    def update_written_text(self, new_text: str):
+        """Allows the user to edit the written answer directly from the HUD preview before confirming."""
+        if not self.last_result:
+            return
+        logger.info(f"User updated written answer text ({len(new_text.split())} words).")
+        actions = self.last_result.get("actions", [])
+        for act in actions:
+            if act.get("type") == "type_text":
+                act["text"] = new_text
+                act["clear_first"] = True
+        for itm in self.last_result.get("items", []):
+            if isinstance(itm, dict):
+                for act in itm.get("actions", []):
+                    if act.get("type") == "type_text":
+                        act["text"] = new_text
+                        act["clear_first"] = True
+        # Update written_details
+        if "written_details" in self.last_result:
+            wd = self.last_result["written_details"]
+            wd["text"] = new_text
+            wd["word_count"] = self.written_solver.count_words(new_text) if self.written_solver else len(new_text.split())
+        self.last_result["answer"] = new_text[:120] + ("..." if len(new_text) > 120 else "")
+        self._notify_result(self.last_result)
 
     def pause_resume(self):
         """Toggles pause/resume state."""

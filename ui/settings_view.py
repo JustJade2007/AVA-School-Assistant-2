@@ -15,6 +15,7 @@ from core.cloaking import is_anti_capture_supported
 from core.ai_client import AIClient
 from core.logger import get_log_directory, get_log_file_path, clear_log_file, get_logger
 from ui.debug_window import DebugWindow
+from ui.asset_loader import apply_window_icon
 
 logger = get_logger("settings")
 
@@ -42,6 +43,9 @@ class SettingsWindow(ctk.CTkToplevel):
         self.geometry("660x740")
         self.minsize(580, 600)
         self.configure(fg_color="#18181b")
+        apply_window_icon(self)
+        from ui.window_utils import ensure_taskbar_presence
+        ensure_taskbar_presence(self)
 
         # Auto-save settings if user closes window via titlebar 'X' button
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
@@ -74,6 +78,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.tabs.pack(fill="both", expand=True, padx=16, pady=8)
 
         self.tab_ai = self.tabs.add("🤖 AI & Model")
+        self.tab_written = self.tabs.add("✍️ Written & Humanizer")
         self.tab_exec = self.tabs.add("⚡ Execution & Behavior")
         self.tab_cloak = self.tabs.add("🛡️ Anti-Capture & HUD")
         self.tab_display = self.tabs.add("🖥️ Display & Calibration")
@@ -81,6 +86,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.tab_debug = self.tabs.add("🐞 Debug & Logging")
 
         self._build_ai_tab()
+        self._build_written_tab()
         self._build_exec_tab()
         self._build_cloak_tab()
         self._build_display_tab()
@@ -373,7 +379,219 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkButton(btn_box, text="📋 Copy Response", width=120, command=copy_msg).pack(side="left")
         ctk.CTkButton(btn_box, text="Close", width=80, command=details_win.destroy).pack(side="right")
 
-    # --- TAB 2: EXECUTION & BEHAVIOR ---
+    # --- TAB: WRITTEN QUESTIONS & JADE'S AI HUMANIZER (AVA 2.0) ---
+    def _build_written_tab(self):
+        scroll = ctk.CTkScrollableFrame(self.tab_written, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Section 1: Written Questions Solver
+        card_solver = ctk.CTkFrame(scroll, fg_color="#18181b", corner_radius=8)
+        card_solver.pack(fill="x", pady=(0, 10), padx=4)
+
+        ctk.CTkLabel(
+            card_solver,
+            text="✍️ WRITTEN QUESTIONS ENGINE (GEMINI 3.8 FLASH)",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#38bdf8"
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        ctk.CTkLabel(
+            card_solver,
+            text="Generates comprehensive, academically rigorous written responses for short answer, paragraph, and essay questions.",
+            font=ctk.CTkFont(size=10),
+            text_color="#9ca3af",
+            wraplength=480,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+        # Model Override
+        row_model = ctk.CTkFrame(card_solver, fg_color="transparent")
+        row_model.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(row_model, text="Written Model:", font=ctk.CTkFont(size=11, weight="bold"), width=130, anchor="w").pack(side="left")
+        self.entry_written_model = ctk.CTkEntry(row_model, width=220, font=ctk.CTkFont(size=11))
+        self.entry_written_model.pack(side="left", padx=6)
+        ctk.CTkLabel(row_model, text="(Default: gemini-3.8-flash)", font=ctk.CTkFont(size=10), text_color="#64748b").pack(side="left")
+
+        # Quality Preset
+        row_quality = ctk.CTkFrame(card_solver, fg_color="transparent")
+        row_quality.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(row_quality, text="Quality Preset:", font=ctk.CTkFont(size=11, weight="bold"), width=130, anchor="w").pack(side="left")
+        self.combo_quality_preset = ctk.CTkComboBox(
+            row_quality,
+            values=[
+                "Realistic Student (B-Grade)",
+                "Solid (A-Grade)",
+                "Honors / AP"
+            ],
+            width=220,
+            font=ctk.CTkFont(size=11),
+            state="readonly"
+        )
+        self.combo_quality_preset.pack(side="left", padx=6)
+
+        # Word Buffer %
+        row_pct = ctk.CTkFrame(card_solver, fg_color="transparent")
+        row_pct.pack(fill="x", padx=12, pady=4)
+        self.lbl_word_buffer_pct = ctk.CTkLabel(
+            row_pct,
+            text="Word Buffer (% over min): 15%",
+            font=ctk.CTkFont(size=11),
+            width=180,
+            anchor="w"
+        )
+        self.lbl_word_buffer_pct.pack(side="left")
+        self.slider_word_buffer_pct = ctk.CTkSlider(
+            row_pct,
+            from_=0.05,
+            to=0.35,
+            number_of_steps=30,
+            width=200,
+            command=lambda v: self.lbl_word_buffer_pct.configure(text=f"Word Buffer (% over min): {int(float(v)*100)}%")
+        )
+        self.slider_word_buffer_pct.pack(side="left", padx=6)
+
+        # Max Word Overage Cap
+        row_cap = ctk.CTkFrame(card_solver, fg_color="transparent")
+        row_cap.pack(fill="x", padx=12, pady=4)
+        self.lbl_max_word_cap = ctk.CTkLabel(
+            row_cap,
+            text="Max Word Overage Cap: 20 words",
+            font=ctk.CTkFont(size=11),
+            width=180,
+            anchor="w"
+        )
+        self.lbl_max_word_cap.pack(side="left")
+        self.slider_max_word_cap = ctk.CTkSlider(
+            row_cap,
+            from_=5,
+            to=50,
+            number_of_steps=45,
+            width=200,
+            command=lambda v: self.lbl_max_word_cap.configure(text=f"Max Word Overage Cap: {int(float(v))} words")
+        )
+        self.slider_max_word_cap.pack(side="left", padx=6)
+
+        # Section 2: Jade's AI Humanizer
+        card_humanizer = ctk.CTkFrame(scroll, fg_color="#18181b", corner_radius=8)
+        card_humanizer.pack(fill="x", pady=(0, 10), padx=4)
+
+        ctk.CTkLabel(
+            card_humanizer,
+            text="🛡️ JADE'S AI HUMANIZER (CLIENT-SIDE ENGINE)",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#34d399"
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        ctk.CTkLabel(
+            card_humanizer,
+            text="Transforms rigid AI-generated sentences into natural student prose. Automatically sanitizes overused clichés ('delve into', 'tapestry of', 'testament to').",
+            font=ctk.CTkFont(size=10),
+            text_color="#9ca3af",
+            wraplength=480,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+        self.switch_humanizer_enabled = ctk.CTkSwitch(
+            card_humanizer,
+            text="Enable Jade's AI Humanizer",
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        self.switch_humanizer_enabled.pack(anchor="w", padx=12, pady=4)
+
+        # Mode
+        row_hmode = ctk.CTkFrame(card_humanizer, fg_color="transparent")
+        row_hmode.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(row_hmode, text="Humanizer Mode:", font=ctk.CTkFont(size=11), width=130, anchor="w").pack(side="left")
+        self.combo_humanizer_mode = ctk.CTkComboBox(
+            row_hmode,
+            values=["budget", "deep"],
+            width=200,
+            font=ctk.CTkFont(size=11),
+            state="readonly"
+        )
+        self.combo_humanizer_mode.pack(side="left", padx=6)
+        ctk.CTkLabel(row_hmode, text="(budget: ultra-low tokens | deep: syntactic shifts)", font=ctk.CTkFont(size=9), text_color="#64748b").pack(side="left")
+
+        # Tone
+        row_htone = ctk.CTkFrame(card_humanizer, fg_color="transparent")
+        row_htone.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(row_htone, text="Tone Preset:", font=ctk.CTkFont(size=11), width=130, anchor="w").pack(side="left")
+        self.combo_humanizer_tone = ctk.CTkComboBox(
+            row_htone,
+            values=["academic", "casual", "neutral", "professional"],
+            width=200,
+            font=ctk.CTkFont(size=11),
+            state="readonly"
+        )
+        self.combo_humanizer_tone.pack(side="left", padx=6)
+
+        # Reading Level
+        row_hlevel = ctk.CTkFrame(card_humanizer, fg_color="transparent")
+        row_hlevel.pack(fill="x", padx=12, pady=4)
+        ctk.CTkLabel(row_hlevel, text="Reading Level:", font=ctk.CTkFont(size=11), width=130, anchor="w").pack(side="left")
+        self.combo_humanizer_level = ctk.CTkComboBox(
+            row_hlevel,
+            values=["high_school", "middle_school", "college", "general"],
+            width=200,
+            font=ctk.CTkFont(size=11),
+            state="readonly"
+        )
+        self.combo_humanizer_level.pack(side="left", padx=6)
+
+        # Section 3: Verification & Spellcheck
+        card_verify = ctk.CTkFrame(scroll, fg_color="#18181b", corner_radius=8)
+        card_verify.pack(fill="x", pady=(0, 10), padx=4)
+
+        ctk.CTkLabel(
+            card_verify,
+            text="🔍 SPELLCHECK & AREA VERIFICATION",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#f59e0b"
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        self.switch_spellcheck_enabled = ctk.CTkSwitch(
+            card_verify,
+            text="Offline Dictionary Spellchecker (fixes typos & spacing before typing)",
+            font=ctk.CTkFont(size=11)
+        )
+        self.switch_spellcheck_enabled.pack(anchor="w", padx=12, pady=4)
+
+        self.switch_written_verify_enabled = ctk.CTkSwitch(
+            card_verify,
+            text="Post-Typing Area Verification (confirms text density inside input box)",
+            font=ctk.CTkFont(size=11)
+        )
+        self.switch_written_verify_enabled.pack(anchor="w", padx=12, pady=4)
+
+        # Section 4: Safety Confirmation Barrier
+        card_safe = ctk.CTkFrame(scroll, fg_color="#18181b", corner_radius=8)
+        card_safe.pack(fill="x", pady=(0, 10), padx=4)
+
+        ctk.CTkLabel(
+            card_safe,
+            text="🛑 CONFIRMATION SAFEGUARD (10+ WORD RESPONSES)",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#ef4444"
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        ctk.CTkLabel(
+            card_safe,
+            text="By default, any written response of 10+ words ALWAYS pauses at 'Waiting for Confirmation' so you can review and edit the draft on the HUD. Turning this ON allows AVA to type automatically without waiting for F9.",
+            font=ctk.CTkFont(size=10),
+            text_color="#fca5a5",
+            wraplength=480,
+            justify="left"
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+
+        self.switch_auto_confirm_written = ctk.CTkSwitch(
+            card_safe,
+            text="Auto-Confirm Written Responses (Bypass F9 Confirmation)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            progress_color="#ef4444"
+        )
+        self.switch_auto_confirm_written.pack(anchor="w", padx=12, pady=6)
+
+    # --- TAB 3: EXECUTION & BEHAVIOR ---
     def _build_exec_tab(self):
         # Scrollable container so all behavioral controls fit comfortably
         scroll_f = ctk.CTkScrollableFrame(self.tab_exec, fg_color="transparent")
@@ -520,6 +738,21 @@ class SettingsWindow(ctk.CTkToplevel):
             justify="left"
         ).pack(anchor="w", padx=42, pady=(0, 12))
 
+        # Planned-Click & Next Button Debug Visualizer Switch
+        self.switch_target_overlay = ctk.CTkSwitch(
+            f,
+            text="Show Click Targets & Next Button Overlay (Debug Preview)",
+            font=ctk.CTkFont(weight="bold")
+        )
+        self.switch_target_overlay.pack(anchor="w", padx=12, pady=(4, 4))
+        ctk.CTkLabel(
+            f,
+            text="Draws temporary on-screen click target markers and highlights the Next/Submit button.\nToggleable on the fly using the target crosshair button on the HUD bar.",
+            font=ctk.CTkFont(size=11),
+            text_color="#9ca3af",
+            justify="left"
+        ).pack(anchor="w", padx=42, pady=(0, 12))
+
     # --- TAB 3: ANTI-CAPTURE & HUD ---
     def _build_cloak_tab(self):
         f = self.tab_cloak
@@ -566,6 +799,20 @@ class SettingsWindow(ctk.CTkToplevel):
             command=lambda v: self.lbl_opacity.configure(text=f"HUD Opacity: {int(v * 100)}%")
         )
         self.slider_opacity.pack(fill="x", pady=4)
+
+        # Header Icon Size slider
+        icon_size_frame = ctk.CTkFrame(f, fg_color="transparent")
+        icon_size_frame.pack(fill="x", padx=16, pady=8)
+        self.lbl_icon_size = ctk.CTkLabel(icon_size_frame, text="Header Icon Size: 11px")
+        self.lbl_icon_size.pack(anchor="w")
+        self.slider_icon_size = ctk.CTkSlider(
+            icon_size_frame,
+            from_=8,
+            to=18,
+            number_of_steps=10,
+            command=lambda v: self.lbl_icon_size.configure(text=f"Header Icon Size: {int(v)}px")
+        )
+        self.slider_icon_size.pack(fill="x", pady=4)
 
     # --- TAB: DISPLAY & CALIBRATION ---
     def _build_display_tab(self):
@@ -963,6 +1210,11 @@ class SettingsWindow(ctk.CTkToplevel):
         else:
             self.switch_local_verification.deselect()
 
+        if getattr(cfg, "show_target_overlay", False):
+            self.switch_target_overlay.select()
+        else:
+            self.switch_target_overlay.deselect()
+
         if cfg.anti_capture_enabled:
             self.switch_anti_capture.select()
         else:
@@ -970,6 +1222,10 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self.slider_opacity.set(cfg.overlay_opacity)
         self.lbl_opacity.configure(text=f"HUD Opacity: {int(cfg.overlay_opacity * 100)}%")
+
+        icon_sz = getattr(cfg, "header_icon_size", 11)
+        self.slider_icon_size.set(icon_sz)
+        self.lbl_icon_size.configure(text=f"Header Icon Size: {int(icon_sz)}px")
 
         for key_id, ent in self.hotkey_entries.items():
             ent.delete(0, "end")
@@ -1016,6 +1272,41 @@ class SettingsWindow(ctk.CTkToplevel):
         self.entry_cal_scale_x.insert(0, str(getattr(cfg, "calibration_scale_x", 1.0)))
         self.entry_cal_scale_y.delete(0, "end")
         self.entry_cal_scale_y.insert(0, str(getattr(cfg, "calibration_scale_y", 1.0)))
+
+        # Load written questions & humanizer preferences
+        self.entry_written_model.delete(0, "end")
+        self.entry_written_model.insert(0, getattr(cfg, "written_model_name", "gemini-3.8-flash") or "gemini-3.8-flash")
+        self.combo_quality_preset.set(getattr(cfg, "written_quality_preset", "Solid (A-Grade)"))
+        w_pct = getattr(cfg, "written_word_buffer_pct", 0.15)
+        self.slider_word_buffer_pct.set(w_pct)
+        self.lbl_word_buffer_pct.configure(text=f"Word Buffer (% over min): {int(w_pct * 100)}%")
+        w_cap = getattr(cfg, "written_max_word_overage", 20)
+        self.slider_max_word_cap.set(w_cap)
+        self.lbl_max_word_cap.configure(text=f"Max Word Overage Cap: {int(w_cap)} words")
+
+        if getattr(cfg, "humanizer_enabled", True):
+            self.switch_humanizer_enabled.select()
+        else:
+            self.switch_humanizer_enabled.deselect()
+
+        self.combo_humanizer_mode.set(getattr(cfg, "humanizer_mode", "budget"))
+        self.combo_humanizer_tone.set(getattr(cfg, "humanizer_tone", "academic"))
+        self.combo_humanizer_level.set(getattr(cfg, "humanizer_reading_level", "high_school"))
+
+        if getattr(cfg, "spellcheck_enabled", True):
+            self.switch_spellcheck_enabled.select()
+        else:
+            self.switch_spellcheck_enabled.deselect()
+
+        if getattr(cfg, "written_verification_enabled", True):
+            self.switch_written_verify_enabled.select()
+        else:
+            self.switch_written_verify_enabled.deselect()
+
+        if getattr(cfg, "auto_confirm_written_responses", False):
+            self.switch_auto_confirm_written.select()
+        else:
+            self.switch_auto_confirm_written.deselect()
 
     def _save_and_close(self):
         merged_hotkeys = dict(self.config.hotkeys)
@@ -1074,6 +1365,8 @@ class SettingsWindow(ctk.CTkToplevel):
         else:
             self.provider_keys = {provider_val: current_typed_key}
 
+        written_model_val = self.entry_written_model.get().strip() or "gemini-3.8-flash"
+
         self.config_manager.update(
             ai_provider=provider_val,
             model_name=model_val,
@@ -1092,10 +1385,12 @@ class SettingsWindow(ctk.CTkToplevel):
             click_variance_enabled=bool(self.switch_click_variance.get()),
             smart_typos_enabled=bool(self.switch_smart_typos.get()),
             local_verification_enabled=bool(self.switch_local_verification.get()),
+            show_target_overlay=bool(self.switch_target_overlay.get()),
             humanize_mouse=bool(self.switch_humanize.get()),
             mouse_speed=float(self.slider_mouse_speed.get()),
             anti_capture_enabled=bool(self.switch_anti_capture.get()),
             overlay_opacity=float(self.slider_opacity.get()),
+            header_icon_size=int(self.slider_icon_size.get()),
             debug_mode=bool(self.switch_debug_mode.get()),
             log_to_file=bool(self.switch_log_file.get()),
             log_level=self.combo_log_level.get(),
@@ -1106,7 +1401,18 @@ class SettingsWindow(ctk.CTkToplevel):
             calibration_offset_y=cal_oy,
             calibration_scale_x=cal_sx,
             calibration_scale_y=cal_sy,
-            hotkeys=merged_hotkeys
+            hotkeys=merged_hotkeys,
+            written_model_name=written_model_val,
+            written_quality_preset=self.combo_quality_preset.get().strip(),
+            written_word_buffer_pct=float(self.slider_word_buffer_pct.get()),
+            written_max_word_overage=int(self.slider_max_word_cap.get()),
+            humanizer_enabled=bool(self.switch_humanizer_enabled.get()),
+            humanizer_mode=self.combo_humanizer_mode.get().strip(),
+            humanizer_tone=self.combo_humanizer_tone.get().strip(),
+            humanizer_reading_level=self.combo_humanizer_level.get().strip(),
+            spellcheck_enabled=bool(self.switch_spellcheck_enabled.get()),
+            written_verification_enabled=bool(self.switch_written_verify_enabled.get()),
+            auto_confirm_written_responses=bool(self.switch_auto_confirm_written.get())
         )
 
         if self.on_save_callback:

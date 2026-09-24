@@ -103,6 +103,8 @@ class AutomationExecutor:
         self._stop_event = threading.Event()
         self._is_executing = False
         self._input_stream_lock = threading.Lock()
+        self._viewport_is_scrolled = False
+        self._last_scroll_center = None
 
     def is_input_active(self) -> bool:
         """Returns True if an automation input stream is currently active."""
@@ -309,10 +311,63 @@ class AutomationExecutor:
     def scroll(self, clicks: int, x: Optional[int] = None, y: Optional[int] = None):
         """Scrolls mouse wheel."""
         self._check_stop()
-        if x is not None and y is not None:
-            self.move_mouse_humanized(x, y)
+        target_x = x
+        target_y = y
+        if target_x is None or target_y is None:
+            if getattr(self, "_last_scroll_center", None) is not None:
+                target_x, target_y = self._last_scroll_center
+            else:
+                try:
+                    w, h = pyautogui.size()
+                    target_x, target_y = w // 2, h // 2
+                except Exception:
+                    pass
+
+        if target_x is not None and target_y is not None:
+            self.move_mouse_humanized(target_x, target_y)
+            self._last_scroll_center = (target_x, target_y)
+
         self._check_stop()
         pyautogui.scroll(clicks)
+
+    def ensure_scrolled_view(
+        self,
+        scrolled: bool,
+        scroll_amount: int = 500,
+        center_x: Optional[int] = None,
+        center_y: Optional[int] = None
+    ):
+        """
+        Dynamically aligns the browser or window viewport:
+        If scrolled=True and viewport is currently at top, scrolls down by scroll_amount.
+        If scrolled=False and viewport is currently scrolled down, scrolls back up to top.
+        """
+        self._check_stop()
+        scroll_amt = abs(int(scroll_amount))
+        target_x = center_x
+        target_y = center_y
+        if target_x is None or target_y is None:
+            if getattr(self, "_last_scroll_center", None) is not None:
+                target_x, target_y = self._last_scroll_center
+            else:
+                try:
+                    w, h = pyautogui.size()
+                    target_x, target_y = w // 2, h // 2
+                except Exception:
+                    pass
+
+        if scrolled and not self._viewport_is_scrolled:
+            logger.info(f"Viewport alignment: scrolling down {scroll_amt}px at ({target_x}, {target_y}) to access lower view elements...")
+            self.scroll(-scroll_amt, target_x, target_y)
+            self._viewport_is_scrolled = True
+            # Allow browser smooth scroll animation to settle completely before any input
+            time.sleep(0.45)
+        elif not scrolled and self._viewport_is_scrolled:
+            logger.info(f"Viewport alignment: scrolling up {scroll_amt}px at ({target_x}, {target_y}) to access upper view elements...")
+            self.scroll(scroll_amt, target_x, target_y)
+            self._viewport_is_scrolled = False
+            # Allow browser smooth scroll animation to settle completely before any input
+            time.sleep(0.45)
 
     def key_press(self, key: str):
         """Presses an individual key or combo (e.g. 'enter', 'tab', 'ctrl+a')."""
@@ -365,6 +420,19 @@ class AutomationExecutor:
         if action_type in ["click", "double_click"] and x is not None and y is not None:
             target_x, target_y = int(x), int(y)
             is_double = (action_type == "double_click")
+            action["intended_x"] = target_x
+            action["intended_y"] = target_y
+
+            # Fetch sibling choice points to empower comparative verification across custom website themes
+            sibling_coords = []
+            sibling_rois = None
+            if self.local_verification_enabled and hasattr(self.verifier, "get_sibling_choice_coordinates"):
+                try:
+                    sibling_coords = self.verifier.get_sibling_choice_coordinates(target_x, target_y, action.get("result_data"))
+                    if sibling_coords:
+                        sibling_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sibling_coords]
+                except Exception as e:
+                    logger.debug(f"Could not prepare sibling choice coordinates: {e}")
 
             # Local verification setup: capture baseline ROI and option row band
             before_roi = None
@@ -379,9 +447,30 @@ class AutomationExecutor:
             # Perform primary click
             self.click(target_x, target_y, double=is_double)
 
+            # Determine actual physical mouse coordinates on screen reported by the OS
+            try:
+                cur_pos = pyautogui.position()
+                actual_mouse_x = int(cur_pos.x if hasattr(cur_pos, "x") else cur_pos[0])
+                actual_mouse_y = int(cur_pos.y if hasattr(cur_pos, "y") else cur_pos[1])
+            except Exception:
+                actual_mouse_x, actual_mouse_y = target_x, target_y
+
+            attempted_clicks = [{
+                "x": target_x,
+                "y": target_y,
+                "actual_mouse_x": actual_mouse_x,
+                "actual_mouse_y": actual_mouse_y,
+                "offset_x": actual_mouse_x - target_x,
+                "offset_y": actual_mouse_y - target_y,
+                "verified": False,
+                "reason": "primary_click"
+            }]
+
             # Post-action local verification
             is_confirmed = False
             verification_reason = "unverified"
+            last_clicked_x, last_clicked_y = target_x, target_y
+            physical_view = None
 
             if self.local_verification_enabled and before_roi:
                 time.sleep(0.09)
@@ -390,74 +479,116 @@ class AutomationExecutor:
                     target_x, target_y, offset_left=85, offset_right=35, radius_h=25
                 )
 
-                # 1. Direct radio / checkbox selection check at click location
-                sel, r_reason, conf = self.verifier.is_radio_or_checkbox_selected(after_roi)
+                # 1. Direct radio / checkbox selection check at click location (using sibling comparison if available)
+                sel, r_reason, conf = self.verifier.is_radio_or_checkbox_selected(after_roi, sibling_rois=sibling_rois)
                 if sel:
                     is_confirmed = True
                     verification_reason = r_reason
+                    attempted_clicks[0]["verified"] = True
+                    attempted_clicks[0]["reason"] = r_reason
                 else:
                     # 2. Check for option row background highlight
                     row_hl, hl_score = self.verifier.is_option_row_highlighted(before_band, after_band)
                     if row_hl:
                         is_confirmed = True
                         verification_reason = f"row_highlight (diff={hl_score:.1f})"
+                        attempted_clicks[0]["verified"] = True
+                        attempted_clicks[0]["reason"] = verification_reason
                     else:
                         # 3. Check for general pixel difference
                         diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
                         if diff_ok and diff_score >= 1.6:
                             is_confirmed = True
                             verification_reason = f"pixel_diff (score={diff_score:.1f})"
+                            attempted_clicks[0]["verified"] = True
+                            attempted_clicks[0]["reason"] = verification_reason
+
                 # --- SMART ZERO-TOKEN RECOVERY PROBING (EXACTLY UP TO 3 READJUSTMENTS) ---
                 # If primary click missed (e.g. coordinates landed on text label instead of radio circle):
                 if not is_confirmed:
+                    # View where the mouse actually is on the physical screen compared to the target
+                    if hasattr(self.verifier, "locate_physical_target_near_mouse"):
+                        try:
+                            physical_view = self.verifier.locate_physical_target_near_mouse(
+                                mouse_x=actual_mouse_x,
+                                mouse_y=actual_mouse_y,
+                                target_hint_x=target_x,
+                                target_hint_y=target_y
+                            )
+                        except Exception as e:
+                            logger.debug(f"Could not locate physical target near mouse: {e}")
+
                     raw_candidates = []
 
-                    # 1. Search option band leftward for circular radio button / checkbox
+                    # 1. Primary candidate: Actual physical control visually identified on screen
+                    if physical_view and physical_view.get("detected"):
+                        pt_x = physical_view["target_x"]
+                        pt_y = physical_view["target_y"]
+                        if (pt_x, pt_y) != (actual_mouse_x, actual_mouse_y):
+                            raw_candidates.append((pt_x, pt_y))
+                        for c_coord in physical_view.get("candidates", []):
+                            if c_coord not in raw_candidates and c_coord != (actual_mouse_x, actual_mouse_y):
+                                raw_candidates.append(c_coord)
+
+                    # 2. Search option band leftward for circular radio button / checkbox
                     found_control = self.verifier.find_radio_or_checkbox_in_band(
                         after_band, target_x, target_y, band_origin_x, band_origin_y, max_scan_left=90
                     )
-                    if found_control and found_control != (target_x, target_y):
+                    if found_control and found_control != (target_x, target_y) and found_control not in raw_candidates:
                         raw_candidates.append(found_control)
 
-                    # 2. Precision input box measurement (if clicking an input box or field)
+                    # 3. Precision input box measurement (if clicking an input box or field)
                     m_x, m_y, m_meta = self.verifier.measure_and_target_input_box(target_x, target_y)
                     if m_meta.get("detected") and (m_x, m_y) != (target_x, target_y) and (m_x, m_y) not in raw_candidates:
                         raw_candidates.append((m_x, m_y))
 
-                    # 3. Visual center snapping from ROI
+                    # 4. Visual center snapping from ROI
                     snapped_x, snapped_y = self.verifier.find_visual_element_center(before_roi, target_x, target_y)
                     if (snapped_x, snapped_y) != (target_x, target_y) and (snapped_x, snapped_y) not in raw_candidates:
                         raw_candidates.append((snapped_x, snapped_y))
 
-                    # 4. Standard leftward web radio/checkbox offsets (common distances from label text to input control)
+                    # 5. Standard leftward web radio/checkbox offsets
                     for dx in [-35, -50, -22, -65, -15]:
                         cand = (target_x + dx, target_y)
                         if cand not in raw_candidates and cand != (target_x, target_y):
                             raw_candidates.append(cand)
 
-                    # 5. Vertical tweaks if needed
+                    # 6. Vertical tweaks if needed
                     base_ref_x = found_control[0] if found_control else (target_x - 35)
                     for dy in [-6, +6]:
                         cand = (base_ref_x, target_y + dy)
                         if cand not in raw_candidates and cand != (target_x, target_y):
                             raw_candidates.append(cand)
 
+                    # Filter out any coordinates that have already been tried previously (from action history)
+                    prior_tried = action.get("prior_attempted_coords", set())
+                    if not isinstance(prior_tried, (set, list)):
+                        prior_tried = set()
+                    available_candidates = [
+                        c for c in raw_candidates
+                        if c not in prior_tried and c != (target_x, target_y)
+                    ]
+                    if not available_candidates:
+                        available_candidates = raw_candidates
+
                     # Select exactly up to 3 distinct readjustment attempts
-                    readjustment_candidates = raw_candidates[:3]
+                    readjustment_candidates = available_candidates[:3]
                     max_attempts = len(readjustment_candidates)
 
                     logger.warning(
                         f"Action [{action_type}] at ({target_x}, {target_y}) did not register answer state. "
+                        f"Physical mouse at ({actual_mouse_x}, {actual_mouse_y}). "
                         f"Initiating zero-token recovery with up to {max_attempts} readjustment attempts..."
                     )
 
                     for attempt_idx, (probe_x, probe_y) in enumerate(readjustment_candidates, 1):
                         self._check_stop()
-                        offset_x = probe_x - target_x
-                        offset_y = probe_y - target_y
+                        last_clicked_x, last_clicked_y = probe_x, probe_y
+                        offset_x = probe_x - actual_mouse_x
+                        offset_y = probe_y - actual_mouse_y
                         msg = (
                             f"🎯 Readjusting missed click (attempt {attempt_idx}/{max_attempts}): "
-                            f"({probe_x}, {probe_y}) [{offset_x:+d}px, {offset_y:+d}px]"
+                            f"({probe_x}, {probe_y}) [{offset_x:+d}px, {offset_y:+d}px from mouse]"
                         )
                         logger.info(msg)
                         if self.on_adjustment_callback:
@@ -470,14 +601,22 @@ class AutomationExecutor:
                         self.click(probe_x, probe_y, double=is_double, allow_variance=False)
                         time.sleep(0.09)
 
+                        # Update actual physical cursor position
+                        try:
+                            cur_pos = pyautogui.position()
+                            actual_mouse_x = int(cur_pos.x if hasattr(cur_pos, "x") else cur_pos[0])
+                            actual_mouse_y = int(cur_pos.y if hasattr(cur_pos, "y") else cur_pos[1])
+                        except Exception:
+                            actual_mouse_x, actual_mouse_y = probe_x, probe_y
+
                         # Capture local ROI at probe coordinate AFTER clicking it
                         after_probe_roi = self.verifier.capture_roi(probe_x, probe_y)
                         after_probe_band, _, _ = self.verifier.capture_band(
                             target_x, target_y, offset_left=85, offset_right=35, radius_h=25
                         )
 
-                        # 1. Direct radio / checkbox selection check at probe location
-                        p_sel, p_reason, p_conf = self.verifier.is_radio_or_checkbox_selected(after_probe_roi)
+                        # 1. Direct radio / checkbox selection check at probe location (with sibling comparison)
+                        p_sel, p_reason, p_conf = self.verifier.is_radio_or_checkbox_selected(after_probe_roi, sibling_rois=sibling_rois)
 
                         # 2. Local pixel difference between before and after at probe location
                         p_diff_ok, p_diff_score = self.verifier.verify_action_completion(
@@ -487,6 +626,17 @@ class AutomationExecutor:
                         # 3. Check for option row highlight
                         p_row_hl, p_hl_score = self.verifier.is_option_row_highlighted(before_band, after_probe_band)
 
+                        attempt_rec = {
+                            "x": probe_x,
+                            "y": probe_y,
+                            "actual_mouse_x": actual_mouse_x,
+                            "actual_mouse_y": actual_mouse_y,
+                            "offset_x": offset_x,
+                            "offset_y": offset_y,
+                            "verified": False,
+                            "reason": "unverified"
+                        }
+
                         if p_sel or (p_diff_ok and p_diff_score >= 1.6) or p_row_hl:
                             reason_str = p_reason if p_sel else ("row_highlight" if p_row_hl else f"diff_confirmed={p_diff_score:.1f}")
                             logger.info(
@@ -495,12 +645,17 @@ class AutomationExecutor:
                             )
                             is_confirmed = True
                             verification_reason = f"readjustment_attempt_{attempt_idx}_{reason_str}"
+                            attempt_rec["verified"] = True
+                            attempt_rec["reason"] = verification_reason
+                            attempted_clicks.append(attempt_rec)
                             action["screen_x"] = probe_x
                             action["screen_y"] = probe_y
                             if "x" in action: action["x"] = probe_x
                             if "y" in action: action["y"] = probe_y
                             break
                         else:
+                            attempt_rec["reason"] = "unconfirmed_probe"
+                            attempted_clicks.append(attempt_rec)
                             logger.warning(
                                 f"Readjustment attempt {attempt_idx}/{max_attempts} at ({probe_x}, {probe_y}) "
                                 f"failed to confirm selection."
@@ -508,13 +663,36 @@ class AutomationExecutor:
 
                     if not is_confirmed:
                         logger.warning(
-                            f"Action [{action_type}] missed after {max_attempts} readjustments. Giving up."
+                            f"Action [{action_type}] missed after {max_attempts} readjustments. Physical telemetry: "
+                            f"intended=({target_x}, {target_y}), actual_mouse=({actual_mouse_x}, {actual_mouse_y}), "
+                            f"last_clicked=({last_clicked_x}, {last_clicked_y}), "
+                            f"offset=({last_clicked_x - target_x:+d}, {last_clicked_y - target_y:+d})"
                         )
                         if self.on_adjustment_callback:
-                            self.on_adjustment_callback(f"⚠️ Action missed after {max_attempts} readjustments. Press F9 to retry.")
+                            self.on_adjustment_callback(
+                                f"⚠️ Action missed at ({target_x}, {target_y}) [offset {last_clicked_x - target_x:+d}px, {last_clicked_y - target_y:+d}px]. Preparing retry..."
+                            )
 
+            # Record full click telemetry and physical target detection on the action dictionary
             action["verified"] = is_confirmed
             action["verification_reason"] = verification_reason
+            action["last_clicked_x"] = last_clicked_x
+            action["last_clicked_y"] = last_clicked_y
+            action["click_offset_x"] = last_clicked_x - target_x
+            action["click_offset_y"] = last_clicked_y - target_y
+            action["actual_mouse_x"] = actual_mouse_x
+            action["actual_mouse_y"] = actual_mouse_y
+            if physical_view and physical_view.get("detected"):
+                action["physical_target_x"] = physical_view["target_x"]
+                action["physical_target_y"] = physical_view["target_y"]
+                action["physical_delta_x"] = physical_view["delta_x"]
+                action["physical_delta_y"] = physical_view["delta_y"]
+            else:
+                action["physical_target_x"] = last_clicked_x
+                action["physical_target_y"] = last_clicked_y
+                action["physical_delta_x"] = last_clicked_x - actual_mouse_x
+                action["physical_delta_y"] = last_clicked_y - actual_mouse_y
+            action["attempted_clicks"] = attempted_clicks
 
         elif action_type == "drag":
             fx = action.get("screen_from_x", action.get("from_x"))
@@ -595,18 +773,41 @@ class AutomationExecutor:
 
                 # --- SMART ZERO-TOKEN RECOVERY FOR TYPING (UP TO 3 READJUSTMENT ATTEMPTS) ---
                 if not is_filled:
+                    try:
+                        cur_pos = pyautogui.position()
+                        actual_type_mouse_x = int(cur_pos.x if hasattr(cur_pos, "x") else cur_pos[0])
+                        actual_type_mouse_y = int(cur_pos.y if hasattr(cur_pos, "y") else cur_pos[1])
+                    except Exception:
+                        actual_type_mouse_x, actual_type_mouse_y = focus_x, focus_y
+
                     logger.warning(
                         f"Action [type_text] at ({focus_x}, {focus_y}) did not register typed text ({f_reason}). "
+                        f"Physical mouse at ({actual_type_mouse_x}, {actual_type_mouse_y}). "
                         f"Initiating zero-token recovery with up to 3 readjustment attempts..."
                     )
 
                     # Determine candidates for input box targeting
+                    physical_type_view = None
+                    if hasattr(self.verifier, "locate_physical_target_near_mouse"):
+                        try:
+                            physical_type_view = self.verifier.locate_physical_target_near_mouse(
+                                mouse_x=actual_type_mouse_x,
+                                mouse_y=actual_type_mouse_y,
+                                target_hint_x=focus_x,
+                                target_hint_y=focus_y,
+                                target_type_hint="type_text"
+                            )
+                        except Exception as e:
+                            logger.debug(f"locate_physical_target_near_mouse for typing error: {e}")
+
                     m_x, m_y, m_meta = self.verifier.measure_and_target_input_box(focus_x, focus_y)
                     snapped_x, snapped_y = self.verifier.find_visual_element_center(before_input_roi, focus_x, focus_y) if before_input_roi else (focus_x, focus_y)
 
                     typing_probes = []
-                    # Attempt 1: Box contour center via measure_and_target_input_box
-                    if m_meta.get("detected") and (m_x, m_y) != (focus_x, focus_y):
+                    # Attempt 1: Visually detected physical input container
+                    if physical_type_view and physical_type_view.get("detected") and (physical_type_view["target_x"], physical_type_view["target_y"]) != (focus_x, focus_y):
+                        typing_probes.append((physical_type_view["target_x"], physical_type_view["target_y"], "physical_screen_box"))
+                    elif m_meta.get("detected") and (m_x, m_y) != (focus_x, focus_y):
                         typing_probes.append((m_x, m_y, "box_contour_center"))
                     elif (snapped_x, snapped_y) != (focus_x, focus_y):
                         typing_probes.append((snapped_x, snapped_y, "roi_element_center"))
@@ -614,8 +815,8 @@ class AutomationExecutor:
                         typing_probes.append((focus_x, focus_y, "primary_focus_retry"))
 
                     # Attempt 2: Double-click focus (for rich text/mathquill/math input boxes that require double activation)
-                    p2_x = m_x if m_meta.get("detected") else focus_x
-                    p2_y = m_y if m_meta.get("detected") else focus_y
+                    p2_x = physical_type_view["target_x"] if (physical_type_view and physical_type_view.get("detected")) else (m_x if m_meta.get("detected") else focus_x)
+                    p2_y = physical_type_view["target_y"] if (physical_type_view and physical_type_view.get("detected")) else (m_y if m_meta.get("detected") else focus_y)
                     typing_probes.append((p2_x, p2_y, "double_click_focus"))
 
                     # Attempt 3: Inner offset focus (inner margin)
@@ -796,6 +997,25 @@ class AutomationExecutor:
                                 t_roi = self.verifier.capture_roi(int(sx), int(sy), radius_w=25, radius_h=15)
                                 subsequent_input_targets.append((sub_idx, int(sx), int(sy), t_roi))
 
+                # Guard against raw scroll actions in answer selection sequences
+                act_type = action.get("type", "").lower()
+                if act_type == "scroll" and idx < len(actions) - 1:
+                    has_subsequent_clicks = any(
+                        a.get("type", "").lower() in ["click", "double_click", "type_text"]
+                        for a in actions[idx + 1:]
+                    )
+                    if has_subsequent_clicks:
+                        logger.warning(
+                            "Action sequence contains a 'scroll' action followed by answer clicks. "
+                            "Suppressing scroll action to prevent moving target coordinates from under the cursor."
+                        )
+                        continue
+
+                # Viewport scroll alignment (Dual-View Scrolled Action Execution)
+                is_scrolled_target = bool(action.get("in_scrolled_view", False))
+                scroll_amt = abs(int(action.get("scroll_amount", 500)))
+                self.ensure_scrolled_view(is_scrolled_target, scroll_amt)
+
                 self.execute_action(action)
 
                 # --- PER-INPUT FAILSAFE: verify answer was typed or selected after this input ---
@@ -842,7 +1062,18 @@ class AutomationExecutor:
             all_verified = (verified_count == len(verifiable_actions)) if verifiable_actions else True
 
             failed_inputs = [
-                {"index": i, "type": a.get("type"), "reason": a.get("verification_reason")}
+                {
+                    "index": i,
+                    "type": a.get("type"),
+                    "reason": a.get("verification_reason"),
+                    "intended_x": a.get("intended_x", a.get("x")),
+                    "intended_y": a.get("intended_y", a.get("y")),
+                    "last_clicked_x": a.get("last_clicked_x"),
+                    "last_clicked_y": a.get("last_clicked_y"),
+                    "click_offset_x": a.get("click_offset_x", 0),
+                    "click_offset_y": a.get("click_offset_y", 0),
+                    "attempted_clicks": a.get("attempted_clicks", [])
+                }
                 for i, a in enumerate(actions)
                 if a.get("type", "").lower() in ["click", "double_click", "type_text"] and not a.get("verified", False)
             ]

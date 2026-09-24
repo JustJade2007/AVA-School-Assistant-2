@@ -6,15 +6,44 @@ and Anti-Screen Capture Cloaking.
 
 import sys
 import argparse
+from config import APP_VERSION
 from ui.app import AVASchoolAssistantApp
+from ui.asset_loader import set_windows_app_user_model_id
 
 
 def main():
+    # Set explicit AppUserModelID so Windows taskbar groups AVA under its own icon
+    set_windows_app_user_model_id()
+
+    # Check if an instance is already running; if so, bring to foreground and exit
+    from core.single_instance import check_single_instance
+    app_instance_holder = []
+
+    def on_activate():
+        if app_instance_holder:
+            app_instance_holder[0].bring_to_foreground()
+
+    if not check_single_instance(on_activate=on_activate):
+        print("AVA School Assistant 2 is already running. Brought active window to foreground.")
+        sys.exit(0)
+
     parser = argparse.ArgumentParser(description="AVA School Assistant 2")
     parser.add_argument(
         "--version",
         action="version",
-        version="AVA School Assistant 2 v1.1.2.a"
+        version=f"AVA School Assistant 2 v{APP_VERSION}"
+    )
+    parser.add_argument(
+        "--worker",
+        "-w",
+        action="store_true",
+        help="Launch Automated Worker (HUD Mode) directly upon start"
+    )
+    parser.add_argument(
+        "--playground",
+        "-p",
+        action="store_true",
+        help="Launch Playground Studio directly upon start"
     )
     parser.add_argument(
         "--settings",
@@ -33,7 +62,14 @@ def main():
     )
     args = parser.parse_args()
 
-    app = AVASchoolAssistantApp()
+    start_mode = "home"
+    if args.worker:
+        start_mode = "worker"
+    elif args.playground:
+        start_mode = "playground"
+
+    app = AVASchoolAssistantApp(start_mode=start_mode)
+    app_instance_holder.append(app)
     if args.debug:
         from core.logger import set_debug_mode
         set_debug_mode(True)

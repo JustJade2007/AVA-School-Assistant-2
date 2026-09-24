@@ -99,9 +99,14 @@ CONFIG_DIR = get_base_directory()
 CONFIG_FILE_PATH = get_config_file_path()
 DEFAULT_CONFIG_FILE_PATH = get_default_config_file_path()
 
+# Application metadata
+APP_VERSION = "2.2.5.a"
+GITHUB_REPO = "JustJade2007/AVA-School-Assistant-2"
+
 # Available default model choices
 AVAILABLE_MODELS = {
     "gemini": [
+        "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
@@ -124,6 +129,16 @@ AVAILABLE_MODELS = {
     ]
 }
 
+AVAILABLE_QUALITY_PRESETS = [
+    "b_grade",
+    "a_grade",
+    "honors_ap",
+]
+AVAILABLE_HUMANIZER_MODES = ["budget", "deep"]
+AVAILABLE_HUMANIZER_TONES = ["academic", "casual", "neutral", "professional"]
+AVAILABLE_HUMANIZER_LEVELS = ["high_school", "middle_school", "college", "general"]
+AVAILABLE_PLAYGROUND_FORMATS = ["MLA", "APA", "Standard Report"]
+
 
 @dataclass
 class AppConfig:
@@ -134,8 +149,26 @@ class AppConfig:
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     custom_api_key: str = ""
-    model_name: str = "gemini-3.6-flash"
+    model_name: str = "gemini-3.8-flash"
     custom_api_base: str = "https://openrouter.ai/api/v1"
+
+    # Written Questions & Jade's AI Humanizer (AVA 2.0)
+    written_model_name: str = "gemini-3.8-flash"
+    written_quality_preset: str = "a_grade"
+    written_word_buffer_pct: float = 0.15
+    written_max_word_overage: int = 20
+    auto_confirm_written_responses: bool = False
+    humanizer_enabled: bool = True
+    humanizer_mode: str = "budget"
+    humanizer_tone: str = "academic"
+    humanizer_reading_level: str = "high_school"
+    spellcheck_enabled: bool = True
+    written_verification_enabled: bool = True
+
+    # Playground Mode (Long-form project writing studio)
+    playground_format: str = "MLA"
+    playground_auto_humanize: bool = True
+    playground_projects_dir: str = "projects"
 
     # Execution Behavior
     # autonomous_mode: True = acts automatically; False = asks for confirmation before clicking/typing
@@ -146,6 +179,9 @@ class AppConfig:
     action_delay: float = 0.5
     # auto_inspect_references: True = inspects modals, reference sheets, or scrolled content if requested by AI
     auto_inspect_references: bool = True
+    # double_check_enabled: True = visually double-checks question and selected answers before advancing
+    double_check_enabled: bool = True
+    max_double_check_retries: int = 2
 
     # Humanization / Anti-bot detection
     humanize_mouse: bool = True
@@ -164,6 +200,10 @@ class AppConfig:
     overlay_opacity: float = 0.95
     overlay_x: int = 40
     overlay_y: int = 40
+    overlay_width: int = 490
+    header_icon_size: int = 11
+    # Planned Click & Navigation Button Visualizer Overlay (toggleable debug screen)
+    show_target_overlay: bool = False
 
     # Capture & Display Resolution Settings
     capture_mode: str = "fullscreen"  # "fullscreen" or "roi"
@@ -183,6 +223,11 @@ class AppConfig:
     log_to_file: bool = True
     max_log_entries: int = 500
 
+    # Academic Metadata Presets
+    saved_authors: List[str] = field(default_factory=list)
+    saved_courses: List[str] = field(default_factory=list)
+    saved_professors: List[str] = field(default_factory=list)
+
     # Keybinds
     hotkeys: Dict[str, str] = field(default_factory=lambda: {
         "trigger_solve": "F8",
@@ -192,7 +237,8 @@ class AppConfig:
         "emergency_stop": "F12",
         "toggle_overlay": "F6",
         "close_app": "Ctrl+Shift+Q",
-        "snip_solve": "F4"
+        "snip_solve": "F4",
+        "open_playground": "F3"
     })
 
     def get_api_key_for_provider(self, provider: Optional[str] = None) -> str:
@@ -362,6 +408,10 @@ class ConfigManager:
         self.config = self.load()
         self._sync_logging()
         self._notify_listeners()
+        return self.config
+
+    def get(self) -> AppConfig:
+        """Returns active AppConfig."""
         return self.config
 
     def save(self) -> bool:

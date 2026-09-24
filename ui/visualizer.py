@@ -59,6 +59,7 @@ class CloakedVisualizer:
         actions: List[Dict[str, Any]],
         next_button: Optional[Dict[str, Any]] = None,
         check_button: Optional[Dict[str, Any]] = None,
+        submit_button: Optional[Dict[str, Any]] = None,
         auto_clear_sec: float = 6.0
     ):
         """Draws circles, numbers, arrows, and button markers over proposed action coordinates."""
@@ -161,6 +162,27 @@ class CloakedVisualizer:
                 self.canvas.create_text(
                     nx, nby1 - 10, text="[NEXT BUTTON]",
                     fill="#ff0055", font=("Arial", 9, "bold")
+                )
+
+        # Final Submit button highlight (crimson red / amber alert)
+        if submit_button and isinstance(submit_button, dict):
+            sx = submit_button.get("screen_x", submit_button.get("x"))
+            sy = submit_button.get("screen_y", submit_button.get("y"))
+            if sx is not None and sy is not None:
+                sx, sy = int(sx), int(sy)
+                s_box = submit_button.get("box_screen")
+                if s_box and len(s_box) == 4:
+                    sbx1, sby1, sbx2, sby2 = int(s_box[0]), int(s_box[1]), int(s_box[2]), int(s_box[3])
+                else:
+                    sbx1, sby1, sbx2, sby2 = sx - 50, sy - 18, sx + 50, sy + 18
+
+                self.canvas.create_rectangle(
+                    sbx1, sby1, sbx2, sby2,
+                    outline="#ef4444", width=3
+                )
+                self.canvas.create_text(
+                    sx, sby1 - 10, text="[SUBMIT (FINAL)]",
+                    fill="#ef4444", font=("Arial", 9, "bold")
                 )
 
         # Auto clear after timeout

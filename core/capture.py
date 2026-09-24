@@ -8,12 +8,12 @@ import io
 import base64
 import sys
 import ctypes
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, List
 from PIL import Image
 import mss
 
-
 from core.logger import get_logger
+from core.visual_grounding import prepare_grounded_image
 
 logger = get_logger("capture")
 
@@ -62,6 +62,10 @@ class ScreenCapture:
             h = ctypes.windll.user32.GetSystemMetrics(1)
             return {"top": 0, "left": 0, "width": w, "height": h}
         return {"top": 0, "left": 0, "width": 1920, "height": 1080}
+
+    def get_primary_monitor(self) -> Dict[str, int]:
+        """Returns the bounding box dictionary for the primary monitor."""
+        return self.get_screen_bounds(monitor_idx=1)
 
     def capture_screen(
         self,
@@ -158,3 +162,62 @@ class ScreenCapture:
         base64_data = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
         return base64_data, curr_w, curr_h, scale_x, scale_y, offset_x, offset_y
+
+    @staticmethod
+    def encode_image_to_base64(img: Image.Image, quality: int = 90) -> str:
+        """Compresses a PIL Image to JPEG and encodes as Base64 string."""
+        buffer = io.BytesIO()
+        img.convert("RGB").save(buffer, format="JPEG", quality=quality)
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    def capture_and_ground(
+        self,
+        region: Optional[Tuple[int, int, int, int]] = None,
+        monitor_idx: int = 1,
+        max_dimension: int = 1920,
+        quality: int = 90,
+        prior_actions: Optional[List[Dict[str, Any]]] = None,
+        enable_marks: bool = True,
+        enable_rulers: bool = True
+    ) -> Tuple[str, int, int, float, float, int, int, Dict[int, Dict[str, Any]]]:
+        """
+        Captures the screen, optionally scales down, grounds with marginal coordinate rulers
+        and Set-of-Marks interactive element tags, and encodes as Base64 JPEG.
+        Returns:
+            (base64_string, curr_w, curr_h, scale_x, scale_y, offset_x, offset_y, mark_registry)
+        """
+        img = self.capture_screen(region=region, monitor_idx=monitor_idx)
+        orig_w, orig_h = img.size
+
+        if region is not None:
+            offset_x = min(region[0], region[2])
+            offset_y = min(region[1], region[3])
+        else:
+            bounds = self.get_screen_bounds(monitor_idx)
+            offset_x = bounds["left"]
+            offset_y = bounds["top"]
+
+        scale = 1.0
+        if max_dimension > 0 and max(orig_w, orig_h) > max_dimension:
+            scale = max_dimension / float(max(orig_w, orig_h))
+            new_w = max(1, int(orig_w * scale))
+            new_h = max(1, int(orig_h * scale))
+            img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        else:
+            img_resized = img
+
+        curr_w, curr_h = img_resized.size
+        scale_x = orig_w / float(curr_w)
+        scale_y = orig_h / float(curr_h)
+
+        # Ground with coordinate rulers and candidate Set-of-Marks tags
+        grounded_img, mark_registry = prepare_grounded_image(
+            image=img_resized,
+            region=(offset_x, offset_y, orig_w, orig_h),
+            prior_actions=prior_actions,
+            enable_marks=enable_marks,
+            enable_rulers=enable_rulers
+        )
+
+        base64_data = self.encode_image_to_base64(grounded_img, quality=quality)
+        return base64_data, curr_w, curr_h, scale_x, scale_y, offset_x, offset_y, mark_registry

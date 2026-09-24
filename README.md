@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="ui/images/AVA-logo.jpeg" alt="AVA School Assistant 2 Logo" width="180" style="border-radius: 24px;" />
+</p>
+
 # ⚡ AVA School Assistant 2
 
 **AVA School Assistant 2** is a next-generation autonomous AI desktop assistant designed to solve online schoolwork, quizzes, and assignments on Windows.
@@ -42,8 +46,8 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
    - **100% Invisible** to screen recorders, screenshots (PrintScreen), and screen-sharing software (Zoom, Google Meet, Discord, Microsoft Teams, Honorlock, Proctorio, LockDown Browser), while remaining fully visible to you on your physical monitor.
 9. **Human-like Anti-Bot Automation Suite**:
    - **Reading Deliberation Delay**: Calculates realistic human reading times based on question word count (~220 WPM) before answering, keeping the cursor naturally stationary while reading. Pressing **`F9`** skips wait time instantly.
-   - **Zero-AI-Token Local Visual Verification & Recovery**: Rapid sub-millisecond local ROI analysis verifies element response (e.g. radio bullet dot, checkbox checkmark, text glyphs) with **0 external AI token cost**. If a click misses or lands on text, automatically scans leftward in the option band and performs an autonomous recovery click.
-   - **Engine Idle-Prevention Invariant**: AVA will **never** transition to `IDLE` and will **never** advance if an answer click misses. If unverified after recovery, AVA halts, displays an amber HUD alert, and provides a 1-click retry (**`F9`**).
+   - **Zero-AI-Token Sibling-Comparative Visual Verification & Physical Readjustment**: Rapid sub-millisecond local ROI analysis compares target options against sibling choices to robustly detect selections across any website styling (colored borders, checkmarks, inner dots, tinted rows) with **0 external AI token cost**. If a click misses, AVA visually inspects the physical screen around where the mouse physically landed compared to the physical target control, calculates the exact spatial offset $(\Delta X, \Delta Y)$, and executes precision readjustments and autonomous 5-second countdown retries targeting the physically verified control.
+   - **Engine Idle-Prevention & Loop Invariant**: AVA will **never** transition to `IDLE` and will **never** advance if an answer click misses. If unverified, AVA performs automated 5s countdown retries with physical coordinate re-centering. Furthermore, AVA checks if answers are already selected prior to clicking, automatically synthesizes actions from choices, and synchronizes viewport positioning to eliminate erroneous scrolling before answering.
    - **Dynamic Fill-In-The-Blank Layout Shift Tracking**: When text typed into Blank 1 expands and shifts subsequent blanks, local template matching tracks Blank 2's new position before clicking.
    - **Smart Typo Simulation & Math Protection**: Occasional realistic adjacent-key slips on word tokens with human realization pauses and Backspace correction. Pure numbers, math equations, formulas, and code are 100% protected and typo-free.
    - **Gaussian Click Jitter**: Never clicks the exact mathematical center pixel.
@@ -52,6 +56,20 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
    - Instant fail-safe abort key (`F12` or mouse corner drag) that releases buttons and cancels all automation sequences immediately.
 11. **Global Hotkeys**:
    - Control the assistant from anywhere on your system, even while other browser or desktop windows are focused.
+12. **Playground Mode (Long-Form Project Studio)**:
+    - Dedicated semi-automated workspace designed for longer writing assignments, essays, capstone projects, and research papers.
+    - **Rubric Ingestion**: Screen-snip rubrics directly or upload files (`.pdf`, `.docx`, `.doc`, `.txt`) and free-form notes. AI automatically extracts grading criteria into an interactive checklist.
+    - **Outline & Rubric Criteria Mapping**: Formulate structured section-by-section outlines mapped to rubric goals with target word counts.
+    - **Interactive Review & Humanizing**: Section-by-section drafting with mandatory user review checkpoints, direct inline editing, prompt refinements, and auto-polishing via **Jade's AI Humanizer**.
+    - **Academic .docx Export**: Full compiled document preview and formatted Word export supporting MLA 9th, APA 7th, and Standard Technical Report presets.
+    - **Complete Isolation**: Suspends all default solving hotkeys (`F8`, etc.) and safely minimizes/hides the HUD overlay until you return.
+13. **Zero-Token Visual Grounding (Coordinate Rulers & Set-of-Marks)**:
+    - **Normalized Marginal Rulers**: Overlays fine-grained high-contrast coordinate axes (0..1000) along top and left image boundaries to eliminate spatial estimation errors.
+    - **Candidate Control Numbered Badges (Set-of-Marks)**: Automatically detects interactive controls (radio circles, checkbox squares, inputs, buttons) and stamps numbered badges (`[1]`, `[2]`, `[3]`, ...).
+    - **Proximity Snapping & Direct Mark Targeting**: Resolves explicit `"mark": <id>` output and automatically snaps near-miss model coordinates within 28 normalized units to the exact physical center of the target control.
+    - **0 Additional AI Tokens**: Grounding features are drawn directly onto the image buffer prior to encoding, leveraging flat multimodal vision token costs.
+14. **Toggleable Planned-Click & Next Button Debug Visualizer**:
+    - Complete on-screen preview highlighting planned click markers and Next/Submit buttons is now toggleable on demand via the HUD header target crosshair button or Settings, without popping up on first run.
 
 ---
 
@@ -61,6 +79,7 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
 | :---: | :---: | :--- |
 | **`F8`** | **Capture & Solve** | Takes a screenshot of the full question screen and queries the AI model |
 | **`F4`** | **Snip Box & Solve** | Drag-select any sub-box or small question area to solve directly |
+| **`F3`** | **Launch Playground** | Opens the long-form project studio window (suspends solving hotkeys & hides HUD) |
 | **`F9`** | **Confirm & Execute** | Executes the proposed clicks/typing on screen |
 | **`F10`** | **Next Question** | Clicks the identified "Next" or "Continue" button |
 | **`F7`** | **Pause / Resume** | Toggles pause on the assistant loop |
@@ -170,20 +189,27 @@ AVA-School-Assistant-2/
 │   ├── automation.py             # Humanized Bézier curves, smart typos, click jitter & failsafes
 │   ├── capture.py                # High-DPI screen capture & coordinate scaling
 │   ├── cloaking.py               # Win32 SetWindowDisplayAffinity wrapper
-│   ├── error_handler.py          # Rich error diagnostics, classification & advice generator
+│   ├── error_handler.py          # Rich error diagnostics, GitHub bug draft builder & secret sanitizer
 │   ├── hotkeys.py                # Global keybind listener (pynput)
 │   ├── local_verifier.py         # Zero-AI-token local ROI verification & layout shift tracking
 │   ├── logger.py                 # Core logger with memory buffer & rotating file handler
 │   └── prompt.py                 # Multimodal vision system prompt & schemas
 ├── ui/
 │   ├── app.py                    # Main application lifecycle
+│   ├── asset_loader.py           # Cross-platform asset, icon, and taskbar AppUserModelID loader
 │   ├── debug_window.py           # Cloaked live log console & error diagnostic inspector
+│   ├── home_view.py              # Command Hub home dashboard
 │   ├── hud_overlay.py            # Anti-capture floating HUD window with error actions
+│   ├── images/                   # Application branding, window bar icons, and assets
+│   │   ├── AVA-logo.jpeg         # Master brand logo
+│   │   ├── icon.ico              # Multi-resolution Windows executable and window icon
+│   │   └── icon.png              # High-DPI icon asset
 │   ├── settings_view.py          # Configuration dashboard with Debug & Logging tab
 │   ├── snipping_tool.py          # Interactive cloaked full-screen snip box selector
 │   └── visualizer.py             # Cloaked on-screen target highlight canvas
 └── tests/
     ├── test_core.py              # Core unit & integration test suite
+    ├── test_github_issue_reporting.py # GitHub issue drafting & secret sanitization tests
     └── test_logging_and_errors.py # Dedicated logging & error diagnostic test suite
 ```
 

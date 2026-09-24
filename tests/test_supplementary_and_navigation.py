@@ -248,10 +248,10 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
 
             engine._run_solve_pipeline()
 
-            # Verify scrolled down by 450px
-            engine.executor.scroll.assert_any_call(-450, 500, 500)
-            # Verify scrolled back UP by exact 450px to restore coordinate invariance
-            engine.executor.scroll.assert_any_call(450, 500, 500)
+            # Verify scrolled down by 450px at center
+            engine.executor.scroll.assert_called_once_with(-450, 500, 500)
+            # Verify viewport is kept scrolled down without rapid up-scroll jitter
+            self.assertTrue(engine.executor._viewport_is_scrolled)
             # Verify AI was re-called with extra image
             self.assertEqual(mock_ai_instance.solve_screen.call_count, 2)
             self.assertEqual(engine.last_result["answer"], "Option C and D")
@@ -480,6 +480,22 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
         engine.executor.click.assert_called_with(500, 400, allow_variance=False)
         self.assertEqual(engine.executor.scroll.call_count, 2)
 
+    def test_advance_by_scrolling_down_fallback_to_primary_monitor(self):
+        """Tests that _advance_by_scrolling_down safely defaults to primary monitor when region is None."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.last_region = None
+        engine.executor.scroll = MagicMock()
+        engine.executor.click = MagicMock()
+        engine.capture.get_screen_bounds = MagicMock(return_value={"top": 0, "left": 0, "width": 1920, "height": 1080})
+        engine.capture.capture_screen = MagicMock(return_value=MagicMock())
+        engine.verifier.verify_screen_scrolled = MagicMock(return_value=(True, 3.5))
+
+        success = engine._advance_by_scrolling_down(scroll_amt=500, override_region=None)
+
+        self.assertTrue(success)
+        # Verify scrolling at center of monitor (960, 540)
+        engine.executor.scroll.assert_called_with(-500, 960, 540)
+
     def test_manual_f10_scroll_down_advance(self):
         """Tests that manual F10 advance handles scrolling quizzes properly."""
         engine = AssistantEngine(config_manager=self.config_manager)
@@ -495,6 +511,201 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
         engine.trigger_next_question()
 
         engine._advance_by_scrolling_down.assert_called_once_with(scroll_amt=520, override_region=None)
+
+    def test_scrolled_view_retained_and_next_button_not_scrolled_up(self):
+        """Tests that when viewport is already scrolled down, trigger_next_button does NOT scroll up before clicking."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.executor.scroll = MagicMock()
+        engine.executor.click = MagicMock()
+        engine.executor._viewport_is_scrolled = True
+        engine.last_result = {
+            "advance_action": "click_button",
+            "next_button": {
+                "x": 800,
+                "y": 900,
+                "screen_x": 800,
+                "screen_y": 900
+            }
+        }
+        engine.trigger_next_button()
+
+        # Verify scroll was NOT called (no scroll up before clicking next button)
+        engine.executor.scroll.assert_not_called()
+        # Verify it clicked the Next button directly at (800, 900)
+        engine.executor.click.assert_any_call(800, 900)
+
+    def test_cutoff_question_lower_inspection_auto_tags_scrolled_view(self):
+        """Tests that cut-off inspection retains scrolled view and auto-tags actions and buttons."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.capture.capture_and_encode = MagicMock(return_value=(
+            "dummy_b64", 1000, 1000, 1.0, 1.0, 0, 0
+        ))
+        engine.executor.scroll = MagicMock()
+        engine.execute_current_solution = MagicMock()
+
+        # Top view returns 0 actions and no next button (cut-off question)
+        top_view_result = {
+            "status": "solved",
+            "question": "Which of the following is correct?",
+            "answer": "Need to view choices below",
+            "actions": [],
+            "next_button": None,
+            "needs_action": True
+        }
+        # Scrolled lower view finds the choices and next button
+        lower_view_result = {
+            "status": "solved",
+            "question": "Which of the following is correct?",
+            "answer": "Option D",
+            "actions": [{"type": "click", "x": 500, "y": 700, "screen_x": 500, "screen_y": 700}],
+            "next_button": {"x": 850, "y": 920, "screen_x": 850, "screen_y": 920},
+            "ready_to_advance": True
+        }
+
+        with patch("core.assistant_engine.AIClient") as mock_ai_class:
+            mock_ai_instance = MagicMock()
+            mock_ai_instance.solve_screen.side_effect = [top_view_result, lower_view_result]
+            mock_ai_class.return_value = mock_ai_instance
+
+            engine._run_solve_pipeline()
+
+            # Verify it scrolled down 500px to inspect lower view
+            engine.executor.scroll.assert_called_once_with(-500, 500, 500)
+            # Verify viewport remained scrolled down (no rapid scroll back up)
+            self.assertTrue(engine.executor._viewport_is_scrolled)
+            # Verify action and next button were auto-tagged with in_scrolled_view: True
+            self.assertTrue(engine.last_result["actions"][0]["in_scrolled_view"])
+            self.assertTrue(engine.last_result["next_button"]["in_scrolled_view"])
+            self.assertEqual(engine.last_result["actions"][0]["scroll_amount"], 500)
+
+    def test_ensure_scrolled_view_uses_recorded_center_and_moves_mouse(self):
+        """Tests that ensure_scrolled_view uses the recorded center and moves the mouse."""
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.executor._last_scroll_center = (600, 450)
+        engine.executor._viewport_is_scrolled = False
+        engine.executor.scroll = MagicMock()
+
+        engine.executor.ensure_scrolled_view(scrolled=True, scroll_amount=400)
+
+        # Verify scroll was called with -400 at (600, 450)
+        engine.executor.scroll.assert_called_once_with(-400, 600, 450)
+        self.assertTrue(engine.executor._viewport_is_scrolled)
+
+    def test_next_button_clicks_exactly_once_without_150ms_retry(self):
+        """
+        Verifies that trigger_next_button clicks exactly ONCE and does NOT execute
+        a 150ms retry double-click, even with local_verification_enabled=True.
+        """
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config.local_verification_enabled = True
+        engine.executor.click = MagicMock()
+        engine.last_result = {
+            "advance_action": "click_button",
+            "next_button": {"x": 750, "y": 850, "screen_x": 750, "screen_y": 850}
+        }
+        engine.trigger_next_button()
+
+        # Must be clicked exactly once - no 150ms second click!
+        self.assertEqual(engine.executor.click.call_count, 1)
+        engine.executor.click.assert_called_once_with(750, 850)
+
+    def test_transition_result_backward_and_forward_compatibility(self):
+        """
+        Verifies that TransitionResult behaves as both a 2-tuple (for legacy callers)
+        and supports .get() and attribute access.
+        """
+        from core.local_verifier import TransitionResult
+        res = TransitionResult(True, 3.45, details="diff=3.45")
+
+        # 1. 2-tuple unpacking
+        is_trans, diff = res
+        self.assertTrue(is_trans)
+        self.assertAlmostEqual(diff, 3.45)
+        self.assertEqual(len(res), 2)
+        self.assertEqual(res[0], True)
+        self.assertEqual(res[1], 3.45)
+
+        # 2. Dictionary-style .get() access
+        self.assertTrue(res.get("transitioned"))
+        self.assertTrue(res.get("is_transitioned"))
+        self.assertAlmostEqual(res.get("diff"), 3.45)
+        self.assertEqual(res.get("details"), "diff=3.45")
+        self.assertIsNone(res.get("nonexistent"))
+
+        # 3. Attribute access
+        self.assertTrue(res.transitioned)
+        self.assertAlmostEqual(res.diff, 3.45)
+        self.assertEqual(res.details, "diff=3.45")
+
+    def test_wait_for_page_to_settle_waits_for_blank_screen_and_stabilization(self):
+        """
+        Verifies that _wait_for_page_to_settle detects blank loading screens
+        and waits until successive frames stabilize.
+        """
+        from PIL import Image, ImageDraw
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.config.local_verification_enabled = True
+
+        # Frame 0: Solid white loading frame (stddev == 0)
+        blank_img = Image.new("RGB", (100, 100), (255, 255, 255))
+
+        # Frame 1 & 2: Stable rendered page with content
+        content_img = Image.new("RGB", (100, 100), (255, 255, 255))
+        draw = ImageDraw.Draw(content_img)
+        draw.rectangle([10, 10, 80, 80], fill=(50, 50, 50))
+
+        engine.capture.capture_screen = MagicMock(side_effect=[blank_img, content_img, content_img, content_img])
+
+        engine._wait_for_page_to_settle(max_wait=2.0, check_interval=0.05, min_stable_checks=2)
+
+        # Should have captured at least 3 frames (blank, content1, content2) before declaring settled
+        self.assertGreaterEqual(engine.capture.capture_screen.call_count, 3)
+
+    def test_single_view_next_button_does_not_pre_scroll(self):
+        """
+        Verifies that single-view questions do not scroll down before clicking Next.
+        """
+        engine = AssistantEngine(config_manager=self.config_manager)
+        engine.executor.click = MagicMock()
+        engine.executor.ensure_scrolled_view = MagicMock()
+        engine.executor._viewport_is_scrolled = False
+
+        engine.last_result = {
+            "advance_action": "click_button",
+            "next_button": {"x": 750, "y": 850, "screen_x": 750, "screen_y": 850, "in_scrolled_view": False},
+            "extra_images_used": False
+        }
+        engine.trigger_next_button()
+
+        # Must NOT call ensure_scrolled_view with True
+        engine.executor.ensure_scrolled_view.assert_called_once_with(False, 500)
+        engine.executor.click.assert_called_once_with(750, 850)
+
+    def test_ai_client_map_coordinates_single_view_does_not_mark_next_scrolled(self):
+        """
+        Verifies that _map_coordinates never marks next_button as in_scrolled_view
+        when has_multi_view is False, even if y >= 350.
+        """
+        client = AIClient(provider="gemini", api_key="mock_key")
+        result = {
+            "next_button": {"x": 500, "y": 850},
+            "actions": [{"type": "click", "x": 500, "y": 200}]
+        }
+        client._map_coordinates(result, 1.0, 1.0, 0, 0, 1000, 1000, has_multi_view=False)
+        self.assertFalse(result["next_button"].get("in_scrolled_view", False))
+
+    def test_ai_client_map_coordinates_multi_view_marks_scrolled_when_appropriate(self):
+        """
+        Verifies that _map_coordinates marks next_button as in_scrolled_view
+        when has_multi_view is True and has_scrolled_actions is True and by >= 350.
+        """
+        client = AIClient(provider="gemini", api_key="mock_key")
+        result = {
+            "next_button": {"x": 500, "y": 850},
+            "actions": [{"type": "click", "x": 500, "y": 200, "in_scrolled_view": True}]
+        }
+        client._map_coordinates(result, 1.0, 1.0, 0, 0, 1000, 1000, has_multi_view=True)
+        self.assertTrue(result["next_button"].get("in_scrolled_view", False))
 
 
 if __name__ == "__main__":

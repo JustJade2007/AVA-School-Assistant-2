@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.8.a] - 2026-09-27
+
+### Fixed & Enhanced
+- **Global Settings Window Availability Across All Modules**:
+  - **Constructor Parameter Compatibility**: In [ui/settings_view.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/settings_view.py), updated `SettingsWindow.__init__` to accept `config_manager: Optional[ConfigManager] = None` and `**kwargs`, resolving a critical `TypeError: unexpected keyword argument 'config_manager'` that prevented Settings from opening from any module.
+  - **Dynamic Parent Window Resolution & Focus**: In [ui/app.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/app.py), improved `open_settings` to automatically resolve the active foreground window (`playground_window`, `home_window`, or `hud_window`) as the parent, safely elevating, deiconifying, and bringing Settings to front.
+  - **HUD Mode Badge Guard**: Fixed an indentation bug in `_on_settings_saved` in [ui/app.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/app.py) that attempted to update `hud_window.mode_badge` when saving settings while in Playground mode, preventing `AttributeError: 'NoneType' object has no attribute 'mode_badge'`.
+  - **Playground Method Aliases & Error Resilience**: Added `_open_settings` alias and structured exception handlers with logging in [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py) and [ui/home_view.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/home_view.py).
+  - **Missing Standard Library Import**: Added missing `import sys` to [ui/settings_view.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/settings_view.py) for the "Open Logs Folder" action.
+
 ## [2.2.7.a] - 2026-09-27
 
 ### Fixed & Enhanced

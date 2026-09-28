@@ -258,21 +258,37 @@ class AVASchoolAssistantApp:
 
     def open_settings(self):
         """Opens or focuses the Settings Dashboard."""
-        if self.settings_window is not None and self.settings_window.winfo_exists():
+        try:
+            logger.info("Opening Settings Dashboard...")
+            if self.settings_window is not None and self.settings_window.winfo_exists():
+                self.settings_window.deiconify()
+                self.settings_window.lift()
+                self.settings_window.focus_force()
+                return
+
+            parent_window = self.root
+            if self.playground_window and self.playground_window.winfo_exists() and self.playground_window.state() != "withdrawn":
+                parent_window = self.playground_window
+            elif self.home_window and self.home_window.winfo_exists() and self.home_window.state() != "withdrawn":
+                parent_window = self.home_window
+            elif self.hud_window and self.hud_window.winfo_exists() and self.hud_window.state() != "withdrawn":
+                parent_window = self.hud_window
+
+            self.settings_window = SettingsWindow(
+                master=parent_window,
+                config_manager=self.config_manager,
+                on_save_callback=self._on_settings_saved
+            )
+            apply_window_icon(self.settings_window)
+            self.settings_window.deiconify()
             self.settings_window.lift()
             self.settings_window.focus_force()
-            return
-
-        parent_window = self.playground_window if (self.playground_window and self.playground_window.winfo_exists()) else self.root
-
-        self.settings_window = SettingsWindow(
-            master=parent_window,
-            config_manager=self.config_manager,
-            on_save_callback=self._on_settings_saved
-        )
-        apply_window_icon(self.settings_window)
-        self.settings_window.lift()
-        self.settings_window.focus_force()
+        except Exception as e:
+            logger.error(f"Failed to open Settings window: {e}", exc_info=True)
+            try:
+                messagebox.showerror("Settings Error", f"Unable to open Settings window:\n{e}")
+            except Exception:
+                pass
 
     def _on_settings_saved(self):
         """Re-applies hotkeys and UI settings when user updates configuration."""
@@ -284,17 +300,19 @@ class AVASchoolAssistantApp:
             if hasattr(self.hud_window, "set_header_icon_size"):
                 self.hud_window.set_header_icon_size(getattr(self.config, "header_icon_size", 11))
             self.hud_window.refresh_hotkey_labels()
-        if self.playground_window and self.playground_window.winfo_exists():
-            if hasattr(self.playground_window, "_on_settings_saved"):
-                self.playground_window._on_settings_saved()
-            self.hud_window.mode_badge.configure(
-                text="REVIEW MODE" if not self.config.autonomous_mode else "AUTO MODE"
-            )
+            if hasattr(self.hud_window, "mode_badge"):
+                self.hud_window.mode_badge.configure(
+                    text="REVIEW MODE" if not self.config.autonomous_mode else "AUTO MODE"
+                )
             if hasattr(self.hud_window, "debug_badge"):
                 if self.config.debug_mode:
                     self.hud_window.debug_badge.pack(side="left", padx=4)
                 else:
                     self.hud_window.debug_badge.pack_forget()
+
+        if self.playground_window and self.playground_window.winfo_exists():
+            if hasattr(self.playground_window, "_on_settings_saved"):
+                self.playground_window._on_settings_saved()
 
         if self.home_window and self.home_window.winfo_exists():
             self.home_window.refresh_ai_status()

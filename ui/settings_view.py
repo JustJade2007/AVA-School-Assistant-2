@@ -4,6 +4,7 @@ CustomTkinter interface for API credentials, AI model selection,
 execution modes, humanization settings, and hotkeys.
 """
 
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -23,9 +24,15 @@ logger = get_logger("settings")
 class SettingsWindow(ctk.CTkToplevel):
     """Configuration dashboard for user preferences."""
 
-    def __init__(self, master, on_save_callback: Optional[Callable[[], None]] = None):
+    def __init__(
+        self,
+        master,
+        config_manager: Optional[ConfigManager] = None,
+        on_save_callback: Optional[Callable[[], None]] = None,
+        **kwargs
+    ):
         super().__init__(master)
-        self.config_manager = ConfigManager()
+        self.config_manager = config_manager or ConfigManager()
         self.on_save_callback = on_save_callback
         self._last_test_msg = ""
         self.hotkey_entries: Dict[str, ctk.CTkEntry] = {}

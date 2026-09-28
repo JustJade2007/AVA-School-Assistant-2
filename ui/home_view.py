@@ -492,8 +492,11 @@ class HomeDashboard(ctk.CTkToplevel):
             self.on_launch_playground()
 
     def _open_settings_action(self):
+        logger.info("Opening Settings from Home Dashboard...")
         if self.on_open_settings:
             self.on_open_settings()
+        else:
+            logger.warning("on_open_settings callback is not configured in HomeDashboard.")
 
     def _on_close_requested(self):
         if self.on_exit_app:

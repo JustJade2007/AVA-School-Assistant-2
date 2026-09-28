@@ -2789,26 +2789,40 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
     # Settings & Configuration
     # -------------------------------------------------------------------------
 
+    def _open_settings(self):
+        """Opens or focuses the Settings Dashboard."""
+        self._open_settings_action()
+
     def _open_settings_action(self):
         """Opens or focuses the Settings Dashboard from Playground Mode."""
-        if self.on_open_settings:
-            self.on_open_settings()
-            return
+        try:
+            logger.info("Opening Settings Dashboard from Playground...")
+            if self.on_open_settings:
+                self.on_open_settings()
+                return
 
-        if self.settings_window is not None and self.settings_window.winfo_exists():
+            if self.settings_window is not None and self.settings_window.winfo_exists():
+                self.settings_window.deiconify()
+                self.settings_window.lift()
+                self.settings_window.focus_force()
+                return
+
+            from ui.settings_view import SettingsWindow
+            self.settings_window = SettingsWindow(
+                master=self,
+                config_manager=self.config_manager,
+                on_save_callback=self._on_settings_saved
+            )
+            apply_window_icon(self.settings_window)
+            self.settings_window.deiconify()
             self.settings_window.lift()
             self.settings_window.focus_force()
-            return
-
-        from ui.settings_view import SettingsWindow
-        self.settings_window = SettingsWindow(
-            master=self,
-            config_manager=self.config_manager,
-            on_save_callback=self._on_settings_saved
-        )
-        apply_window_icon(self.settings_window)
-        self.settings_window.lift()
-        self.settings_window.focus_force()
+        except Exception as e:
+            logger.error(f"Failed to open Settings window from Playground: {e}", exc_info=True)
+            try:
+                messagebox.showerror("Settings Error", f"Unable to open Settings window:\n{e}")
+            except Exception:
+                pass
 
     def _on_settings_saved(self):
         """Refreshes AI clients, humanizer bridge, models, and cloaking settings in Playground."""

@@ -159,6 +159,105 @@ class PlaygroundEngine:
 
         return []
 
+    @staticmethod
+    def _clean_target_score(score_str: Optional[str]) -> Optional[str]:
+        """
+        Cleans and sanitizes a target score/weight string to ensure word counts
+        (e.g., '50 words min', '50 words each') are NEVER placed in the points/weight field.
+        Only pure points, weights, or grading status (e.g. '5 pts (Pass/Fail)', '5 pts', 'Pass/Fail') remain.
+        """
+        if not score_str:
+            return None
+        s = str(score_str).strip()
+        # Pure word limit strings -> None
+        if re.match(r"^~?\d+\s*words?(?:\s*(?:min|minimum|each|max|maximum|cap))?$", s, re.IGNORECASE):
+            return None
+        # Strip words portion from combined strings like "50 words min (Pass/Fail)" or "5 pts (50 words each)"
+        cleaned = re.sub(r"~?\d+\s*words?(?:\s*(?:min|minimum|each|max|maximum|cap))?", "", s, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\(\s*\)", "", cleaned).strip()
+        cleaned = re.sub(r"^[\s,\-]+|[\s,\-]+$", "", cleaned).strip()
+        if not cleaned:
+            return None
+        # If it was left as "(Pass/Fail)", unwrap outer parens
+        if cleaned.startswith("(") and cleaned.endswith(")") and cleaned.count("(") == 1:
+            cleaned = cleaned[1:-1].strip()
+        if cleaned.lower() == "pass/fail":
+            return "Pass/Fail"
+        return cleaned
+
+    def _expand_multi_item_criteria(self, criteria: List[RubricCriterion], raw_text: str) -> List[RubricCriterion]:
+        """
+        If an assignment prompt asks for multiple distinct items (e.g. 'three most important points',
+        '3 key concepts', '4 questions', 'identify 3 factors'), but the parser returned only 1 lumped criterion
+        (e.g. 'Three Key Points to Master'), automatically decompose that criterion into distinct, individual
+        checklist items (e.g. 'Point 1 to Master', 'Point 2 to Master', 'Point 3 to Master').
+        """
+        if len(criteria) != 1:
+            return criteria
+
+        combined = f"{criteria[0].title} {criteria[0].description} {raw_text}"
+        word_to_num = {
+            "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+            "seven": 7, "eight": 8, "nine": 9, "ten": 10
+        }
+        m = re.search(
+            r"\b(?:what\s+are\s+the|identify|explain|describe|list|provide|state|name|discuss|outline)?\s*(?:the\s+)?(two|three|four|five|six|seven|eight|nine|ten|\d+)\s*(?:most\s+important\s+|key\s+|main\s+|critical\s+|distinct\s+)?(points|concepts|questions|reasons|topics|factors|elements|items|steps|examples|goals|outcomes)\b",
+            combined,
+            re.IGNORECASE
+        )
+        if not m:
+            return criteria
+
+        num_str = m.group(1).lower()
+        count = word_to_num.get(num_str) or (int(num_str) if num_str.isdigit() else None)
+        if not count or count < 2 or count > 15:
+            return criteria
+
+        noun_raw = m.group(2).lower()
+        sing_noun = noun_raw[:-1] if noun_raw.endswith("s") else noun_raw
+        if sing_noun in ("point", "concept", "element", "factor", "topic"):
+            sing_noun = "Point"
+        elif sing_noun == "question":
+            sing_noun = "Question"
+        else:
+            sing_noun = sing_noun.capitalize()
+
+        orig = criteria[0]
+        orig_target = self._clean_target_score(orig.target_score)
+        orig_desc = orig.description or orig.title
+
+        expanded = []
+        ordinal_words = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth", "Tenth", "Eleventh", "Twelfth", "Thirteenth", "Fourteenth", "Fifteenth"]
+
+        base_ctx = re.sub(r"^(?:identify\s+and\s+explain\s+)?(?:the\s+)?(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s*(?:most\s+important\s+|key\s+|main\s+|critical\s+)?(?:points|concepts|questions|reasons|topics|factors)?\s*(?:you\s+hope\s+to\s+master)?\s*(?:based\s+on\s+)?", "", orig_desc, flags=re.IGNORECASE).strip()
+        if base_ctx and not base_ctx.endswith("."):
+            base_ctx += "."
+
+        is_master = "master" in combined.lower()
+        for idx in range(1, count + 1):
+            ord_word = ordinal_words[idx - 1] if idx <= len(ordinal_words) else f"{idx}th"
+            title = f"{sing_noun} {idx} to Master" if is_master else f"{sing_noun} {idx}"
+            if is_master:
+                desc = f"Identify and explain the {ord_word.lower()} key point you hope to master"
+                if base_ctx:
+                    desc += f" based on {base_ctx}"
+            else:
+                desc = f"Address and explain {sing_noun.lower()} #{idx}"
+                if base_ctx:
+                    desc += f": {base_ctx}"
+
+            expanded.append(
+                RubricCriterion(
+                    title=title,
+                    description=desc,
+                    target_score=orig_target,
+                    fulfilled=False,
+                )
+            )
+
+        logger.info(f"Decomposed lumped criterion '{orig.title}' into {len(expanded)} distinct rubric criteria cards.")
+        return expanded
+
     def _smart_fallback_parse_rubric(self, rubric_text: str) -> List[RubricCriterion]:
         """
         Intelligent offline heuristic parser that extracts substantive assignment tasks, questions,
@@ -181,17 +280,58 @@ class PlaygroundEngine:
         elif pass_fail:
             points_val = "Pass/Fail"
 
+        # Check for multi-item requests (e.g. "three most important points")
+        word_to_num = {
+            "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+            "seven": 7, "eight": 8, "nine": 9, "ten": 10
+        }
+        multi_match = re.search(
+            r"\b(?:what\s+are\s+the|identify|explain|describe|list|provide|state|name|discuss|outline)?\s*(?:the\s+)?(two|three|four|five|six|seven|eight|nine|ten|\d+)\s*(?:most\s+important\s+|key\s+|main\s+|critical\s+|distinct\s+)?(points|concepts|questions|reasons|topics|factors|elements|items|steps|examples|goals|outcomes)\b",
+            rubric_text,
+            re.IGNORECASE
+        )
+        if multi_match:
+            cnt = word_to_num.get(multi_match.group(1).lower()) or (int(multi_match.group(1)) if multi_match.group(1).isdigit() else None)
+            if cnt and 2 <= cnt <= 15:
+                noun_raw = multi_match.group(2).lower()
+                sing_noun = noun_raw[:-1] if noun_raw.endswith("s") else noun_raw
+                if sing_noun in ("point", "concept", "element", "factor", "topic"):
+                    sing_noun = "Point"
+                elif sing_noun == "question":
+                    sing_noun = "Question"
+                else:
+                    sing_noun = sing_noun.capitalize()
+
+                is_master = "master" in rubric_text.lower()
+                ordinal_words = ["First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth", "Tenth"]
+                for i in range(1, cnt + 1):
+                    ord_word = ordinal_words[i - 1] if i <= len(ordinal_words) else f"{i}th"
+                    t = f"{sing_noun} {i} to Master" if is_master else f"{sing_noun} {i}"
+                    d = f"Identify and explain the {ord_word.lower()} key point you hope to master." if is_master else f"Address and explain {sing_noun.lower()} #{i}."
+                    criteria.append(
+                        RubricCriterion(
+                            title=t,
+                            description=d,
+                            target_score=points_val,
+                            fulfilled=False,
+                        )
+                    )
+                return criteria
+
         for line in lines:
             clean = re.sub(r"^[-*•\d\.\)\s]+", "", line).strip()
             if len(clean) < 4:
                 continue
 
-            # 1. Skip administrative items (file types, turn-in dates, points headers, navigation)
+            # Skip administrative items (file types, turn-in dates, points headers, navigation)
             if self.is_administrative_criterion(clean, clean):
                 continue
 
             t_low = clean.lower()
-            # 2. Identify question prompts
+            # Ignore standalone word count/grading lines from becoming their own criterion card
+            if re.search(r"\b(?:at\s+least\s+\d+\s*words?|\d+\s*words?\s*(?:each|min|minimum)?|graded\s+as)\b", t_low):
+                continue
+
             if "?" in clean:
                 q_part = clean.split("?")[0].strip()
                 clean_q = re.sub(r"^(?:based\s+on\s+this\s+(?:material|reading|chapter|module|article),\s*)", "", q_part, flags=re.IGNORECASE)
@@ -207,17 +347,6 @@ class PlaygroundEngine:
                         title=title[:60].strip().capitalize(),
                         description=clean,
                         target_score=points_val,
-                        fulfilled=False,
-                    )
-                )
-            elif re.search(r"\b(?:at\s+least\s+\d+\s*words?|\d+\s*words?\s*(?:each|min|minimum)?|graded\s+as)\b", t_low):
-                w_match = re.search(r"(\d+)\s*words?", clean, re.IGNORECASE)
-                w_target = f"{w_match.group(1)} words min" if w_match else points_val
-                criteria.append(
-                    RubricCriterion(
-                        title="Word Requirement & Grading",
-                        description=clean,
-                        target_score=w_target or points_val,
                         fulfilled=False,
                     )
                 )
@@ -257,16 +386,20 @@ class PlaygroundEngine:
             "- Ignore file types or formats (e.g. '.pdf', '.docx', '.doc', 'Word document', file upload format).\n"
             "- Ignore when to turn it in, deadlines, timestamps, or late submission policies (e.g. 'due Sunday', 'due by 11:59 PM').\n"
             "- Ignore LMS navigation or completion boilerplate (e.g. 'Points: 5', 'Must be completed before moving forward', 'Module Overview page').\n\n"
-            "2. EXTRACT SUBSTANTIVE ACADEMIC TASKS & QUESTIONS:\n"
-            "- Extract the actual intellectual, analytical, and content tasks the student must answer.\n"
-            "- If the assignment asks specific questions (e.g. 'What are the three most important points you hope to master?'), create a criterion with a clear, concise title (e.g. 'Three Key Points to Master').\n\n"
-            "3. WORD COUNT & 'WORDS PER POINT' REQUIREMENTS:\n"
-            "- If the rubric/prompt designates word limits per point, question, or item (e.g. '50 words EACH', 'at least 50 words each'), explicitly specify: 'Word Requirement: 50 words each' in the description and '50 words each' in target_score.\n"
-            "- If there is a pass/fail or general word requirement (e.g. 'at least 50 words'), include it in the description and target_score (e.g. '50 words min (Pass/Fail)').\n\n"
+            "2. BREAK DOWN MULTI-ITEM PROMPTS & QUESTIONS INTO INDIVIDUAL CRITERIA:\n"
+            "- If an assignment prompt asks for multiple points, concepts, questions, reasons, or steps (for example: 'what are the three most important points you hope to master?', 'identify 3 key factors', 'answer questions 1 through 4'):\n"
+            "  YOU MUST CREATE A SEPARATE CRITERION FOR EACH INDIVIDUAL ITEM (e.g., 'Point 1 to Master', 'Point 2 to Master', 'Point 3 to Master').\n"
+            "  NEVER lump them into a single criterion! The student needs a distinct checklist card for each required point to verify as they write.\n\n"
+            "3. POINTS & WEIGHT (target_score):\n"
+            "- 'target_score' represents the GRADE POINTS or WEIGHT ONLY (e.g. '5 pts (Pass/Fail)', '5 pts', '10 pts', '15%', 'Pass/Fail').\n"
+            "- NEVER put word limits, word counts, or length rules (e.g. '50 words', '50 words min', '50 words each') into 'target_score'! The word limit is a length constraint, NOT a grade point weight.\n"
+            "- If points are specified globally (e.g. 'Points 5' or '5 points (Pass/Fail)'), you may assign the total or split points across criteria (e.g. 'Pass/Fail' or '5 pts total' or individual points).\n\n"
+            "4. WORD REQUIREMENTS:\n"
+            "- If the prompt specifies word count rules (e.g. 'at least 50 words', '50 words each'), include that requirement inside the 'description' field only (e.g. 'Explain the first concept you hope to master (at least 50 words required)'). NEVER put it in 'target_score'.\n\n"
             "Respond ONLY with a JSON array where each item has:\n"
-            "- 'title': Concise, human-readable name of the requirement (e.g. 'Three Key Points to Master', 'Thesis Statement', 'Evidence & Analysis')\n"
-            "- 'description': What the student must write or demonstrate to receive full marks\n"
-            "- 'target_score': Points, percentage, or word count if stated (e.g. '5 pts (Pass/Fail)', '50 words each', '25 pts') or null\n"
+            "- 'title': Concise, human-readable name of the requirement (e.g. 'Point 1 to Master', 'Point 2 to Master', 'Point 3 to Master', 'Thesis Statement')\n"
+            "- 'description': What the student must write or demonstrate to fulfill this requirement\n"
+            "- 'target_score': Grade points or weight only (e.g. '5 pts (Pass/Fail)' or 'Pass/Fail') or null. DO NOT put word counts here.\n"
             "Do NOT include any markdown code blocks or text outside the JSON array."
         )
 
@@ -306,7 +439,7 @@ class PlaygroundEngine:
                             RubricCriterion(
                                 title=title,
                                 description=desc,
-                                target_score=itm.get("target_score"),
+                                target_score=self._clean_target_score(itm.get("target_score")),
                                 fulfilled=False,
                             )
                         )
@@ -322,7 +455,14 @@ class PlaygroundEngine:
             if not self.is_administrative_criterion(c.title, c.description)
         ]
 
-        # 2. Check if the rubric states "50 words EACH" (or per question/point/bullet)
+        # 2. Decompose lumped multi-item criteria if model or fallback grouped them into 1
+        criteria = self._expand_multi_item_criteria(criteria, rubric_text)
+
+        # 3. Clean and sanitize all target_score fields to guarantee word limits are never in weight
+        for c in criteria:
+            c.target_score = self._clean_target_score(c.target_score)
+
+        # 4. Check if the rubric states "50 words EACH" (or per question/point/bullet)
         constraints = WrittenSolver.extract_detailed_word_constraints(rubric_text)
         per_item_w = constraints.get("per_item_words")
         if not per_item_w:
@@ -334,19 +474,15 @@ class PlaygroundEngine:
             if m_each:
                 per_item_w = int(m_each.group(1))
 
-        # Explicitly specify word requirement in each criterion if specified per item/point
+        # Explicitly specify word requirement in each criterion's DESCRIPTION (never in target_score/weight)
         if per_item_w and criteria:
             for c in criteria:
-                c_full = f"{c.title} {c.description} {c.target_score or ''}".lower()
+                c_full = f"{c.title} {c.description}".lower()
                 if not re.search(rf"\b{per_item_w}\s*words?\b", c_full):
                     if c.description:
                         c.description = f"{c.description.rstrip()} (Word requirement: {per_item_w} words each)"
                     else:
                         c.description = f"Word requirement: {per_item_w} words each"
-                    if not c.target_score:
-                        c.target_score = f"{per_item_w} words each"
-                    elif "words" not in c.target_score.lower():
-                        c.target_score = f"{c.target_score} ({per_item_w} words each)"
 
         return criteria
 

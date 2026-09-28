@@ -8,6 +8,14 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.11.a] - 2026-09-27
+
+### Fixed & Enhanced
+- **Playground Rubric File Type & Turn-In Date Exclusion**:
+  - **Prompt-Level Filtering**: Updated `PlaygroundEngine.parse_rubric` system prompt with explicit negative constraints directing AI models to never extract or include assignment file types (e.g. `.docx`, `.doc`, `.pdf`, `Word document`, upload formats) or submission deadlines (e.g. due dates, turn in by, deadlines, late policies).
+  - **Administrative Heuristic Filter**: Implemented `PlaygroundEngine.is_administrative_criterion` in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py) to identify and exclude any file type requirements, format constraints, turn-in dates, and submission deadlines.
+  - **Multi-Layer Defense**: Applied `is_administrative_criterion` across AI JSON parsing, rule-based fallback parsing, outline formulation, [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py) checklist updates (`_finish_rubric_parse` and `_on_rubric_criteria_changed`), and [core/playground/teacher_evaluator.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/teacher_evaluator.py) grading calls.
+
 ## [2.2.10.a] - 2026-09-27
 
 ### Reverted & Restored

@@ -1002,76 +1002,50 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self._auto_ingest_embedded_youtube(self.project.topic_description)
 
     def _on_rubric_criteria_changed(self, criteria: List[RubricCriterion]):
-        valid_criteria = [
-            c for c in criteria
-            if not PlaygroundEngine.is_administrative_criterion(c.title, c.description)
-        ]
-        self.project.rubric_criteria = valid_criteria
+        self.project.rubric_criteria = criteria
         if hasattr(self, "stage_2_rubric_viewer"):
-            self.stage_2_rubric_viewer.set_criteria(valid_criteria)
-        logger.info(f"Rubric criteria live-synced: {len(valid_criteria)} criteria")
-        self._auto_detect_word_requirements(force=True)
+            self.stage_2_rubric_viewer.set_criteria(criteria)
+        logger.info(f"Rubric criteria live-synced: {len(criteria)} criteria")
+        self._auto_detect_word_requirements()
 
-    def _auto_detect_word_requirements(self, force: bool = False):
+    def _auto_detect_word_requirements(self):
         topic_text = self.topic_textbox.get("1.0", "end").strip()
         rubric_text = self.rubric_raw_textbox.get("1.0", "end").strip()
         if rubric_text.startswith("Paste rubric text here"):
             rubric_text = ""
         combined = f"{topic_text}\n{rubric_text}".strip()
+        if not combined:
+            return
 
-        criteria = getattr(self.project, "rubric_criteria", []) or []
-        crit_count = len(criteria)
-
-        # 1. Check constraints from combined prompt text
-        constraints = WrittenSolver.extract_detailed_word_constraints(
-            combined,
-            item_count=crit_count if crit_count > 0 else None
-        )
+        crit_count = len(self.project.rubric_criteria) if getattr(self.project, "rubric_criteria", None) else None
+        constraints = WrittenSolver.extract_detailed_word_constraints(combined, item_count=crit_count)
         detected_target = constraints.get("total_min_words")
         num_items = constraints.get("num_items")
         per_item = constraints.get("per_item_words")
 
-        # 2. Check if individual criteria have explicit word constraints
-        criteria_word_sum = 0
-        criteria_with_word_limits = 0
-        for c in criteria:
-            c_text = f"{c.title}\n{c.description}\n{c.target_score or ''}"
-            c_constraint = WrittenSolver.extract_detailed_word_constraints(c_text)
-            c_words = c_constraint.get("per_item_words") or c_constraint.get("min_words")
-            if c_words:
-                criteria_word_sum += c_words
-                criteria_with_word_limits += 1
-            elif per_item:
-                criteria_word_sum += per_item
-                criteria_with_word_limits += 1
+        if not detected_target and per_item:
+            if crit_count and crit_count > 1:
+                detected_target = per_item * crit_count
+                num_items = crit_count
 
-        # 3. Sum up per-point requirements (e.g. 50 words each across questions/points)
-        if per_item and crit_count >= 1:
-            detected_target = per_item * crit_count
-            num_items = crit_count
-        elif criteria_with_word_limits > 0 and criteria_with_word_limits == crit_count:
-            detected_target = criteria_word_sum
-            num_items = crit_count
-        elif not detected_target and not per_item:
+        if not detected_target and not per_item:
             detected_target = constraints.get("min_words")
 
         if detected_target and detected_target > 0:
             current_val = self.words_entry.get().strip()
-            # If force=True, or current_val is default / empty / matches existing target, update words_entry
-            if force or current_val in ("1000", "500", "0", "", str(self.project.target_total_words)):
+            # If current_val is default 1000 or empty or matches current target
+            if current_val in ("1000", "", str(self.project.target_total_words)):
                 self.words_entry.delete(0, "end")
                 self.words_entry.insert(0, str(detected_target))
                 self.project.target_total_words = detected_target
 
             if num_items and per_item:
-                msg = f"✨ Detected: {num_items} points × {per_item}w each = {detected_target}w total limit (Target: ~{int(per_item * 1.1)}w each)"
-            elif criteria_with_word_limits > 0 and num_items:
-                msg = f"✨ Detected: {num_items} points = {detected_target}w total limit (Summed from rubric criteria)"
+                msg = f"✨ Detected: {num_items} points × {per_item}w/point = {detected_target}w total (Target: ~{int(per_item * 1.1)}w each)"
             else:
                 msg = f"✨ Detected: {detected_target}w requirement (Target: {detected_target}–{int(detected_target * 1.2)}w)"
             self.detected_words_label.configure(text=msg)
         elif per_item:
-            msg = f"✨ Detected: {per_item}w PER POINT (Total will be calculated once points/criteria are parsed)"
+            msg = f"✨ Detected: {per_item}w PER POINT (Total will be calculated once points/criteria are set)"
             self.detected_words_label.configure(text=msg)
 
     def _import_source_file(self):
@@ -1431,20 +1405,9 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 text="⚡ Parse Rubric into Criteria Checklist"
             )
 
-        valid_criteria = [
-            c for c in criteria
-            if not PlaygroundEngine.is_administrative_criterion(c.title, c.description)
-        ]
-        self.project.rubric_criteria = valid_criteria
-        self.stage_1_rubric_viewer.set_criteria(valid_criteria)
-        self._auto_detect_word_requirements(force=True)
-
-        if not valid_criteria:
-            messagebox.showinfo(
-                "Parsing Notice",
-                "No specific grading criteria could be extracted from the provided text.\n"
-                "You can add items manually using the '+ Add Custom Criterion' button."
-            )
+        self.project.rubric_criteria = criteria
+        self.stage_1_rubric_viewer.set_criteria(criteria)
+        self._auto_detect_word_requirements()
 
     # -------------------------------------------------------------------------
     # Stage 2: Outline Formulation & Plan

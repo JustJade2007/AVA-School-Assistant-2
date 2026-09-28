@@ -50,9 +50,14 @@ class TeacherEvaluator:
                 "criteria_evaluations": [],
             }
 
-        # Build rubric criteria string
+        # Build rubric criteria string (ignoring administrative file types & turn-in deadlines)
+        from core.playground.engine import PlaygroundEngine
+        valid_criteria = [
+            c for c in project.rubric_criteria
+            if not PlaygroundEngine.is_administrative_criterion(c.title, c.description)
+        ]
         rubric_bullets = []
-        for idx, c in enumerate(project.rubric_criteria, 1):
+        for idx, c in enumerate(valid_criteria, 1):
             score_str = f" [Target: {c.target_score}]" if c.target_score else ""
             rubric_bullets.append(f"{idx}. (ID: {c.id}) {c.title}{score_str}: {c.description}")
 

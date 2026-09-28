@@ -32,9 +32,55 @@ class PlaygroundEngine:
     def config(self):
         return self.config_manager.config if self.config_manager else None
 
+    @staticmethod
+    def is_administrative_criterion(title: str, description: str = "") -> bool:
+        """
+        Determines whether a rubric criterion or guideline specifies administrative file types
+        (e.g., .pdf, .docx, file upload format) or submission deadlines / turn-in timing
+        (e.g., due dates, turn in by Sunday 11:59 PM, late penalties).
+        The playground essay writer must ignore these points to focus purely on essay content.
+        """
+        t = f"{title} {description}".lower()
+
+        # 1. File type / format / upload specifications
+        file_type_patterns = [
+            r"\bfile\s+(?:type|format|extension|name|upload|submission)\b",
+            r"\b(?:upload|submission)\s+(?:format|type|file)\b",
+            r"\b(?:saved?|submitted?|uploaded?)\s+as\s+(?:a\s+)?(?:\.?(?:pdf|docx?|doc|rtf|txt|pages)|word\s+(?:doc|document)|file)\b",
+            r"\bformat:\s*(?:\.?(?:pdf|docx?|doc|rtf|txt)|word)\b",
+            r"\b(?:\.pdf|\.docx?|\.doc|\.rtf)\b",
+            r"\b(?:pdf|docx?|word\s+document)\s+(?:only|format|file|upload|submission)\b",
+            r"\b(?:upload|submit)\s+(?:a\s+)?(?:pdf|docx?|doc|word\s+document)\b",
+        ]
+        for pat in file_type_patterns:
+            if re.search(pat, t):
+                return True
+
+        # 2. When it should be turned in, due dates, deadlines, timestamps, and late policies
+        turnin_patterns = [
+            r"\bdue\s+(?:date|by|on|at|before|time|midnight)\b",
+            r"\bturn(?:ed)?\s*in\s+(?:by|on|at|before|date|time|late|deadline|prior|on\s+time)\b",
+            r"\bwhen\s+(?:to\s+turn\s+in|it\s+should\s+be\s+turned\s+in|it\s+is\s+due|to\s+submit)\b",
+            r"\bsubmit(?:ted)?\s+(?:by|on|at|before|prior\s+to)\s+(?:the\s+)?(?:due|deadline|midnight|\d{1,2}[:/]|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)",
+            r"\b(?:submission\s+deadline|due\s+date|turn[- ]in\s+date|submission\s+cutoff)\b",
+            r"\bdeadline\b",
+            r"\blate\s+(?:policy|penalty|submission|submissions|work|turn[- ]in|deduction)\b",
+            r"\bon[- ]time\s+submission\b",
+            r"\b(?:11:59\s*(?:pm|am)?|midnight)\b",
+            r"\btimeliness\s+of\s+submission\b",
+            r"\bpunctuality\b",
+        ]
+        for pat in turnin_patterns:
+            if re.search(pat, t):
+                return True
+
+        return False
+
     def parse_rubric(self, rubric_text: str) -> List[RubricCriterion]:
         """
         Parses raw text or OCR output of a rubric into structured RubricCriterion objects.
+        Filters out administrative requirements (file types, turn-in dates) and ensures
+        per-point word constraints (e.g. '50 words EACH') are explicitly specified.
         """
         if not rubric_text or not rubric_text.strip():
             return []
@@ -42,8 +88,14 @@ class PlaygroundEngine:
         system_prompt = (
             "You are an expert academic evaluator. Analyze the provided assignment rubric "
             "and extract each distinct grading criterion into a structured JSON list.\n\n"
+            "CRITICAL EXCLUSION OF ADMINISTRATIVE / SUBMISSION DETAILS:\n"
+            "- You MUST IGNORE AND EXCLUDE any rubric points, criteria, or guidelines that specify the FILE TYPE or file format (e.g. '.pdf', '.docx', '.doc', 'Word document', 'file format', 'upload format', 'file submission').\n"
+            "- You MUST IGNORE AND EXCLUDE any rubric points, criteria, or guidelines that specify WHEN THE ASSIGNMENT SHOULD BE TURNED IN or due dates (e.g. 'due date', 'due by', 'due on', 'turn in by', 'turn in date', 'deadline', 'submitted by 11:59 PM', 'late policy', 'submission time').\n"
+            "- Only extract substantive academic, intellectual, content, analytical, structural, mechanical, or citation criteria for the essay itself.\n"
+            "- Never output a criterion about file types or submission deadlines.\n\n"
             "CRITICAL WORD COUNT & 'WORDS PER POINT' INSTRUCTION:\n"
-            "- Pay careful attention to word limits: rubrics often state '__ words per point', '__ words per bullet', '__ words per question', or '__ words each'.\n"
+            "- Pay careful attention if the rubric states word limits per point, question, or item (e.g. '50 words EACH', '50 words per question', '50 words per point', 'at least 50 words each').\n"
+            "- You MUST explicitly specify this word requirement in the rubric! In every criterion's 'description', explicitly state: 'Word Requirement: 50 words each' (or '[X] words each').\n"
             "- Understand that this is a PER-POINT requirement for that specific item, NOT the total word count for the entire assignment!\n"
             "- Explicitly include any per-point word requirements in the criterion's 'description' (e.g. 'Must provide at least 50 words for this point').\n"
             "- Never confuse a per-point word requirement with the overall paper length.\n\n"
@@ -56,6 +108,7 @@ class PlaygroundEngine:
 
         user_prompt = f"Rubric content to analyze:\n\n{rubric_text[:6000]}"
 
+        parsed_criteria: List[RubricCriterion] = []
         try:
             if self.ai_client:
                 resp = self.ai_client.generate_text_response(
@@ -65,10 +118,9 @@ class PlaygroundEngine:
                 clean_json = re.sub(r"^```(?:json)?\s*", "", resp.strip(), flags=re.MULTILINE)
                 clean_json = re.sub(r"\s*```$", "", clean_json.strip(), flags=re.MULTILINE)
                 items = json.loads(clean_json)
-                criteria = []
                 for itm in items:
                     if isinstance(itm, dict):
-                        criteria.append(
+                        parsed_criteria.append(
                             RubricCriterion(
                                 title=itm.get("title", "Requirement"),
                                 description=itm.get("description", ""),
@@ -76,25 +128,56 @@ class PlaygroundEngine:
                                 fulfilled=False,
                             )
                         )
-                if criteria:
-                    return criteria
         except Exception as e:
             logger.warning(f"AI rubric parsing encountered error: {e}. Falling back to rule-based lines.")
 
-        # Rule-based fallback: split lines with bullet points or numbers
-        criteria = []
-        for line in rubric_text.splitlines():
-            line = line.strip()
-            if line and (line.startswith(("-", "*", "•")) or re.match(r"^\d+[\.\)]", line)):
-                clean_line = re.sub(r"^[-*•\d\.\)\s]+", "", line).strip()
-                if len(clean_line) > 5:
-                    criteria.append(
-                        RubricCriterion(
-                            title=clean_line[:40],
-                            description=clean_line,
-                            fulfilled=False,
+        if not parsed_criteria:
+            # Rule-based fallback: split lines with bullet points or numbers
+            for line in rubric_text.splitlines():
+                line = line.strip()
+                if line and (line.startswith(("-", "*", "•")) or re.match(r"^\d+[\.\)]", line)):
+                    clean_line = re.sub(r"^[-*•\d\.\)\s]+", "", line).strip()
+                    if len(clean_line) > 5:
+                        parsed_criteria.append(
+                            RubricCriterion(
+                                title=clean_line[:40],
+                                description=clean_line,
+                                fulfilled=False,
+                            )
                         )
-                    )
+
+        # 1. Strictly ignore and exclude rubric points with file types and when it should be turned in
+        criteria = [
+            c for c in parsed_criteria
+            if not self.is_administrative_criterion(c.title, c.description)
+        ]
+
+        # 2. Check if the rubric states "50 words EACH" (or per question/point/bullet)
+        constraints = WrittenSolver.extract_detailed_word_constraints(rubric_text)
+        per_item_w = constraints.get("per_item_words")
+        if not per_item_w:
+            m_each = re.search(
+                r"(?:at\s+least|minimum\s+of|minimum|min|around|approx(?:imately)?|roughly|~)?\s*(\d+)\s*words?\s*(?:each|per\s+(?:question|point|bullet|item|part|prompt)|for\s+each\s+(?:question|point|bullet|item|part|one)|each\s+(?:question|point|bullet|item|part))",
+                rubric_text,
+                re.IGNORECASE
+            )
+            if m_each:
+                per_item_w = int(m_each.group(1))
+
+        # Explicitly specify word requirement in each criterion if specified per item/point
+        if per_item_w and criteria:
+            for c in criteria:
+                c_full = f"{c.title} {c.description} {c.target_score or ''}".lower()
+                if not re.search(rf"\b{per_item_w}\s*words?\b", c_full):
+                    if c.description:
+                        c.description = f"{c.description.rstrip()} (Word requirement: {per_item_w} words each)"
+                    else:
+                        c.description = f"Word requirement: {per_item_w} words each"
+                    if not c.target_score:
+                        c.target_score = f"{per_item_w} words each"
+                    elif "words" not in c.target_score.lower():
+                        c.target_score = f"{c.target_score} ({per_item_w} words each)"
+
         return criteria
 
     def generate_outline(
@@ -107,6 +190,12 @@ class PlaygroundEngine:
         sources, and target word count. Strictly enforces rubric word counts and normalizes
         section goals to prevent AI over-estimation.
         """
+        # Filter out any administrative criteria (file types, turn-in dates)
+        project.rubric_criteria = [
+            c for c in project.rubric_criteria
+            if not self.is_administrative_criterion(c.title, c.description)
+        ]
+
         # Deeply inspect rubric criteria and raw text for overall & per-section word limits
         rubric_text_full = "\n".join([f"{c.title}: {c.description}" for c in project.rubric_criteria])
         if getattr(project, "rubric_raw_text", ""):
@@ -128,7 +217,7 @@ class PlaygroundEngine:
         multi_part_note = ""
         if constraints.get("is_multi_part") and constraints.get("per_item_words"):
             per_q = constraints["per_item_words"]
-            num_q = constraints.get("num_items") or criteria_count or 1
+            num_q = criteria_count or constraints.get("num_items") or 1
             calculated_total = per_q * num_q
             project.target_total_words = calculated_total
             multi_part_note = (
@@ -139,6 +228,9 @@ class PlaygroundEngine:
                 f"- You MUST create sections corresponding to these points, with each section having target_word_count of approximately {per_q} words.\n"
                 f"- Total document word count target is EXACTLY {calculated_total} words.\n"
             )
+        elif criteria_word_counts and len(criteria_word_counts) == len(project.rubric_criteria) and len(project.rubric_criteria) > 0:
+            calculated_total = sum(criteria_word_counts.values())
+            project.target_total_words = calculated_total
         elif constraints.get("total_min_words"):
             project.target_total_words = constraints["total_min_words"]
         elif constraints.get("min_words") and not constraints.get("per_item_words") and project.target_total_words in (1000, 500, 0):

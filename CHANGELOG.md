@@ -8,6 +8,19 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.6.a] - 2026-09-27
+
+### Added & Improved
+- **Playground Essay Writer Administrative Rubric Filtering**:
+  - **File Type & Due Date Exclusion**: Added `PlaygroundEngine.is_administrative_criterion` in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py) to automatically identify and ignore non-academic administrative guidelines (e.g. file formats such as `.pdf`, `.docx`, `.doc`, file upload requirements, as well as turn-in due dates, deadlines, timestamps, and late policies).
+  - **Hardened Extraction Prompts & Fallback Filtering**: Updated the AI rubric parsing prompt in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py) to explicitly exclude submission and administrative details, backed by automatic programmatic filtering on both AI-parsed results and rule-based text splits.
+  - **Downstream Safeguards**: In [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py), [core/playground/teacher_evaluator.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/teacher_evaluator.py), and [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py), guaranteed that outline generation, section drafting, rubric live synchronization, and teacher grading omit administrative entries and evaluate purely against substantive essay content.
+- **Per-Point Rubric Word Specification & Automatic Total Limit Summation**:
+  - **Criteria Word Requirement Specification**: When rubrics or prompts designate word constraints per point or per item (e.g. *"50 words EACH"*, *"50 words per question"*, *"50 words per point"*), `PlaygroundEngine.parse_rubric` now explicitly annotates and specifies the requirement on each criterion's description and score field.
+  - **Visual Requirement Indicators**: Enhanced [ui/playground/rubric_viewer.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/rubric_viewer.py) to render prominent word requirement badges (`📏 Requirement: 50 words each`) directly on applicable criterion cards.
+  - **Automatic Total Word Limit Summation**: In [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py), upgraded `_auto_detect_word_requirements` to inspect active criteria and sum per-point counts (e.g. 4 points × 50w each = 200w total) or mixed individual criteria targets, automatically synchronizing the document word limit entry and outline section targets.
+  - **Robust Constraint Matching**: Expanded `WrittenSolver.extract_detailed_word_constraints` in [core/written_solver.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/written_solver.py) with enhanced pattern recognition for parenthetical, slash, and direct phrasing (e.g. `50 words each such as per question or point`), administrative line exclusion during bullet counting, and single-item support.
+
 ## [2.2.5.a] - 2026-09-21
 
 ### Added & Improved

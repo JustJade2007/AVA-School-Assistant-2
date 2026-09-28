@@ -5,6 +5,7 @@ and live fulfillment indicators.
 Supports interactive editing, manual additions, and deletions of criteria.
 """
 
+import re
 import uuid
 import customtkinter as ctk
 from tkinter import messagebox
@@ -328,6 +329,17 @@ class RubricViewer(ctk.CTkFrame):
                     text_color="#a855f7",
                 )
                 score_lbl.pack(anchor="w", padx=32, pady=(0, 2))
+
+            # Prominently display per-item word requirement if specified
+            word_match = re.search(r"(\d+\s*words?\s*each|\b\d+\s*w/point\b|requirement:\s*\d+\s*words?\s*each)", f"{crit.target_score or ''} {crit.description}".lower())
+            if word_match and not (crit.target_score and "words each" in crit.target_score.lower()):
+                req_lbl = ctk.CTkLabel(
+                    c_frame,
+                    text=f"📏 Requirement: {word_match.group(1)}",
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color="#38bdf8",
+                )
+                req_lbl.pack(anchor="w", padx=32, pady=(0, 2))
 
             if crit.description:
                 desc_lbl = ctk.CTkLabel(

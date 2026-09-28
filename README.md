@@ -62,6 +62,7 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
     - **Per-Point Word Summation ('50 Words Each')**: Automatically detects per-item/per-point constraints (e.g. *50 words each*), specifies the requirement on each rubric criterion, and sums them up to the overall total assignment word limit.
     - **Outline & Rubric Criteria Mapping**: Formulate structured section-by-section outlines mapped to rubric goals with target word counts.
     - **Interactive Review & Humanizing**: Section-by-section drafting with mandatory user review checkpoints, direct inline editing, prompt refinements, and auto-polishing via **Jade's AI Humanizer**.
+    - **Quick Settings Access**: Instant access to configuration, AI model switching, Jade's AI Humanizer controls, and API keys directly from the persistent Playground header toolbar and the Home dashboard module card.
     - **Academic .docx Export**: Full compiled document preview and formatted Word export supporting MLA 9th, APA 7th, and Standard Technical Report presets.
     - **Complete Isolation**: Suspends all default solving hotkeys (`F8`, etc.) and safely minimizes/hides the HUD overlay until you return.
 13. **Zero-Token Visual Grounding (Coordinate Rulers & Set-of-Marks)**:

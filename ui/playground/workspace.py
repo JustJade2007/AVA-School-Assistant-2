@@ -95,11 +95,14 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         ai_client=None,
         config_manager=None,
         on_exit: Optional[Callable[[], None]] = None,
+        on_open_settings: Optional[Callable[[], None]] = None,
     ):
         super().__init__(master)
         self.ai_client = ai_client
         self.config_manager = config_manager
         self.on_exit = on_exit
+        self.on_open_settings = on_open_settings
+        self.settings_window = None
 
         self.project = PlaygroundProject()
         self.metadata_mgr = AcademicMetadataManager(config_manager=self.config_manager)
@@ -296,6 +299,18 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         )
         self.open_recent_menu.set("📂 Open Recent ▾")
         self.open_recent_menu.pack(side="left", padx=4)
+
+        self.settings_btn = ctk.CTkButton(
+            right_box,
+            text="⚙️ Settings",
+            command=self._open_settings_action,
+            width=88,
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#27272a",
+            hover_color="#3f3f46"
+        )
+        self.settings_btn.pack(side="left", padx=4)
 
         exit_btn = ctk.CTkButton(
             right_box,
@@ -2192,8 +2207,23 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         right_scroll = ctk.CTkScrollableFrame(right_col, fg_color="transparent")
         right_scroll.pack(fill="both", expand=True, padx=4, pady=4)
 
-        e_head = ctk.CTkLabel(right_scroll, text="⚙️ Export & Academic Review", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc")
-        e_head.pack(anchor="w", padx=12, pady=(10, 8))
+        e_head_row = ctk.CTkFrame(right_scroll, fg_color="transparent")
+        e_head_row.pack(fill="x", padx=12, pady=(10, 8))
+
+        e_head = ctk.CTkLabel(e_head_row, text="⚙️ Export & Academic Review", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc")
+        e_head.pack(side="left")
+
+        stage4_settings_btn = ctk.CTkButton(
+            e_head_row,
+            text="⚙️ Settings",
+            command=self._open_settings_action,
+            width=85,
+            height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color="#27272a",
+            hover_color="#3f3f46"
+        )
+        stage4_settings_btn.pack(side="right")
 
         # Stats summary card
         self.export_stats_frame = ctk.CTkFrame(right_scroll, fg_color="#09090b", corner_radius=8)
@@ -2714,6 +2744,47 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             self.show_step(1)
         except Exception as e:
             messagebox.showerror("Open Error", f"Failed to load project file:\n{e}")
+
+    # -------------------------------------------------------------------------
+    # Settings & Configuration
+    # -------------------------------------------------------------------------
+
+    def _open_settings_action(self):
+        """Opens or focuses the Settings Dashboard from Playground Mode."""
+        if self.on_open_settings:
+            self.on_open_settings()
+            return
+
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            self.settings_window.focus_force()
+            return
+
+        from ui.settings_view import SettingsWindow
+        self.settings_window = SettingsWindow(
+            master=self,
+            config_manager=self.config_manager,
+            on_save_callback=self._on_settings_saved
+        )
+        apply_window_icon(self.settings_window)
+        self.settings_window.lift()
+        self.settings_window.focus_force()
+
+    def _on_settings_saved(self):
+        """Refreshes humanizer bridge, models, and cloaking settings in Playground."""
+        logger.info("Settings saved. Synchronizing Playground configuration & humanizer bridge...")
+        if self.config:
+            self.humanizer_bridge = PlaygroundHumanizerBridge(
+                api_key=self.config.gemini_api_key or self.config.api_key if self.config else "",
+                model_name=self.config.written_model_name if self.config else "gemini-3.5-flash-lite",
+                default_tone=self.config.humanizer_tone if self.config else "academic",
+                default_level=self.config.humanizer_reading_level if self.config else "college",
+                default_mode=self.config.humanizer_mode if self.config else "budget",
+            )
+            if hasattr(self, "is_cloaked") and self.is_cloaked != self.config.anti_capture_enabled:
+                self.is_cloaked = self.config.anti_capture_enabled
+                apply_anti_capture(self, enable=self.is_cloaked)
+                self._update_cloak_button()
 
     # -------------------------------------------------------------------------
     # Lifecycle & Exit

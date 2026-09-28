@@ -259,7 +259,9 @@ class HomeDashboard(ctk.CTkToplevel):
             features=["🎯 Rubric Parser & Checklist Editor", "🌐 Web & YouTube Source Ingestion", "📄 MLA / APA Word Document Export"],
             button_text="✨ Launch Playground Studio",
             button_color=("#7c3aed", "#6d28d9"),
-            command=self._launch_playground_action
+            command=self._launch_playground_action,
+            secondary_button_text="⚙️ Settings",
+            secondary_command=self._open_settings_action,
         )
 
         # Card 3: Settings & Preferences
@@ -309,7 +311,9 @@ class HomeDashboard(ctk.CTkToplevel):
         button_text: str,
         button_color: tuple,
         command: Optional[Callable],
-        is_disabled: bool = False
+        is_disabled: bool = False,
+        secondary_button_text: Optional[str] = None,
+        secondary_command: Optional[Callable] = None,
     ):
         card = ctk.CTkFrame(
             parent,
@@ -376,20 +380,49 @@ class HomeDashboard(ctk.CTkToplevel):
             )
             f_lbl.pack(anchor="w", pady=1)
 
-        # Card Action Button
+        # Card Action Buttons
         btn_fg, btn_hover = button_color
         state = "disabled" if is_disabled else "normal"
-        action_btn = ctk.CTkButton(
-            inner,
-            text=button_text,
-            command=command,
-            height=38,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color=btn_fg,
-            hover_color=btn_hover,
-            state=state
-        )
-        action_btn.pack(fill="x", side="bottom")
+        if secondary_button_text and secondary_command:
+            btn_row = ctk.CTkFrame(inner, fg_color="transparent")
+            btn_row.pack(fill="x", side="bottom")
+
+            action_btn = ctk.CTkButton(
+                btn_row,
+                text=button_text,
+                command=command,
+                height=38,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color=btn_fg,
+                hover_color=btn_hover,
+                state=state
+            )
+            action_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+            sec_btn = ctk.CTkButton(
+                btn_row,
+                text=secondary_button_text,
+                command=secondary_command,
+                height=38,
+                width=88,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color="#27272a",
+                hover_color="#3f3f46",
+                text_color="#f8fafc"
+            )
+            sec_btn.pack(side="right")
+        else:
+            action_btn = ctk.CTkButton(
+                inner,
+                text=button_text,
+                command=command,
+                height=38,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color=btn_fg,
+                hover_color=btn_hover,
+                state=state
+            )
+            action_btn.pack(fill="x", side="bottom")
 
     # -------------------------------------------------------------------------
     # Footer Section

@@ -235,7 +235,8 @@ class AVASchoolAssistantApp:
                 master=self.root,
                 ai_client=self.engine.ai_client,
                 config_manager=self.config_manager,
-                on_exit=self.return_to_home
+                on_exit=self.return_to_home,
+                on_open_settings=self.open_settings
             )
             apply_window_icon(self.playground_window)
             self.playground_window.lift()
@@ -262,11 +263,16 @@ class AVASchoolAssistantApp:
             self.settings_window.focus_force()
             return
 
+        parent_window = self.playground_window if (self.playground_window and self.playground_window.winfo_exists()) else self.root
+
         self.settings_window = SettingsWindow(
-            master=self.root,
+            master=parent_window,
+            config_manager=self.config_manager,
             on_save_callback=self._on_settings_saved
         )
         apply_window_icon(self.settings_window)
+        self.settings_window.lift()
+        self.settings_window.focus_force()
 
     def _on_settings_saved(self):
         """Re-applies hotkeys and UI settings when user updates configuration."""
@@ -278,6 +284,9 @@ class AVASchoolAssistantApp:
             if hasattr(self.hud_window, "set_header_icon_size"):
                 self.hud_window.set_header_icon_size(getattr(self.config, "header_icon_size", 11))
             self.hud_window.refresh_hotkey_labels()
+        if self.playground_window and self.playground_window.winfo_exists():
+            if hasattr(self.playground_window, "_on_settings_saved"):
+                self.playground_window._on_settings_saved()
             self.hud_window.mode_badge.configure(
                 text="REVIEW MODE" if not self.config.autonomous_mode else "AUTO MODE"
             )

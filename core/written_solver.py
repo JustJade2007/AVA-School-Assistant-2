@@ -147,10 +147,17 @@ class WrittenSolver:
                 if item_count and item_count >= 1:
                     num_q = item_count
                 else:
-                    # Check if prompt mentions a count like "5 questions" or "4 points" anywhere in text
-                    m_count = re.search(rf"(\d+)\s*(?:[a-zA-Z]+\s+)?{ITEM_PLURALS}", t)
-                    if m_count and int(m_count.group(1)) > 1:
-                        num_q = int(m_count.group(1))
+                    # Check if prompt mentions a count like "5 questions", "3 points", or "three points" anywhere in text
+                    word_num_map = {
+                        "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+                        "seven": 7, "eight": 8, "nine": 9, "ten": 10
+                    }
+                    m_count = re.search(rf"\b(two|three|four|five|six|seven|eight|nine|ten|\d+)\s*(?:[a-zA-Z]+\s+)?{ITEM_PLURALS}", t, re.IGNORECASE)
+                    if m_count:
+                        val_str = m_count.group(1).lower()
+                        c_val = word_num_map.get(val_str) or (int(val_str) if val_str.isdigit() else None)
+                        if c_val and c_val > 1:
+                            num_q = c_val
                     else:
                         # Check if prompt explicitly enumerates questions or bullet points, excluding administrative lines
                         numbered = re.findall(r"(?:^|\n)\s*(?:\d+[\.\)]|[-*•])\s+([^\n]+)", t)

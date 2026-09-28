@@ -8,6 +8,20 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.9.a] - 2026-09-27
+
+### Fixed & Enhanced
+- **Rubric Criterion Decomposition for Multi-Item Prompts**:
+  - **Individual Criteria Cards for Multi-Point Prompts**: Resolved an issue where questions requesting multiple items (e.g. *"Identify and explain the three most important points you hope to master"*) were aggregated into a single lumped criterion card. Implemented `_expand_multi_item_criteria` in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py) to automatically detect and decompose lumped multi-item requests into $N$ distinct criteria (e.g. *Point 1 to Master*, *Point 2 to Master*, *Point 3 to Master*), giving each point its own checklist item and requirement tracking.
+  - **Hardened Extraction Prompting**: Instructed the Gemini rubric extraction prompt to always emit separate criteria items when an assignment prompt requires multiple concepts, questions, or points.
+  - **Smart Fallback Expansion**: Enhanced `_smart_fallback_parse_rubric` to identify multi-item numerical patterns (`three points`, `3 concepts`, `4 questions`) and generate individual criteria cards directly during offline or fallback parsing.
+- **Score / Weight Field Sanitization & Word Limit Separation**:
+  - **Eliminated Word Limit Leakage into Weights**: Fixed a regression where word count constraints (e.g. *"50 words min (Pass/Fail)"* or *"50 words each"*) were being populated into the `target_score` (Points / Weight) field.
+  - **Score Sanitization Utility**: Added `PlaygroundEngine._clean_target_score` in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py) to rigorously strip word count artifacts from grade weights while preserving legitimate grading criteria (e.g. `5 pts`, `5 pts (Pass/Fail)`, `Pass/Fail`).
+  - **UI Display & Modal Sanitization**: In [ui/playground/rubric_viewer.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/rubric_viewer.py), updated `CriterionEditModal` and `render_criteria` to sanitize `target_score` values, ensuring word count requirements are displayed exclusively on dedicated requirement badges and in the guidelines description.
+- **English Number Word Support in Word Constraint Parser**:
+  - In [core/written_solver.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/written_solver.py), updated `extract_detailed_word_constraints` to parse word numerals (`two`, `three`, `four`, etc.) in phrases like *"three most important points"*, accurately calculating total document word requirements (e.g. 3 × 50w = 150w min).
+
 ## [2.2.8.a] - 2026-09-27
 
 ### Fixed & Enhanced

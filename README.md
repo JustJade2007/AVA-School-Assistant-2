@@ -58,7 +58,7 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
    - Control the assistant from anywhere on your system, even while other browser or desktop windows are focused.
 12. **Playground Mode (Long-Form Project Studio)**:
     - Dedicated semi-automated workspace designed for longer writing assignments, essays, capstone projects, and research papers.
-    - **Rubric Ingestion & Administrative Filtering**: Screen-snip rubrics directly or upload files (`.pdf`, `.docx`, `.doc`, `.txt`) and free-form notes. AI automatically extracts grading criteria into an interactive checklist while cleanly ignoring administrative file types (`.pdf`, `.docx`, file format) and turn-in deadlines/due dates.
+    - **Rubric Ingestion & Administrative Filtering**: Screen-snip rubrics directly or upload files (`.pdf`, `.docx`, `.doc`, `.txt`) and free-form notes. High-accuracy **Gemini 3.1 Flash-Lite** (`gemini-3.1-flash-lite`) intelligence extracts grading criteria into an interactive checklist while cleanly ignoring administrative file types (`.pdf`, `.docx`, file format) and turn-in deadlines/due dates.
     - **Per-Point Word Summation ('50 Words Each')**: Automatically detects per-item/per-point constraints (e.g. *50 words each*), specifies the requirement on each rubric criterion, and sums them up to the overall total assignment word limit.
     - **Outline & Rubric Criteria Mapping**: Formulate structured section-by-section outlines mapped to rubric goals with target word counts.
     - **Interactive Review & Humanizing**: Section-by-section drafting with mandatory user review checkpoints, direct inline editing, prompt refinements, and auto-polishing via **Jade's AI Humanizer**.

@@ -63,12 +63,14 @@ class PlaygroundEngine:
             r"\bwhen\s+(?:to\s+turn\s+in|it\s+should\s+be\s+turned\s+in|it\s+is\s+due|to\s+submit)\b",
             r"\bsubmit(?:ted)?\s+(?:by|on|at|before|prior\s+to)\s+(?:the\s+)?(?:due|deadline|midnight|\d{1,2}[:/]|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)",
             r"\b(?:submission\s+deadline|due\s+date|turn[- ]in\s+date|submission\s+cutoff)\b",
-            r"\bdeadline\b",
+            r"\b(?:assignment|submission|paper|project)\s+deadline\b",
+            r"\bdeadline\s+for\s+(?:submission|submitting|turning\s+in|turn[- ]in)\b",
+            r"\bdeadline:\s*\w+\b",
             r"\blate\s+(?:policy|penalty|submission|submissions|work|turn[- ]in|deduction)\b",
             r"\bon[- ]time\s+submission\b",
-            r"\b(?:11:59\s*(?:pm|am)?|midnight)\b",
+            r"\b(?:11:59\s*(?:pm|am)?|midnight\s+deadline)\b",
             r"\btimeliness\s+of\s+submission\b",
-            r"\bpunctuality\b",
+            r"\bpunctuality\s+of\s+submission\b",
         ]
         for pat in turnin_patterns:
             if re.search(pat, t):
@@ -76,9 +78,57 @@ class PlaygroundEngine:
 
         return False
 
+    @staticmethod
+    def _extract_json_items(text: str) -> List[Dict[str, Any]]:
+        """Safely parses JSON list of items from LLM text with resilience against markdown or wrapping."""
+        cleaned = text.strip()
+        # Remove markdown fences
+        if "```" in cleaned:
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
+            cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE).strip()
+
+        # Try direct parse
+        try:
+            val = json.loads(cleaned)
+            if isinstance(val, list):
+                return val
+            if isinstance(val, dict):
+                for k in ("criteria", "rubric", "items", "rubric_criteria", "requirements"):
+                    if isinstance(val.get(k), list):
+                        return val[k]
+                return [val]
+        except Exception:
+            pass
+
+        # Try regex search for outermost array [ ... ]
+        match_arr = re.search(r"\[[\s\S]*\]", text)
+        if match_arr:
+            try:
+                val = json.loads(match_arr.group(0))
+                if isinstance(val, list):
+                    return val
+            except Exception:
+                pass
+
+        # Try regex search for outermost object { ... }
+        match_obj = re.search(r"\{[\s\S]*\}", text)
+        if match_obj:
+            try:
+                val = json.loads(match_obj.group(0))
+                if isinstance(val, dict):
+                    for k in ("criteria", "rubric", "items", "rubric_criteria", "requirements"):
+                        if isinstance(val.get(k), list):
+                            return val[k]
+                    return [val]
+            except Exception:
+                pass
+
+        return []
+
     def parse_rubric(self, rubric_text: str) -> List[RubricCriterion]:
         """
         Parses raw text or OCR output of a rubric into structured RubricCriterion objects.
+        Explicitly uses Gemini 3.1 Flash-Lite (gemini-3.1-flash-lite) for high accuracy rubric analysis.
         Filters out administrative requirements (file types, turn-in dates) and ensures
         per-point word constraints (e.g. '50 words EACH') are explicitly specified.
         """
@@ -108,22 +158,39 @@ class PlaygroundEngine:
 
         user_prompt = f"Rubric content to analyze:\n\n{rubric_text[:6000]}"
 
+        ai = self.ai_client
+        if not ai and self.config:
+            from core.ai_client import AIClient
+            api_key = self.config.gemini_api_key or self.config.api_key
+            if api_key:
+                ai = AIClient(
+                    api_key=api_key,
+                    provider=getattr(self.config, "ai_provider", "gemini"),
+                    model_name="gemini-3.1-flash-lite",
+                )
+
         parsed_criteria: List[RubricCriterion] = []
         try:
-            if self.ai_client:
-                resp = self.ai_client.generate_text_response(
+            if ai:
+                # Ensure rubric parsing specifically targets Gemini 3.1 Flash-Lite
+                rubric_model = "gemini-3.1-flash-lite" if getattr(ai, "provider", "gemini") == "gemini" else None
+                resp = ai.generate_text_response(
                     prompt=user_prompt,
                     system_instruction=system_prompt,
+                    model_override=rubric_model,
+                    temperature=0.2,
                 )
-                clean_json = re.sub(r"^```(?:json)?\s*", "", resp.strip(), flags=re.MULTILINE)
-                clean_json = re.sub(r"\s*```$", "", clean_json.strip(), flags=re.MULTILINE)
-                items = json.loads(clean_json)
+                items = self._extract_json_items(resp)
                 for itm in items:
                     if isinstance(itm, dict):
+                        title = str(itm.get("title", "Requirement")).strip()
+                        desc = str(itm.get("description", "")).strip()
+                        if self.is_administrative_criterion(title, desc):
+                            continue
                         parsed_criteria.append(
                             RubricCriterion(
-                                title=itm.get("title", "Requirement"),
-                                description=itm.get("description", ""),
+                                title=title,
+                                description=desc,
                                 target_score=itm.get("target_score"),
                                 fulfilled=False,
                             )
@@ -137,7 +204,7 @@ class PlaygroundEngine:
                 line = line.strip()
                 if line and (line.startswith(("-", "*", "•")) or re.match(r"^\d+[\.\)]", line)):
                     clean_line = re.sub(r"^[-*•\d\.\)\s]+", "", line).strip()
-                    if len(clean_line) > 5:
+                    if len(clean_line) > 5 and not self.is_administrative_criterion(clean_line, clean_line):
                         parsed_criteria.append(
                             RubricCriterion(
                                 title=clean_line[:40],
@@ -292,9 +359,7 @@ class PlaygroundEngine:
                     prompt=user_prompt,
                     system_instruction=system_prompt,
                 )
-                clean_json = re.sub(r"^```(?:json)?\s*", "", resp.strip(), flags=re.MULTILINE)
-                clean_json = re.sub(r"\s*```$", "", clean_json.strip(), flags=re.MULTILINE)
-                data = json.loads(clean_json)
+                data = self._extract_json_items(resp)
                 sections = []
                 for item in data:
                     if isinstance(item, dict):

@@ -8,6 +8,14 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.10.a] - 2026-09-27
+
+### Reverted & Restored
+- **Rubric Detection & Parsing Reversion**:
+  - **Reverted Per-Point Word Overhaul**: Reverted the rubric parser in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py), [core/written_solver.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/written_solver.py), and [ui/playground/rubric_viewer.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/rubric_viewer.py) to the original, stable baseline prior to the "per __" detection modifications.
+  - **Clean Criteria Extraction**: Removed synthetic multi-item decomposition, administrative filtering heuristics, and word-limit injections into `target_score` fields.
+  - **Restored Standard Checklist & Viewer**: Restored standard checklist item creation and simple word requirement detection in [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py) and [ui/playground/rubric_viewer.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/rubric_viewer.py).
+
 ## [2.2.9.a] - 2026-09-27
 
 ### Fixed & Enhanced

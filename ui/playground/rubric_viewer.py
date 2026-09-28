@@ -5,12 +5,11 @@ and live fulfillment indicators.
 Supports interactive editing, manual additions, and deletions of criteria.
 """
 
-import re
 import uuid
 import customtkinter as ctk
+from tkinter import messagebox
 from typing import List, Callable, Optional
 from core.playground.project_model import RubricCriterion
-from core.playground.engine import PlaygroundEngine
 
 
 class CriterionEditModal(ctk.CTkToplevel):
@@ -83,9 +82,7 @@ class CriterionEditModal(ctk.CTkToplevel):
         )
         self.score_entry.pack(fill="x", pady=(0, 10))
         if self.criterion and self.criterion.target_score:
-            clean_score = PlaygroundEngine._clean_target_score(self.criterion.target_score)
-            if clean_score:
-                self.score_entry.insert(0, clean_score)
+            self.score_entry.insert(0, self.criterion.target_score)
 
         # Detailed Description
         ctk.CTkLabel(
@@ -323,26 +320,14 @@ class RubricViewer(ctk.CTkFrame):
 
             cb.pack(side="left", fill="x", expand=True)
 
-            clean_score = PlaygroundEngine._clean_target_score(crit.target_score)
-            if clean_score:
+            if crit.target_score:
                 score_lbl = ctk.CTkLabel(
                     c_frame,
-                    text=f"Score / Weight: {clean_score}",
+                    text=f"Score / Weight: {crit.target_score}",
                     font=ctk.CTkFont(size=10, weight="bold"),
                     text_color="#a855f7",
                 )
                 score_lbl.pack(anchor="w", padx=32, pady=(0, 2))
-
-            # Prominently display per-item word requirement if specified in description or raw target_score
-            word_match = re.search(r"(\d+\s*words?\s*(?:each|min(?:imum)?|max(?:imum)?)?|\b\d+\s*w/point\b|requirement:\s*\d+\s*words?\s*each)", f"{crit.description} {crit.target_score or ''}".lower())
-            if word_match and not (clean_score and "words" in clean_score.lower()):
-                req_lbl = ctk.CTkLabel(
-                    c_frame,
-                    text=f"📏 Requirement: {word_match.group(1)}",
-                    font=ctk.CTkFont(size=10, weight="bold"),
-                    text_color="#38bdf8",
-                )
-                req_lbl.pack(anchor="w", padx=32, pady=(0, 2))
 
             if crit.description:
                 desc_lbl = ctk.CTkLabel(

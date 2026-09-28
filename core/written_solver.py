@@ -63,16 +63,6 @@ class WrittenSolver:
             self.humanizer = Humanizer(mock_mode=True)
 
     @classmethod
-    def _is_administrative_line(cls, line: str) -> bool:
-        """Checks if a prompt or rubric line specifies administrative file types or turn-in deadlines."""
-        t = line.lower()
-        if re.search(r"\b(?:file\s+(?:type|format|extension|upload)|upload\s+(?:format|as)|format:\s*(?:\.?(?:pdf|docx?|doc)|word)|\.(?:pdf|docx?|doc))\b", t):
-            return True
-        if re.search(r"\b(?:due\s+(?:date|by|on|at|before|time|midnight)|turn(?:ed)?\s*in\s+(?:by|on|at|before|date|time|late|deadline|on\s+time)|deadline|late\s+(?:policy|penalty|submission|work))\b", t):
-            return True
-        return False
-
-    @classmethod
     def extract_detailed_word_constraints(
         cls,
         prompt_text: str,
@@ -109,9 +99,9 @@ class WrittenSolver:
         ITEM_PLURALS = r"(?:questions?|parts?|items?|prompts?|points?|bullets?|criteria|criterions?|sections?|topics?)"
 
         # 1. Multi-part / per-item:
-        # 1A: '50 words each for the 5 questions', '50 words each such as per question or point', '50 words per point', 'at least 50 words per point'
+        # 1A: '50 words each for the 5 questions', '50 words per point', 'at least 50 words per point'
         m_each = re.search(
-            rf"(?:at\s+least|minimum\s+of|minimum|min|around|approx(?:imately)?|roughly|~)?\s*(\d+)\s*words?\s*(?:each|per\s+{ITEM_KWS}|for\s+each\s+(?:{ITEM_KWS}|one)|each\s+{ITEM_KWS}|/\s*{ITEM_KWS})(?:\s+(?:minimum|min|at\s+least))?(?:\s*(?:,|such\s+as)?\s*(?:per\s+{ITEM_KWS}|for\s+each\s+{ITEM_KWS}|each\s+{ITEM_KWS}))?(?:\s+(?:for|of)\s+(?:the\s+)?(\d+)\s*{ITEM_PLURALS})?",
+            rf"(?:at\s+least|minimum\s+of|minimum|min|around|approx(?:imately)?|roughly|~)?\s*(\d+)\s*words?\s*(?:each|per\s+{ITEM_KWS}|for\s+each\s+(?:{ITEM_KWS}|one))(?:\s+(?:for|of)\s+(?:the\s+)?(\d+)\s*{ITEM_PLURALS})?",
             t
         )
 
@@ -119,7 +109,7 @@ class WrittenSolver:
         m_each_first = None
         if not m_each:
             m_each_first = re.search(
-                rf"(?:for\s+)?each\s+{ITEM_KWS}[^.\n]*?(?:at\s+least|minimum\s+of|minimum|min|around|approx(?:imately)?|roughly|write(?:\s+(?:a\s+)?)|be(?:\s+at\s+least)?)\s*(\d+)\s*words?",
+                rf"(?:for\s+)?each\s+{ITEM_KWS}[^.\n]*?(?:at\s+least|minimum\s+of|minimum|min|around|approx(?:imately)?|roughly|write(?:\s+(?:a\s+)?))?\s*(\d+)\s*words?",
                 t
             )
 
@@ -144,30 +134,22 @@ class WrittenSolver:
 
             if not num_q:
                 # If caller provided an item count (e.g. number of criteria in the rubric)
-                if item_count and item_count >= 1:
+                if item_count and item_count > 1:
                     num_q = item_count
                 else:
-                    # Check if prompt mentions a count like "5 questions", "3 points", or "three points" anywhere in text
-                    word_num_map = {
-                        "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-                        "seven": 7, "eight": 8, "nine": 9, "ten": 10
-                    }
-                    m_count = re.search(rf"\b(two|three|four|five|six|seven|eight|nine|ten|\d+)\s*(?:[a-zA-Z]+\s+)?{ITEM_PLURALS}", t, re.IGNORECASE)
-                    if m_count:
-                        val_str = m_count.group(1).lower()
-                        c_val = word_num_map.get(val_str) or (int(val_str) if val_str.isdigit() else None)
-                        if c_val and c_val > 1:
-                            num_q = c_val
+                    # Check if prompt mentions a count like "5 questions" or "4 points" anywhere in text
+                    m_count = re.search(rf"(\d+)\s*(?:[a-zA-Z]+\s+)?{ITEM_PLURALS}", t)
+                    if m_count and int(m_count.group(1)) > 1:
+                        num_q = int(m_count.group(1))
                     else:
-                        # Check if prompt explicitly enumerates questions or bullet points, excluding administrative lines
-                        numbered = re.findall(r"(?:^|\n)\s*(?:\d+[\.\)]|[-*•])\s+([^\n]+)", t)
-                        valid_numbered = [l for l in numbered if not cls._is_administrative_line(l)]
-                        if len(valid_numbered) >= 1:
-                            num_q = len(valid_numbered)
+                        # Check if prompt explicitly enumerates questions or bullet points
+                        numbered = re.findall(r"(?:^|\n)\s*(?:\d+[\.\)]|[-*•])\s+", t)
+                        if len(numbered) >= 2:
+                            num_q = len(numbered)
                         elif item_count and item_count >= 1:
                             num_q = item_count
 
-            if num_q and num_q >= 1:
+            if num_q and num_q > 1:
                 total_min = per_w * num_q
                 return {
                     "min_words": total_min,
@@ -241,14 +223,10 @@ class WrittenSolver:
                 "is_multi_part": False,
             }
 
-        # 6. Direct command, parenthetical, or hyphenated: 'in 50 words', '(50 words)', '[50 words]', '50-word response'
-        m_direct = re.search(r"(?:write\s+(?:a\s+)?|in\s+|target:\s*|requirement:\s*|[\(\[])\s*(\d+)\s*words?\b", t)
+        # 6. Direct command or hyphenated: 'in 50 words', 'write 50 words', '50-word response'
+        m_direct = re.search(r"(?:write\s+(?:a\s+)?|in\s+)(\d+)\s*words?\b", t)
         if not m_direct:
             m_direct = re.search(r"\b(\d+)\s*-\s*words?\b", t)
-        if not m_direct:
-            m_stand = re.search(r"\b(\d+)\s*words?\b", t)
-            if m_stand and int(m_stand.group(1)) >= 10:
-                m_direct = m_stand
         if m_direct:
             w = int(m_direct.group(1))
             return {

@@ -676,7 +676,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.rubric_raw_textbox.insert("1.0", "Paste rubric text here or use Screen-Snip / Upload...")
         self.rubric_raw_textbox.bind("<KeyRelease>", lambda e: self._auto_detect_word_requirements())
 
-        parse_btn = ctk.CTkButton(
+        self.stage_1_parse_btn = ctk.CTkButton(
             right_col,
             text="⚡ Parse Rubric into Criteria Checklist",
             command=self._parse_rubric_action,
@@ -685,7 +685,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             fg_color="#2563eb",
             hover_color="#1d4ed8"
         )
-        parse_btn.pack(fill="x", padx=16, pady=(0, 8))
+        self.stage_1_parse_btn.pack(fill="x", padx=16, pady=(0, 8))
 
         # Embedded Checklist Viewer
         self.stage_1_rubric_viewer = RubricViewer(
@@ -1361,16 +1361,49 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
 
     def _parse_rubric_action(self):
         text = self.rubric_raw_textbox.get("1.0", "end").strip()
-        if not text:
+        if not text or text == "Paste rubric text here or use Screen-Snip / Upload...":
+            messagebox.showinfo("Rubric Text Required", "Please enter or paste your assignment prompt or rubric text before parsing.")
             return
 
+        # Check if API key is configured for AI rubric analysis
+        active_client = self.engine.active_ai_client
+        has_api_key = bool(active_client and active_client.api_key)
+        if not has_api_key:
+            open_settings = messagebox.askyesno(
+                "API Key Recommended",
+                "No AI API key is configured.\n\n"
+                "AI parsing with Gemini 3.1 Flash-Lite accurately extracts checklist criteria, questions, and word counts.\n\n"
+                "Would you like to open Settings now to enter your API key?\n\n"
+                "(Click 'No' to continue with offline rule-based detection)"
+            )
+            if open_settings:
+                self._open_settings()
+                return
+
+        if hasattr(self, "stage_1_parse_btn"):
+            self.stage_1_parse_btn.configure(
+                state="disabled",
+                text="⏳ Parsing with Gemini 3.1 Flash-Lite..." if has_api_key else "⏳ Parsing with Offline Rules..."
+            )
+
         def task():
-            criteria = self.engine.parse_rubric(text)
-            self.after(0, lambda: self._finish_rubric_parse(criteria))
+            try:
+                criteria = self.engine.parse_rubric(text)
+            except Exception as e:
+                logger.error(f"Error parsing rubric: {e}")
+                criteria = []
+            finally:
+                self.after(0, lambda: self._finish_rubric_parse(criteria))
 
         threading.Thread(target=task, daemon=True).start()
 
     def _finish_rubric_parse(self, criteria: List[RubricCriterion]):
+        if hasattr(self, "stage_1_parse_btn"):
+            self.stage_1_parse_btn.configure(
+                state="normal",
+                text="⚡ Parse Rubric into Criteria Checklist"
+            )
+
         valid_criteria = [
             c for c in criteria
             if not PlaygroundEngine.is_administrative_criterion(c.title, c.description)
@@ -1378,6 +1411,13 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.project.rubric_criteria = valid_criteria
         self.stage_1_rubric_viewer.set_criteria(valid_criteria)
         self._auto_detect_word_requirements(force=True)
+
+        if not valid_criteria:
+            messagebox.showinfo(
+                "Parsing Notice",
+                "No specific grading criteria could be extracted from the provided text.\n"
+                "You can add items manually using the '+ Add Custom Criterion' button."
+            )
 
     # -------------------------------------------------------------------------
     # Stage 2: Outline Formulation & Plan
@@ -2771,12 +2811,26 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.settings_window.focus_force()
 
     def _on_settings_saved(self):
-        """Refreshes humanizer bridge, models, and cloaking settings in Playground."""
+        """Refreshes AI clients, humanizer bridge, models, and cloaking settings in Playground."""
         logger.info("Settings saved. Synchronizing Playground configuration & humanizer bridge...")
         if self.config:
+            from core.ai_client import AIClient
+            provider = getattr(self.config, "provider", "gemini")
+            api_key = self.config.get_api_key_for_provider(provider) if hasattr(self.config, "get_api_key_for_provider") else (getattr(self.config, "gemini_api_key", "") or getattr(self.config, "api_key", ""))
+            written_model = getattr(self.config, "written_model_name", "gemini-3.1-flash-lite")
+
+            fresh_client = AIClient(
+                provider=provider,
+                api_key=api_key,
+                model_name=written_model
+            )
+            self.ai_client = fresh_client
+            self.engine.ai_client = fresh_client
+            self.teacher_evaluator.ai_client = fresh_client
+
             self.humanizer_bridge = PlaygroundHumanizerBridge(
-                api_key=self.config.gemini_api_key or self.config.api_key if self.config else "",
-                model_name=self.config.written_model_name if self.config else "gemini-3.5-flash-lite",
+                api_key=api_key,
+                model_name=written_model,
                 default_tone=self.config.humanizer_tone if self.config else "academic",
                 default_level=self.config.humanizer_reading_level if self.config else "college",
                 default_mode=self.config.humanizer_mode if self.config else "budget",

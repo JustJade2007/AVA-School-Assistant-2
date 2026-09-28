@@ -32,8 +32,23 @@ if exist ".venv\Scripts\pyinstaller.exe" (
 
 if "%PYINSTALLER_EXE%"=="" set "PYINSTALLER_EXE=pyinstaller"
 
+REM Preserve user configuration in dist if present
+set "CONFIG_BACKED_UP=0"
+if exist "dist\config.json" (
+    copy /y "dist\config.json" "%TEMP%\ava_dist_config_backup.json" >nul 2>&1
+    set "CONFIG_BACKED_UP=1"
+)
+
 REM Route temporary work files to %TEMP% to prevent OneDrive sync file-locking
 "%PYINSTALLER_EXE%" AVA_School_Assistant_2.spec --workpath "%TEMP%\ava_build" --clean --noconfirm
+
+REM Restore preserved user configuration in dist
+if "%CONFIG_BACKED_UP%"=="1" (
+    if exist "%TEMP%\ava_dist_config_backup.json" (
+        copy /y "%TEMP%\ava_dist_config_backup.json" "dist\config.json" >nul 2>&1
+        del "%TEMP%\ava_dist_config_backup.json" >nul 2>&1
+    )
+)
 
 if %ERRORLEVEL% equ 0 (
     echo.

@@ -8,6 +8,22 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.7.a] - 2026-09-27
+
+### Fixed & Enhanced
+- **Playground Dynamic AI Client Synchronization**:
+  - **Live Credential Refresh**: In [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py), updated `_on_settings_saved` to dynamically re-instantiate `AIClient` and refresh `self.ai_client`, `self.engine.ai_client`, and `self.teacher_evaluator.ai_client` with updated API keys and model parameters immediately when saved.
+  - **Dynamic Engine Fallback Client**: In [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py), introduced `active_ai_client` property to retrieve fresh API keys directly from `config.get_api_key_for_provider(...)` even if the engine was initially instantiated with an empty client.
+- **Intelligent Rubric & Assignment Parsing Fallback**:
+  - **Smart Offline Prompt Extraction**: Replaced crude 40-character line-slicing fallback with `_smart_fallback_parse_rubric` in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py), which extracts full substantive questions, prompts, and grading requirements while synthesizing clean titles and complete descriptions.
+  - **Boilerplate & Point Header Suppression**: Enhanced `is_administrative_criterion` and smart parsing to exclude point headers (e.g. `Points 5`, `Score: 10`) and LMS navigation instructions (e.g. `must be completed before moving forward`, `review the module learning outcomes`), preventing truncated fragments from cluttering criteria cards.
+- **UI API Key Prompt & Parse Button Progress Feedback**:
+  - **User-Friendly Setup Prompt**: In [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py), `_parse_rubric_action` now verifies whether an API key is configured before initiating parsing. If missing, it offers an immediate one-click prompt to open Settings.
+  - **Visual Button State**: Updated parse button to display active progress (`⏳ Parsing with Gemini 3.1 Flash-Lite...`) during processing and cleanly re-enable once checklist population finishes.
+- **Build & Executable Configuration Resilience**:
+  - **Config Preservation in Build Script**: Updated [build_exe.bat](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/build_exe.bat) to preserve `dist/config.json` across `--clean` PyInstaller builds by backing it up and restoring it automatically.
+  - **Directory Resolution**: Improved `get_base_directory()` in [config.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/config.py) to inspect immediate parent directories when running in frozen mode from `dist/`.
+
 ## [2.2.6.a] - 2026-09-27
 
 ### Added & Improved

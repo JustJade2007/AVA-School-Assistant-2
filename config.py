@@ -23,10 +23,13 @@ def get_base_directory() -> str:
     # If running frozen (PyInstaller executable)
     if getattr(sys, "frozen", False):
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
-        # If running from dist/AVA_School_Assistant_2/, check if parent repository has config.json or main.py
-        parent_dir = os.path.dirname(os.path.dirname(exe_dir))
-        if os.path.exists(os.path.join(parent_dir, "config.json")) or os.path.exists(os.path.join(parent_dir, "main.py")):
-            return parent_dir
+        # If running from dist/ or dist/app_name/, check parent repositories for config.json or main.py
+        parent_1 = os.path.dirname(exe_dir)
+        if os.path.exists(os.path.join(parent_1, "config.json")) or os.path.exists(os.path.join(parent_1, "main.py")):
+            return parent_1
+        parent_2 = os.path.dirname(parent_1)
+        if os.path.exists(os.path.join(parent_2, "config.json")) or os.path.exists(os.path.join(parent_2, "main.py")):
+            return parent_2
         # If running from current working directory
         cwd = os.path.abspath(os.getcwd())
         if os.path.exists(os.path.join(cwd, "config.json")) or os.path.exists(os.path.join(cwd, "config.default.json")):

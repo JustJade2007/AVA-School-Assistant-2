@@ -32,17 +32,51 @@ class PlaygroundEngine:
     def config(self):
         return self.config_manager.config if self.config_manager else None
 
+    @property
+    def active_ai_client(self):
+        """Returns the most up-to-date AIClient using fresh credentials from config_manager."""
+        if self.config:
+            provider = getattr(self.config, "ai_provider", "gemini")
+            api_key = self.config.get_api_key_for_provider(provider)
+            if api_key:
+                from core.ai_client import AIClient
+                return AIClient(
+                    provider=provider,
+                    api_key=api_key,
+                    model_name=getattr(self.config, "written_model_name", "gemini-3.8-flash"),
+                    custom_base_url=getattr(self.config, "custom_api_base", "https://openrouter.ai/api/v1")
+                )
+        return self.ai_client
+
     @staticmethod
     def is_administrative_criterion(title: str, description: str = "") -> bool:
         """
         Determines whether a rubric criterion or guideline specifies administrative file types
-        (e.g., .pdf, .docx, file upload format) or submission deadlines / turn-in timing
-        (e.g., due dates, turn in by Sunday 11:59 PM, late penalties).
-        The playground essay writer must ignore these points to focus purely on essay content.
+        (e.g., .pdf, .docx, file upload format), submission deadlines / turn-in timing
+        (e.g., due dates, turn in by Sunday 11:59 PM, late penalties), pure point counts,
+        or LMS navigation boilerplate.
         """
+        clean_title = title.strip()
         t = f"{title} {description}".lower()
 
-        # 1. File type / format / upload specifications
+        # 1. Pure point/score headers (e.g. "Points 5", "5 pts", "Grade: Pass/Fail", "Score: 10")
+        if re.match(r"^(?:points?\s*:?\s*\d+|\d+\s*pts?|grade:?|score:?|total:?\s*\d+)$", clean_title, re.IGNORECASE):
+            return True
+
+        # 2. LMS navigation, completion notices, or preparatory reading boilerplate
+        nav_patterns = [
+            r"\bmust\s+be\s+completed\s+before\s+moving\s+forward\b",
+            r"\bmodule\s+overview\s+(?:page)?\b",
+            r"\breview\s+the\s+module\s+learning\s+outcomes\b",
+            r"\bconsult\s+the\s+overview\s+page\b",
+            r"\bclick\s+next\s+to\s+proceed\b",
+            r"\bcomplete\s+all\s+sections\s+before\b",
+        ]
+        for pat in nav_patterns:
+            if re.search(pat, t):
+                return True
+
+        # 3. File type / format / upload specifications
         file_type_patterns = [
             r"\bfile\s+(?:type|format|extension|name|upload|submission)\b",
             r"\b(?:upload|submission)\s+(?:format|type|file)\b",
@@ -56,7 +90,7 @@ class PlaygroundEngine:
             if re.search(pat, t):
                 return True
 
-        # 2. When it should be turned in, due dates, deadlines, timestamps, and late policies
+        # 4. When it should be turned in, due dates, deadlines, timestamps, and late policies
         turnin_patterns = [
             r"\bdue\s+(?:date|by|on|at|before|time|midnight)\b",
             r"\bturn(?:ed)?\s*in\s+(?:by|on|at|before|date|time|late|deadline|prior|on\s+time)\b",
@@ -125,6 +159,85 @@ class PlaygroundEngine:
 
         return []
 
+    def _smart_fallback_parse_rubric(self, rubric_text: str) -> List[RubricCriterion]:
+        """
+        Intelligent offline heuristic parser that extracts substantive assignment tasks, questions,
+        and grading criteria while cleanly filtering out point headers, file types, due dates,
+        and LMS navigation boilerplate.
+        """
+        lines = [l.strip() for l in rubric_text.splitlines() if l.strip()]
+        criteria = []
+
+        # Extract global points/grade info if present (e.g. Points 5, 10 pts, Pass/Fail)
+        points_val = None
+        m_pts = re.search(r"\b(?:points?\s*:?\s*(\d+)|\b(\d+)\s*pts?\b)", rubric_text, re.IGNORECASE)
+        if m_pts:
+            pts_num = m_pts.group(1) or m_pts.group(2)
+            points_val = f"{pts_num} pts"
+
+        pass_fail = bool(re.search(r"\bpass\s*/\s*fail\b", rubric_text, re.IGNORECASE))
+        if pass_fail and points_val:
+            points_val = f"{points_val} (Pass/Fail)"
+        elif pass_fail:
+            points_val = "Pass/Fail"
+
+        for line in lines:
+            clean = re.sub(r"^[-*•\d\.\)\s]+", "", line).strip()
+            if len(clean) < 4:
+                continue
+
+            # 1. Skip administrative items (file types, turn-in dates, points headers, navigation)
+            if self.is_administrative_criterion(clean, clean):
+                continue
+
+            t_low = clean.lower()
+            # 2. Identify question prompts
+            if "?" in clean:
+                q_part = clean.split("?")[0].strip()
+                clean_q = re.sub(r"^(?:based\s+on\s+this\s+(?:material|reading|chapter|module|article),\s*)", "", q_part, flags=re.IGNORECASE)
+                words = clean_q.split()
+                if len(words) > 8:
+                    title = " ".join(words[:8]) + "..."
+                else:
+                    title = clean_q
+                if not title.endswith("?"):
+                    title += "?"
+                criteria.append(
+                    RubricCriterion(
+                        title=title[:60].strip().capitalize(),
+                        description=clean,
+                        target_score=points_val,
+                        fulfilled=False,
+                    )
+                )
+            elif re.search(r"\b(?:at\s+least\s+\d+\s*words?|\d+\s*words?\s*(?:each|min|minimum)?|graded\s+as)\b", t_low):
+                w_match = re.search(r"(\d+)\s*words?", clean, re.IGNORECASE)
+                w_target = f"{w_match.group(1)} words min" if w_match else points_val
+                criteria.append(
+                    RubricCriterion(
+                        title="Word Requirement & Grading",
+                        description=clean,
+                        target_score=w_target or points_val,
+                        fulfilled=False,
+                    )
+                )
+            else:
+                words = clean.split()
+                if len(words) > 6:
+                    title = " ".join(words[:6]) + "..."
+                else:
+                    title = clean
+                criteria.append(
+                    RubricCriterion(
+                        title=title[:60].strip(),
+                        description=clean,
+                        target_score=points_val if len(criteria) == 0 else None,
+                        fulfilled=False,
+                    )
+                )
+
+        return criteria
+
     def parse_rubric(self, rubric_text: str) -> List[RubricCriterion]:
         """
         Parses raw text or OCR output of a rubric into structured RubricCriterion objects.
@@ -136,42 +249,44 @@ class PlaygroundEngine:
             return []
 
         system_prompt = (
-            "You are an expert academic evaluator. Analyze the provided assignment rubric "
-            "and extract each distinct grading criterion into a structured JSON list.\n\n"
-            "CRITICAL EXCLUSION OF ADMINISTRATIVE / SUBMISSION DETAILS:\n"
-            "- You MUST IGNORE AND EXCLUDE any rubric points, criteria, or guidelines that specify the FILE TYPE or file format (e.g. '.pdf', '.docx', '.doc', 'Word document', 'file format', 'upload format', 'file submission').\n"
-            "- You MUST IGNORE AND EXCLUDE any rubric points, criteria, or guidelines that specify WHEN THE ASSIGNMENT SHOULD BE TURNED IN or due dates (e.g. 'due date', 'due by', 'due on', 'turn in by', 'turn in date', 'deadline', 'submitted by 11:59 PM', 'late policy', 'submission time').\n"
-            "- Only extract substantive academic, intellectual, content, analytical, structural, mechanical, or citation criteria for the essay itself.\n"
-            "- Never output a criterion about file types or submission deadlines.\n\n"
-            "CRITICAL WORD COUNT & 'WORDS PER POINT' INSTRUCTION:\n"
-            "- Pay careful attention if the rubric states word limits per point, question, or item (e.g. '50 words EACH', '50 words per question', '50 words per point', 'at least 50 words each').\n"
-            "- You MUST explicitly specify this word requirement in the rubric! In every criterion's 'description', explicitly state: 'Word Requirement: 50 words each' (or '[X] words each').\n"
-            "- Understand that this is a PER-POINT requirement for that specific item, NOT the total word count for the entire assignment!\n"
-            "- Explicitly include any per-point word requirements in the criterion's 'description' (e.g. 'Must provide at least 50 words for this point').\n"
-            "- Never confuse a per-point word requirement with the overall paper length.\n\n"
+            "You are an expert academic evaluator and assignment analyst. "
+            "Analyze the provided assignment rubric, prompt, or question guidelines "
+            "and extract each distinct grading criterion or required task into a structured JSON list.\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. EXCLUDE ADMINISTRATIVE & SUBMISSION DETAILS:\n"
+            "- Ignore file types or formats (e.g. '.pdf', '.docx', '.doc', 'Word document', file upload format).\n"
+            "- Ignore when to turn it in, deadlines, timestamps, or late submission policies (e.g. 'due Sunday', 'due by 11:59 PM').\n"
+            "- Ignore LMS navigation or completion boilerplate (e.g. 'Points: 5', 'Must be completed before moving forward', 'Module Overview page').\n\n"
+            "2. EXTRACT SUBSTANTIVE ACADEMIC TASKS & QUESTIONS:\n"
+            "- Extract the actual intellectual, analytical, and content tasks the student must answer.\n"
+            "- If the assignment asks specific questions (e.g. 'What are the three most important points you hope to master?'), create a criterion with a clear, concise title (e.g. 'Three Key Points to Master').\n\n"
+            "3. WORD COUNT & 'WORDS PER POINT' REQUIREMENTS:\n"
+            "- If the rubric/prompt designates word limits per point, question, or item (e.g. '50 words EACH', 'at least 50 words each'), explicitly specify: 'Word Requirement: 50 words each' in the description and '50 words each' in target_score.\n"
+            "- If there is a pass/fail or general word requirement (e.g. 'at least 50 words'), include it in the description and target_score (e.g. '50 words min (Pass/Fail)').\n\n"
             "Respond ONLY with a JSON array where each item has:\n"
-            "- 'title': Short descriptive name of the criterion (e.g. 'Thesis Statement', 'Evidence & Analysis', 'Mechanics & MLA')\n"
-            "- 'description': What is required to earn full marks for this criterion (including any per-point word count constraints)\n"
-            "- 'target_score': Points or percentage if stated (e.g. '25 pts', 'Exemplary', '20%') or null\n"
+            "- 'title': Concise, human-readable name of the requirement (e.g. 'Three Key Points to Master', 'Thesis Statement', 'Evidence & Analysis')\n"
+            "- 'description': What the student must write or demonstrate to receive full marks\n"
+            "- 'target_score': Points, percentage, or word count if stated (e.g. '5 pts (Pass/Fail)', '50 words each', '25 pts') or null\n"
             "Do NOT include any markdown code blocks or text outside the JSON array."
         )
 
-        user_prompt = f"Rubric content to analyze:\n\n{rubric_text[:6000]}"
+        user_prompt = f"Rubric / assignment content to analyze:\n\n{rubric_text[:6000]}"
 
-        ai = self.ai_client
-        if not ai and self.config:
-            from core.ai_client import AIClient
-            api_key = self.config.gemini_api_key or self.config.api_key
+        ai = self.active_ai_client
+        api_key = getattr(ai, "api_key", "")
+        if not api_key and self.config:
+            api_key = self.config.get_api_key_for_provider(getattr(self.config, "ai_provider", "gemini"))
             if api_key:
+                from core.ai_client import AIClient
                 ai = AIClient(
-                    api_key=api_key,
                     provider=getattr(self.config, "ai_provider", "gemini"),
+                    api_key=api_key,
                     model_name="gemini-3.1-flash-lite",
                 )
 
         parsed_criteria: List[RubricCriterion] = []
-        try:
-            if ai:
+        if ai and getattr(ai, "api_key", "").strip():
+            try:
                 # Ensure rubric parsing specifically targets Gemini 3.1 Flash-Lite
                 rubric_model = "gemini-3.1-flash-lite" if getattr(ai, "provider", "gemini") == "gemini" else None
                 resp = ai.generate_text_response(
@@ -195,23 +310,11 @@ class PlaygroundEngine:
                                 fulfilled=False,
                             )
                         )
-        except Exception as e:
-            logger.warning(f"AI rubric parsing encountered error: {e}. Falling back to rule-based lines.")
+            except Exception as e:
+                logger.warning(f"AI rubric parsing encountered error: {e}. Falling back to rule-based lines.")
 
         if not parsed_criteria:
-            # Rule-based fallback: split lines with bullet points or numbers
-            for line in rubric_text.splitlines():
-                line = line.strip()
-                if line and (line.startswith(("-", "*", "•")) or re.match(r"^\d+[\.\)]", line)):
-                    clean_line = re.sub(r"^[-*•\d\.\)\s]+", "", line).strip()
-                    if len(clean_line) > 5 and not self.is_administrative_criterion(clean_line, clean_line):
-                        parsed_criteria.append(
-                            RubricCriterion(
-                                title=clean_line[:40],
-                                description=clean_line,
-                                fulfilled=False,
-                            )
-                        )
+            parsed_criteria = self._smart_fallback_parse_rubric(rubric_text)
 
         # 1. Strictly ignore and exclude rubric points with file types and when it should be turned in
         criteria = [

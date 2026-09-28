@@ -50,9 +50,14 @@ class TeacherEvaluator:
                 "criteria_evaluations": [],
             }
 
-        # Build rubric criteria string
+        # Build rubric criteria string (excluding administrative file types / turn-in dates)
+        from core.playground.engine import PlaygroundEngine
+        valid_criteria = [
+            c for c in project.rubric_criteria
+            if not PlaygroundEngine.is_administrative_criterion(c.title, c.description)
+        ]
         rubric_bullets = []
-        for idx, c in enumerate(project.rubric_criteria, 1):
+        for idx, c in enumerate(valid_criteria, 1):
             score_str = f" [Target: {c.target_score}]" if c.target_score else ""
             rubric_bullets.append(f"{idx}. (ID: {c.id}) {c.title}{score_str}: {c.description}")
 
@@ -193,9 +198,14 @@ class TeacherEvaluator:
         crit_evals = []
         crit_score_acc = 0
         max_crit = 45
-        each_max = (max_crit / len(project.rubric_criteria)) if project.rubric_criteria else 15
+        from core.playground.engine import PlaygroundEngine
+        valid_criteria = [
+            c for c in project.rubric_criteria
+            if not PlaygroundEngine.is_administrative_criterion(c.title, c.description)
+        ]
+        each_max = (max_crit / len(valid_criteria)) if valid_criteria else 15
 
-        for c in project.rubric_criteria:
+        for c in valid_criteria:
             fulfilled = bool(total_words >= target * 0.8)
             awarded = each_max if fulfilled else (each_max * 0.7)
             crit_score_acc += awarded

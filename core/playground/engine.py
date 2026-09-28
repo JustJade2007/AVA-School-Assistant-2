@@ -51,9 +51,81 @@ class PlaygroundEngine:
                 return ai
         return self.ai_client
 
+    @staticmethod
+    def is_administrative_criterion(title: str, description: str = "") -> bool:
+        """
+        Determines whether a rubric criterion specifies administrative file types
+        (e.g., .docx, .pdf, Word document, file format requirements) or when the
+        assignment is supposed to be turned in by (e.g., due dates, deadlines,
+        turn-in times, late policies).
+        """
+        clean_title = title.strip()
+        t = f"{title} {description}".lower()
+
+        # 1. Pure point/score headers (e.g. "Points 5", "5 pts", "Grade: Pass/Fail", "Score: 10")
+        if re.match(r"^(?:points?\s*:?\s*\d+|\d+\s*pts?|grade:?|score:?|total:?\s*\d+)$", clean_title, re.IGNORECASE):
+            return True
+
+        # 2. LMS navigation, completion notices, or preparatory reading boilerplate
+        nav_patterns = [
+            r"\bmust\s+be\s+completed\s+before\s+moving\s+forward\b",
+            r"\bmodule\s+overview\s+(?:page)?\b",
+            r"\breview\s+the\s+module\s+learning\s+outcomes\b",
+            r"\bconsult\s+the\s+overview\s+page\b",
+            r"\bclick\s+next\s+to\s+proceed\b",
+            r"\bcomplete\s+all\s+sections\s+before\b",
+        ]
+        for pat in nav_patterns:
+            if re.search(pat, t):
+                return True
+
+        # 3. File type / format the assignment is required to be written in or submitted as
+        file_type_patterns = [
+            r"\bfile\s+(?:type|format|extension|name|upload|submission|requirement)s?\b",
+            r"\b(?:upload|submission)\s+(?:format|type|file)\b",
+            r"\b(?:written|typed|saved?|submitted?|uploaded?)\s+(?:in|as)\s+(?:a\s+)?(?:\.?(?:pdf|docx?|doc|rtf|txt|pages)|word(?:\s+(?:doc|document))?|google\s+docs?|file)\b",
+            r"\bformat:\s*(?:\.?(?:pdf|docx?|doc|rtf|txt)|word|google\s+docs?)\b",
+            r"\b(?:\.pdf|\.docx?|\.doc|\.rtf|\.pages|\.txt)\b",
+            r"\b(?:pdf|docx?|word\s+document|google\s+docs?)\s+(?:only|format|file|upload|submission|type)\b",
+            r"\b(?:upload|submit)\s+(?:a\s+)?(?:pdf|docx?|doc|word\s+document)\b",
+            r"\b(?:accepted|required)\s+file\s+(?:types?|formats?)\b",
+        ]
+        for pat in file_type_patterns:
+            if re.search(pat, t):
+                return True
+
+        # 4. Date the assignment is supposed to be turned in by, due dates, deadlines, late policies
+        turnin_patterns = [
+            r"\bdue\s+(?:date|by|on|at|before|time|midnight)\b",
+            r"\bturn(?:ed)?\s*[- ]?in\s+(?:by|on|at|before|date|time|late|deadline|prior|on\s+time)\b",
+            r"\bwhen\s+(?:to\s+turn\s+in|it\s+should\s+be\s+turned\s+in|it\s+is\s+due|to\s+submit)\b",
+            r"\b(?:to|supposed\s+to)\s+be\s+turned\s+in\s+by\b",
+            r"\bsubmit(?:ted)?\s+(?:by|on|at|before|prior\s+to)\s+(?:the\s+)?(?:due|deadline|midnight|\d{1,2}[:/]|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun|\b\w+\b)",
+            r"\b(?:submission\s+deadline|due\s+date|turn[- ]in\s+date|submission\s+cutoff|submission\s+time)\b",
+            r"\b(?:assignment|submission|paper|project)\s+deadline\b",
+            r"\bdeadline\s+for\s+(?:submission|submitting|turning\s+in|turn[- ]in)\b",
+            r"\bdeadline:\s*\w+\b",
+            r"\blate\s+(?:policy|penalty|submission|submissions|work|turn[- ]in|deduction)\b",
+            r"\bon[- ]time\s+submission\b",
+            r"\b(?:11:59\s*(?:pm|am)?|midnight\s+deadline)\b",
+            r"\btimeliness\s+of\s+submission\b",
+            r"\bpunctuality\s+of\s+submission\b",
+        ]
+        for pat in turnin_patterns:
+            if re.search(pat, t):
+                return True
+
+        # Check titles specifically for due date or file format keywords
+        title_lower = clean_title.lower()
+        if re.search(r"^(?:due\s+date|submission\s+date|turn[- ]in\s+date|deadline|late\s+policy|file\s+format|file\s+type)$", title_lower):
+            return True
+
+        return False
+
     def parse_rubric(self, rubric_text: str) -> List[RubricCriterion]:
         """
         Parses raw text or OCR output of a rubric into structured RubricCriterion objects.
+        Strictly excludes administrative criteria including file types and turn-in dates.
         """
         if not rubric_text or not rubric_text.strip():
             return []
@@ -61,6 +133,10 @@ class PlaygroundEngine:
         system_prompt = (
             "You are an expert academic evaluator. Analyze the provided assignment rubric "
             "and extract each distinct grading criterion into a structured JSON list.\n\n"
+            "CRITICAL EXCLUSIONS - ADMINISTRATIVE & SUBMISSION DETAILS:\n"
+            "- NEVER include criteria specifying the FILE TYPE or format the assignment is required to be written in or submitted as (e.g. '.pdf', '.docx', '.doc', 'Word document', file upload format, file type requirements).\n"
+            "- NEVER include criteria specifying WHEN THE ASSIGNMENT IS SUPPOSED TO BE TURNED IN or due dates (e.g. 'due date', 'due by', 'due on', 'turn in by', 'turn-in date', 'deadline', 'submitted by 11:59 PM', 'late policy', 'submission time').\n"
+            "- Only extract substantive academic, intellectual, analytical, content, structural, formatting style (e.g. MLA/APA citations), or grading criteria for the work itself.\n\n"
             "CRITICAL WORD COUNT & 'WORDS PER POINT' INSTRUCTION:\n"
             "- Pay careful attention to word limits: rubrics often state '__ words per point', '__ words per bullet', '__ words per question', or '__ words each'.\n"
             "- Understand that this is a PER-POINT requirement for that specific item, NOT the total word count for the entire assignment!\n"
@@ -92,10 +168,14 @@ class PlaygroundEngine:
                 criteria = []
                 for itm in items:
                     if isinstance(itm, dict):
+                        title = str(itm.get("title", "Requirement")).strip()
+                        desc = str(itm.get("description", "")).strip()
+                        if self.is_administrative_criterion(title, desc):
+                            continue
                         criteria.append(
                             RubricCriterion(
-                                title=itm.get("title", "Requirement"),
-                                description=itm.get("description", ""),
+                                title=title,
+                                description=desc,
                                 target_score=itm.get("target_score"),
                                 fulfilled=False,
                             )
@@ -111,7 +191,7 @@ class PlaygroundEngine:
             line = line.strip()
             if line and (line.startswith(("-", "*", "•")) or re.match(r"^\d+[\.\)]", line)):
                 clean_line = re.sub(r"^[-*•\d\.\)\s]+", "", line).strip()
-                if len(clean_line) > 5:
+                if len(clean_line) > 5 and not self.is_administrative_criterion(clean_line, clean_line):
                     criteria.append(
                         RubricCriterion(
                             title=clean_line[:40],
@@ -131,6 +211,12 @@ class PlaygroundEngine:
         sources, and target word count. Strictly enforces rubric word counts and normalizes
         section goals to prevent AI over-estimation.
         """
+        # Filter out any administrative criteria (file types, turn-in dates)
+        project.rubric_criteria = [
+            c for c in project.rubric_criteria
+            if not self.is_administrative_criterion(c.title, c.description)
+        ]
+
         # Deeply inspect rubric criteria and raw text for overall & per-section word limits
         rubric_text_full = "\n".join([f"{c.title}: {c.description}" for c in project.rubric_criteria])
         if getattr(project, "rubric_raw_text", ""):

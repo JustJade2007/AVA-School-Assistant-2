@@ -982,10 +982,14 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self._auto_ingest_embedded_youtube(self.project.topic_description)
 
     def _on_rubric_criteria_changed(self, criteria: List[RubricCriterion]):
-        self.project.rubric_criteria = criteria
+        valid_criteria = [
+            c for c in criteria
+            if not PlaygroundEngine.is_administrative_criterion(c.title, c.description)
+        ]
+        self.project.rubric_criteria = valid_criteria
         if hasattr(self, "stage_2_rubric_viewer"):
-            self.stage_2_rubric_viewer.set_criteria(criteria)
-        logger.info(f"Rubric criteria live-synced: {len(criteria)} criteria")
+            self.stage_2_rubric_viewer.set_criteria(valid_criteria)
+        logger.info(f"Rubric criteria live-synced: {len(valid_criteria)} criteria")
         self._auto_detect_word_requirements()
 
     def _auto_detect_word_requirements(self):
@@ -1378,8 +1382,12 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 text="⚡ Parse Rubric into Criteria Checklist"
             )
 
-        self.project.rubric_criteria = criteria
-        self.stage_1_rubric_viewer.set_criteria(criteria)
+        valid_criteria = [
+            c for c in criteria
+            if not PlaygroundEngine.is_administrative_criterion(c.title, c.description)
+        ]
+        self.project.rubric_criteria = valid_criteria
+        self.stage_1_rubric_viewer.set_criteria(valid_criteria)
         self._auto_detect_word_requirements()
 
     # -------------------------------------------------------------------------

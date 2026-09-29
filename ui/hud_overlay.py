@@ -850,7 +850,7 @@ class HUDOverlay(ctk.CTkToplevel):
             EngineState.READING: ("●", "#38bdf8", f"Reading Question... {f'({detail})' if detail else ''}"),
             EngineState.WAITING_CONFIRMATION: ("●", "#f59e0b", "Solved - Press F9 to Confirm"),
             EngineState.EXECUTING: ("●", "#3b82f6", "Executing Actions..."),
-            EngineState.VERIFYING: ("●", "#06b6d4", "Verifying Answer (Zero-Token)..."),
+            EngineState.VERIFYING: ("●", "#06b6d4", f"{detail}" if detail else "Verifying Answer (Zero-Token)..."),
             EngineState.INSPECTING: ("●", "#ec4899", f"Inspecting Material... {f'({detail})' if detail else ''}"),
             EngineState.NAVIGATING: ("●", "#8b5cf6", "Navigating to Next..."),
             EngineState.PAUSED: ("■", "#ef4444", f"Paused {f'({detail})' if detail else ''}")

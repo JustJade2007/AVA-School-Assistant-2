@@ -670,7 +670,7 @@ class LocalVisualVerifier:
         self,
         target_x: int,
         target_y: int,
-        max_scan_dist: int = 320,
+        max_scan_dist: int = 180,
         min_spacing: int = 18
     ) -> List[Tuple[int, int]]:
         """
@@ -704,7 +704,7 @@ class LocalVisualVerifier:
             for step_dir in [-1, 1]:
                 y_range = range(mid_strip_y + (step_dir * min_spacing),
                                 (0 if step_dir == -1 else sh - 10),
-                                step_dir * 3)
+                                step_dir * 5)
                 for cur_y in y_range:
                     if cur_y < 10 or cur_y >= sh - 10:
                         continue
@@ -734,7 +734,7 @@ class LocalVisualVerifier:
                         cand_x = target_x
                         cand_y = target_y + rel_diff
                         siblings.append((cand_x, cand_y))
-                        if len(siblings) >= 5:
+                        if len(siblings) >= 3:
                             break
 
             if siblings:
@@ -874,12 +874,12 @@ class LocalVisualVerifier:
                                 best_sat = avg_sat
 
             # Evaluation 1: Radio button inner bullet dot
-            if best_contrast >= 25.0:
+            if best_contrast >= 18.0:
                 conf = min(1.0, 0.70 + (best_contrast / 100.0))
                 return True, f"radio_inner_bullet (contrast={best_contrast:.1f})", conf
 
             # Evaluation 2: Colored active bullet dot (blue, green, purple active dots)
-            if best_sat >= 22.0 and best_contrast >= 12.0:
+            if best_sat >= 16.0 and best_contrast >= 10.0:
                 return True, f"radio_colored_bullet (sat={best_sat:.1f}, contrast={best_contrast:.1f})", 0.90
 
             # Evaluation 3: Checkbox checkmark or solid fill
@@ -1101,39 +1101,38 @@ class LocalVisualVerifier:
                     logger.debug(f"Input box check in crop error: {e}")
 
             # 2. Circular radio buttons & square checkboxes
-            # Scan in a horizontal band surrounding the expected control row
-            min_cx = max(10, int(min(crop_mouse_x, crop_ref_x) - 120))
-            max_cx = min(cw - 10, int(max(crop_mouse_x, crop_ref_x) + 40))
-            min_cy = max(8, int(min(crop_mouse_y, crop_ref_y) - 22))
-            max_cy = min(ch - 8, int(max(crop_mouse_y, crop_ref_y) + 22))
+            # Precompute circle sampling offsets for radii [8, 10] (8-point angular sampling)
+            circle_offsets = {
+                8: [
+                    (8, 0), (6, 6), (0, 8), (-6, 6),
+                    (-8, 0), (-6, -6), (0, -8), (6, -6)
+                ],
+                10: [
+                    (10, 0), (7, 7), (0, 10), (-7, 7),
+                    (-10, 0), (-7, -7), (0, -10), (7, -7)
+                ]
+            }
 
-            for cy in range(min_cy, max_cy):
-                for cx in range(min_cx, max_cx):
-                    # Test circular radio button perimeters at radii 7..11px
-                    for r in [7, 8, 9, 10, 11]:
+            min_cx = max(12, int(min(crop_mouse_x, crop_ref_x) - 70))
+            max_cx = min(cw - 12, int(max(crop_mouse_x, crop_ref_x) + 30))
+            min_cy = max(10, int(min(crop_mouse_y, crop_ref_y) - 16))
+            max_cy = min(ch - 10, int(max(crop_mouse_y, crop_ref_y) + 16))
+
+            # Stride by 2 pixels for instantaneous detection (< 0.05s)
+            for cy in range(min_cy, max_cy, 2):
+                for cx in range(min_cx, max_cx, 2):
+                    # Test circular radio button perimeters at precomputed offsets
+                    for r, offsets in circle_offsets.items():
                         if cx - r < 2 or cx + r >= cw - 2 or cy - r < 2 or cy + r >= ch - 2:
                             continue
-                        pts = []
-                        for k in range(12):
-                            theta = 2.0 * math.pi * k / 12.0
-                            cos_t = math.cos(theta)
-                            sin_t = math.sin(theta)
-                            val = max(ep[int(cx + (r + dr) * cos_t), int(cy + (r + dr) * sin_t)] for dr in [-1, 0, 1])
-                            pts.append(val)
-                        hits = sum(1 for p in pts if p >= 26)
-                        if hits >= 9:
+                        hits = sum(1 for dx, dy in offsets if ep[cx + dx, cy + dy] >= 26)
+                        if hits >= 6:
                             # Corner edge check to distinguish square checkbox from circular radio button
-                            corner_hits = 0
-                            for dr in [-1, 0, 1]:
-                                ch_count = sum(
-                                    1 for (cdx, cdy) in [(-r - dr, -r - dr), (r + dr, -r - dr), (-r - dr, r + dr), (r + dr, r + dr)]
-                                    if 0 <= cx + cdx < cw and 0 <= cy + cdy < ch and ep[cx + cdx, cy + cdy] >= 26
-                                )
-                                if ch_count >= 3:
-                                    corner_hits = max(corner_hits, ch_count)
-
+                            corner_hits = sum(
+                                1 for (cdx, cdy) in [(-r, -r), (r, -r), (-r, r), (r, r)]
+                                if 0 <= cx + cdx < cw and 0 <= cy + cdy < ch and ep[cx + cdx, cy + cdy] >= 26
+                            )
                             c_type = "checkbox_square" if corner_hits >= 3 else "radio_circle"
-                            score = hits / 12.0
                             candidates.append({
                                 "type": c_type,
                                 "x": origin_x + cx,
@@ -1141,20 +1140,19 @@ class LocalVisualVerifier:
                                 "cx": cx,
                                 "cy": cy,
                                 "size": r,
-                                "score": score
+                                "score": hits / 8.0
                             })
 
-                    # Test square checkbox boundaries with half-widths 6..10px
-                    for hw in [6, 7, 8, 9, 10]:
+                    # Test square checkbox boundaries with half-widths 7 and 9
+                    for hw in [7, 9]:
                         if cx - hw < 2 or cx + hw >= cw - 2 or cy - hw < 2 or cy + hw >= ch - 2:
                             continue
-                        t_hits = sum(1 for x in range(cx - hw + 2, cx + hw - 1) if ep[x, cy - hw] >= 26)
-                        b_hits = sum(1 for x in range(cx - hw + 2, cx + hw - 1) if ep[x, cy + hw] >= 26)
-                        l_hits = sum(1 for y in range(cy - hw + 2, cy + hw - 1) if ep[cx - hw, y] >= 26)
-                        r_hits = sum(1 for y in range(cy - hw + 2, cy + hw - 1) if ep[cx + hw, y] >= 26)
-                        span = max(1, 2 * hw - 3)
-                        edge_ratios = [t_hits / span, b_hits / span, l_hits / span, r_hits / span]
-                        if all(er >= 0.40 for er in edge_ratios) and sum(edge_ratios) >= 2.2:
+                        box_samples = [
+                            ep[cx - hw, cy], ep[cx + hw, cy], ep[cx, cy - hw], ep[cx, cy + hw],
+                            ep[cx - hw, cy - hw], ep[cx + hw, cy - hw], ep[cx - hw, cy + hw], ep[cx + hw, cy + hw]
+                        ]
+                        sq_hits = sum(1 for p in box_samples if p >= 26)
+                        if sq_hits >= 6:
                             candidates.append({
                                 "type": "checkbox_square",
                                 "x": origin_x + cx,
@@ -1162,7 +1160,7 @@ class LocalVisualVerifier:
                                 "cx": cx,
                                 "cy": cy,
                                 "size": hw,
-                                "score": sum(edge_ratios) / 4.0
+                                "score": sq_hits / 8.0
                             })
 
             # 3. Visual center snapping fallback if no discrete shapes detected
@@ -1376,24 +1374,43 @@ class LocalVisualVerifier:
 
             # If not yet verified by inline execution, perform live check
             if not is_act_verified:
-                sx = act.get("screen_x", act.get("x"))
-                sy = act.get("screen_y", act.get("y"))
-                if sx is not None and sy is not None:
-                    isx, isy = int(sx), int(sy)
-                    live_roi = self.capture_roi(isx, isy)
-                    if act_type in ["click", "double_click"]:
-                        # Fetch sibling choice coordinates (from AI choices or on-screen vertical scan)
-                        sib_coords = self.get_sibling_choice_coordinates(isx, isy, result_data)
-                        sibling_rois = [self.capture_roi(cx, cy) for cx, cy in sib_coords]
-                        sel, r_reason, conf = self.is_radio_or_checkbox_selected(live_roi, sibling_rois=sibling_rois)
-                        if sel:
-                            is_act_verified = True
-                            reason = f"live_{r_reason}"
-                    elif act_type == "type_text":
-                        filled, f_reason, conf = self.is_text_input_filled(live_roi)
-                        if filled:
-                            is_act_verified = True
-                            reason = f"live_{f_reason}"
+                desc_lower = str(act.get("description", "")).lower()
+                el_type = str(act.get("element_type", "")).lower()
+                is_input_focus = bool(act.get("is_input_focus") or el_type in ["input", "textbox", "textarea"])
+                is_dropdown = bool(act.get("is_dropdown") or el_type in ["dropdown", "select", "combobox"] or "dropdown" in desc_lower)
+                is_button = bool(act.get("is_button") or el_type == "button" or any(k in desc_lower for k in ["button", "submit", "check answer", "next", "continue", "done"]))
+
+                if is_dropdown or is_button:
+                    is_act_verified = True
+                    reason = "live_action_type_confirmed"
+                else:
+                    sx = act.get("screen_x", act.get("x"))
+                    sy = act.get("screen_y", act.get("y"))
+                    if sx is not None and sy is not None:
+                        isx, isy = int(sx), int(sy)
+                        live_roi = self.capture_roi(isx, isy)
+                        if act_type in ["click", "double_click"]:
+                            # Fetch sibling choice coordinates (from AI choices or on-screen vertical scan)
+                            sib_coords = self.get_sibling_choice_coordinates(isx, isy, result_data)
+                            sibling_rois = [self.capture_roi(cx, cy) for cx, cy in sib_coords] if sib_coords else None
+                            sel, r_reason, conf = self.is_radio_or_checkbox_selected(live_roi, sibling_rois=sibling_rois)
+                            if sel:
+                                is_act_verified = True
+                                reason = f"live_{r_reason}"
+                            elif is_input_focus:
+                                is_act_verified = True
+                                reason = "live_input_focus_confirmed"
+                        elif act_type == "type_text":
+                            filled, f_reason, conf = self.is_text_input_filled(live_roi)
+                            if filled:
+                                is_act_verified = True
+                                reason = f"live_{f_reason}"
+                            else:
+                                wide_roi = self.capture_roi(isx, isy, radius_w=35, radius_h=15)
+                                w_filled, w_reason, _ = self.is_text_input_filled(wide_roi)
+                                if w_filled:
+                                    is_act_verified = True
+                                    reason = f"live_{w_reason}"
 
             if is_act_verified:
                 verified_count += 1

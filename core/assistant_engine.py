@@ -81,8 +81,8 @@ class AssistantEngine:
 
         # Click offset memory & automatic retry tracking
         self._action_offset_memory: Dict[str, Dict[str, Any]] = {}
-        self._max_auto_miss_retries: int = 3
-        self._retry_countdown_seconds: int = 5
+        self._max_auto_miss_retries: int = 1
+        self._retry_countdown_seconds: int = 1
 
         # Update executor parameters on init
         self._sync_config()
@@ -1426,6 +1426,10 @@ class AssistantEngine:
         phase = "Action Execution"
         try:
             if actions:
+                # Ensure actions contain result_data for rapid (0ms) sibling choice coordinate lookups
+                for act in actions:
+                    if isinstance(act, dict) and "result_data" not in act:
+                        act["result_data"] = self.last_result
                 self.set_state(EngineState.EXECUTING)
                 logger.info(f"Executing sequence of {len(actions)} actions...")
                 seq_summary = self.executor.execute_action_sequence(actions, delay_between=self.config.action_delay)
@@ -1446,24 +1450,12 @@ class AssistantEngine:
             # Zero-Token Post-Execution Verification: Ensure question was actually answered before going idle!
             phase = "Zero-Token Answer Verification"
             self.set_state(EngineState.VERIFYING, "Verifying question answered...")
-            time.sleep(0.09)
+            time.sleep(0.05)
 
-            if isinstance(seq_summary, dict) and seq_summary.get("failed_inputs"):
-                failed_inputs = seq_summary.get("failed_inputs", [])
-                logger.warning(
-                    f"[!] Zero-token failsafe: {len(failed_inputs)} input(s) failed verification: {failed_inputs}"
-                )
-                is_answered = False
-                verification = {
-                    "is_answered": False,
-                    "all_verified": False,
-                    "details": f"input_failsafe_failed ({len(failed_inputs)} inputs unconfirmed: {failed_inputs})",
-                    "failed_inputs": failed_inputs
-                }
-            elif not self.config.local_verification_enabled or not actions:
+            if not self.config.local_verification_enabled or not actions:
                 is_answered = True
                 verification = {"is_answered": True, "details": "verification_disabled_or_no_actions", "all_verified": True}
-            elif isinstance(seq_summary, dict) and seq_summary.get("all_verified", False):
+            elif isinstance(seq_summary, dict) and seq_summary.get("all_verified", False) and not seq_summary.get("failed_inputs"):
                 is_answered = True
                 verification = {"is_answered": True, "details": "all_actions_verified_in_sequence", "all_verified": True}
             elif (hasattr(self.executor.execute_action_sequence, "_mock_return_value") or str(type(seq_summary)).find("Mock") != -1) and not any(a.get("verified") is False for a in actions):
@@ -1471,8 +1463,16 @@ class AssistantEngine:
                 is_answered = True
                 verification = {"is_answered": True, "details": "mock_execution", "all_verified": True}
             else:
+                # Live zero-token verification across executed actions
                 verification = self.verifier.verify_solution_outcome(actions, self.last_result)
                 is_answered = verification.get("is_answered", False)
+
+                if not is_answered and isinstance(seq_summary, dict) and seq_summary.get("failed_inputs"):
+                    failed_inputs = seq_summary.get("failed_inputs", [])
+                    logger.warning(
+                        f"[!] Zero-token failsafe: {len(failed_inputs)} input(s) unconfirmed: {failed_inputs}"
+                    )
+                    verification["failed_inputs"] = failed_inputs
 
             if is_answered:
                 logger.info(
@@ -1882,7 +1882,7 @@ class AssistantEngine:
             if self.executor.is_stopped():
                 return False
 
-            self.set_state(EngineState.VERIFYING, "Double-checking selected answers on screen...")
+            self.set_state(EngineState.VERIFYING, f"AI Double-Checking Answer ({retries + 1}/{max_retries + 1})...")
             logger.info(
                 f"Double-checking selected answers on screen (attempt {retries + 1}/{max_retries + 1}): "
                 f"Question='{question_text[:50]}...', Expected='{answer_text[:50]}'..."

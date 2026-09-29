@@ -8,6 +8,20 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.16.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Reasoning vs Bold Answer Divergence & Selection Alignment**:
+  - **Reasoning-First JSON Generation Order**: Restructured the vision prompt schema in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) so that `reasoning` is evaluated and output *before* `answer` and `correct_answer`. In autoregressive LLMs, generating the answer before reasoning forced premature guesses without chain-of-thought calculation; placing reasoning first guarantees that the final answer in bold strictly reflects the mathematical and logical reasoning.
+  - **Strict Consistency Enforcement**: Added an explicit mandate in Section 3 of [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) prohibiting any discrepancy between the reasoned conclusion, the reported `answer`, and the targeted `actions`.
+  - **Authoritative Answer Reconciliation**: Updated schema normalization in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) so that item-level reasoned `correct_answer` values strictly govern the canonical top-level `answer`, eliminating conflicting answer labels.
+- **Eliminated Cross-Row / Sibling Option Hijacking in Recovery Probing**:
+  - **Same-Row Boundary Clamping**: Restricted candidate recovery probing in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py) strictly to elements on the exact same vertical row (`abs(cand_y - target_y) <= 8px`), preventing the verifier from ever probing or clicking radio buttons on adjacent question rows.
+  - **Sibling Choice Isolation**: Added strict sibling distance checks to discard any candidate closer to an unselected sibling option than to the intended target choice.
+  - **Protected Physical Target Offset**: Guarded `action["physical_target_x"]` and `y` assignment to ensure coordinates on different rows can never overwrite action targets during retries.
+- **Reasoning-Grounded AI Double-Check Verification**:
+  - **Academic Derivation Passthrough**: Updated [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) and [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) to pass the full academic reasoning into `double_check_solution`. Double-check now verifies that on-screen selections align with the sound academic derivation, preventing false-positive corrective actions from overturning correct answers.
+
 ## [2.2.15.a] - 2026-09-29
 
 ### Fixed & Enhanced

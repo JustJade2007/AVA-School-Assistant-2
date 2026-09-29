@@ -329,7 +329,8 @@ class AIClient:
         calibration_scale_x: float = 1.0,
         calibration_scale_y: float = 1.0,
         coordinate_mode: str = "normalized_1000",
-        mark_registry: Optional[Dict[int, Tuple[int, int]]] = None
+        mark_registry: Optional[Dict[int, Tuple[int, int]]] = None,
+        reasoning: str = ""
     ) -> Dict[str, Any]:
         """
         Visually double-checks the current screenshot after actions have been executed,
@@ -346,7 +347,8 @@ class AIClient:
             image_height=image_height,
             question=question,
             intended_answer=intended_answer,
-            intended_actions=intended_actions
+            intended_actions=intended_actions,
+            reasoning=reasoning
         )
 
         raw_response_text = ""
@@ -1123,17 +1125,21 @@ class AIClient:
                 elif item["evaluation_status"] != "correct":
                     all_correct = False
 
-            if not result.get("answer"):
-                if len(items) == 1:
-                    result["answer"] = items[0].get("correct_answer", "")
-                else:
-                    ans_parts = []
-                    for itm in items:
-                        p_label = itm.get("label") or itm.get("part_id") or "Part"
-                        p_ans = itm.get("correct_answer", "")
-                        if p_ans:
-                            ans_parts.append(f"{p_label}: {p_ans}")
-                    result["answer"] = " | ".join(ans_parts) if ans_parts else "See sub-parts below"
+            # Authoritative answer reconciliation:
+            # If items provide specific correct_answers derived through reasoning, ensure top-level answer matches
+            if len(items) == 1 and items[0].get("correct_answer"):
+                result["answer"] = items[0]["correct_answer"]
+            elif len(items) > 1:
+                ans_parts = []
+                for itm in items:
+                    p_label = itm.get("label") or itm.get("part_id") or "Part"
+                    p_ans = itm.get("correct_answer", "")
+                    if p_ans:
+                        ans_parts.append(f"{p_label}: {p_ans}")
+                if ans_parts:
+                    result["answer"] = " | ".join(ans_parts)
+            elif not result.get("answer"):
+                result["answer"] = result.get("summary") or "Answer determined"
 
             if not result.get("question"):
                 if len(items) == 1:

@@ -1938,7 +1938,8 @@ class AssistantEngine:
                 calibration_scale_x=self.config.calibration_scale_x,
                 calibration_scale_y=self.config.calibration_scale_y,
                 coordinate_mode=self.config.coordinate_mode,
-                mark_registry=mark_registry
+                mark_registry=mark_registry,
+                reasoning=str(self.last_result.get("reasoning", "")).strip()
             )
 
             is_correct = check_res.get("double_check_passed", True)

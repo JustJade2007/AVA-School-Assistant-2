@@ -603,62 +603,57 @@ class AutomationExecutor:
                     if physical_view and physical_view.get("detected"):
                         pt_x = physical_view["target_x"]
                         pt_y = physical_view["target_y"]
-                        if (pt_x, pt_y) != (actual_mouse_x, actual_mouse_y):
-                            raw_candidates.append((pt_x, pt_y))
+                        # STRICT ROW SAFETY: Must be on the exact same vertical row as target_y
+                        if abs(pt_y - target_y) <= 8 and (target_x - 75 <= pt_x <= target_x + 15):
+                            if (pt_x, pt_y) != (actual_mouse_x, actual_mouse_y):
+                                raw_candidates.append((pt_x, pt_y))
                         for c_coord in physical_view.get("candidates", []):
-                            if c_coord not in raw_candidates and c_coord != (actual_mouse_x, actual_mouse_y):
-                                raw_candidates.append(c_coord)
+                            cx_val, cy_val = c_coord
+                            if abs(cy_val - target_y) <= 8 and (target_x - 75 <= cx_val <= target_x + 15):
+                                if c_coord not in raw_candidates and c_coord != (actual_mouse_x, actual_mouse_y):
+                                    raw_candidates.append(c_coord)
 
-                    # 2. Search option band leftward for circular radio button / checkbox
+                    # 2. Search option band leftward for circular radio button / checkbox on same row
                     found_control = self.verifier.find_radio_or_checkbox_in_band(
-                        after_band, target_x, target_y, band_origin_x, band_origin_y, max_scan_left=90
+                        after_band, target_x, target_y, band_origin_x, band_origin_y, max_scan_left=75
                     )
-                    if found_control and found_control != (target_x, target_y) and found_control not in raw_candidates:
-                        raw_candidates.append(found_control)
+                    if found_control and abs(found_control[1] - target_y) <= 8:
+                        if found_control != (target_x, target_y) and found_control not in raw_candidates:
+                            raw_candidates.append(found_control)
 
-                    # 3. Precision input box measurement (if clicking an input box or field)
-                    m_x, m_y, m_meta = self.verifier.measure_and_target_input_box(target_x, target_y)
-                    if m_meta.get("detected") and (m_x, m_y) != (target_x, target_y) and (m_x, m_y) not in raw_candidates:
-                        raw_candidates.append((m_x, m_y))
-
-                    # 4. Visual center snapping from ROI
-                    snapped_x, snapped_y = self.verifier.find_visual_element_center(before_roi, target_x, target_y)
-                    if (snapped_x, snapped_y) != (target_x, target_y) and (snapped_x, snapped_y) not in raw_candidates:
-                        raw_candidates.append((snapped_x, snapped_y))
-
-                    # 5. Standard leftward web radio/checkbox offsets
-                    for dx in [-35, -50, -22, -65, -15]:
-                        cand = (target_x + dx, target_y)
-                        if cand not in raw_candidates and cand != (target_x, target_y):
-                            raw_candidates.append(cand)
-
-                    # 6. Vertical tweaks if needed
-                    base_ref_x = found_control[0] if found_control else (target_x - 35)
-                    for dy in [-6, +6]:
-                        cand = (base_ref_x, target_y + dy)
-                        if cand not in raw_candidates and cand != (target_x, target_y):
-                            raw_candidates.append(cand)
+                    # 3. Filter candidates strictly to prevent EVER clicking another row or sibling option
+                    safe_candidates = []
+                    for cand in raw_candidates:
+                        cx_cand, cy_cand = cand
+                        # Row constraint: must be on same option line (within 8px)
+                        if abs(cy_cand - target_y) > 8:
+                            continue
+                        # Sibling isolation: must NOT be closer to any sibling option than to target
+                        if sibling_coords:
+                            dist_to_target = math.hypot(cx_cand - target_x, cy_cand - target_y)
+                            if any(math.hypot(cx_cand - sx, cy_cand - sy) <= dist_to_target for sx, sy in sibling_coords):
+                                continue
+                        safe_candidates.append(cand)
 
                     # Filter out any coordinates that have already been tried previously (from action history)
                     prior_tried = action.get("prior_attempted_coords", set())
                     if not isinstance(prior_tried, (set, list)):
                         prior_tried = set()
                     available_candidates = [
-                        c for c in raw_candidates
+                        c for c in safe_candidates
                         if c not in prior_tried and c != (target_x, target_y)
                     ]
-                    if not available_candidates:
-                        available_candidates = raw_candidates
 
-                    # Select exactly up to 3 distinct readjustment attempts
-                    readjustment_candidates = available_candidates[:3]
+                    # Select exactly up to 2 distinct same-row readjustment attempts
+                    readjustment_candidates = available_candidates[:2]
                     max_attempts = len(readjustment_candidates)
 
-                    logger.warning(
-                        f"Action [{action_type}] at ({target_x}, {target_y}) did not register answer state. "
-                        f"Physical mouse at ({actual_mouse_x}, {actual_mouse_y}). "
-                        f"Initiating zero-token recovery with up to {max_attempts} readjustment attempts..."
-                    )
+                    if max_attempts > 0:
+                        logger.warning(
+                            f"Action [{action_type}] at ({target_x}, {target_y}) did not register answer state. "
+                            f"Physical mouse at ({actual_mouse_x}, {actual_mouse_y}). "
+                            f"Initiating zero-token recovery with {max_attempts} same-row readjustment attempt(s)..."
+                        )
 
                     for attempt_idx, (probe_x, probe_y) in enumerate(readjustment_candidates, 1):
                         self._check_stop()
@@ -740,7 +735,7 @@ class AutomationExecutor:
                                 f"failed to confirm selection."
                             )
 
-                    if not is_confirmed:
+                    if not is_confirmed and max_attempts > 0:
                         logger.warning(
                             f"Action [{action_type}] missed after {max_attempts} readjustments. Physical telemetry: "
                             f"intended=({target_x}, {target_y}), actual_mouse=({actual_mouse_x}, {actual_mouse_y}), "
@@ -761,7 +756,7 @@ class AutomationExecutor:
             action["click_offset_y"] = last_clicked_y - target_y
             action["actual_mouse_x"] = actual_mouse_x
             action["actual_mouse_y"] = actual_mouse_y
-            if physical_view and physical_view.get("detected"):
+            if physical_view and physical_view.get("detected") and abs(physical_view["target_y"] - target_y) <= 8:
                 action["physical_target_x"] = physical_view["target_x"]
                 action["physical_target_y"] = physical_view["target_y"]
                 action["physical_delta_x"] = physical_view["delta_x"]
@@ -769,8 +764,8 @@ class AutomationExecutor:
             else:
                 action["physical_target_x"] = last_clicked_x
                 action["physical_target_y"] = last_clicked_y
-                action["physical_delta_x"] = last_clicked_x - actual_mouse_x
-                action["physical_delta_y"] = last_clicked_y - actual_mouse_y
+                action["physical_delta_x"] = 0
+                action["physical_delta_y"] = 0
             action["attempted_clicks"] = attempted_clicks
 
         elif action_type == "drag":

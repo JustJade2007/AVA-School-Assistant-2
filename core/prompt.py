@@ -73,6 +73,11 @@ Your tasks are:
      * If your reasoning concludes that Option B (or value X) is the correct answer, YOU MUST SELECT OPTION B (or type value X).
      * NEVER second-guess your own sound calculations by thinking: "The math says Option B, but maybe Option B was already tried and rejected, so I should pick Option C". NEVER do this!
      * Even if you are rethinking an attempt genuinely marked incorrect by an explicit red 'X', carefully re-verify arithmetic, reading comprehension, units, and formatting (decimals vs fractions, rounding). BUT NEVER intentionally choose an answer known to be academically wrong!
+   - STRICT CONSISTENCY BETWEEN REASONING, ANSWER, AND ACTIONS:
+     * In your JSON output, the "reasoning" field is evaluated FIRST so you can solve the problem step-by-step.
+     * Your "answer" field (and each item's "correct_answer") MUST 100% MATCH the exact conclusion of your "reasoning"!
+     * NEVER state Option A in your reasoning and then output Option B in "answer"!
+     * The "actions" generated MUST strictly target the exact same option specified in both "reasoning" and "answer"!
    - EMBEDDED IMAGES, DIAGRAMS, CHARTS, AND FIGURES (HIGH-PRECISION OCR):
      * When a question contains an embedded image, diagram, geometric shape, plot, coordinate plane, table, map, or scientific figure:
        YOU MUST PERFORM METICULOUS VISUAL OCR ON ALL NUMBERS AND LABELS EMBEDDED IN THE IMAGE!
@@ -206,8 +211,8 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
 {{
   "status": "ready",
   "question": "Primary question text (or combined question summary if multi-part)",
-  "answer": "Clear, direct final answer (e.g. 'Option B (144)' or 'Part 1: Option A | Part 2: 144')",
-  "reasoning": "Clear step-by-step academic explanation of the solution",
+  "reasoning": "Clear step-by-step academic explanation and calculation of the solution (SOLVE THE PROBLEM FIRST HERE)",
+  "answer": "Clear, direct final answer derived strictly from the reasoning above (e.g. 'Option B (144)' or 'Part 1: Option A | Part 2: 144')",
   "summary": "Brief summary of questions and parts detected",
   "is_written_response": false,
   "min_word_count": null,
@@ -231,9 +236,9 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
       "is_rethinking": false,
       "rethink_reasoning": "",
       "existing_answer": null,
+      "reasoning": "Photosynthesis is the process by which plants convert sunlight, water, and CO2 into glucose and oxygen. Comparing choices, Option B correctly defines this. Selecting Option B.",
       "correct_answer": "Option B",
       "needs_action": true,
-      "reasoning": "Question is unsubmitted and unselected (radio buttons have empty circles). Clicking Option B.",
       "choices": [
         {{"label": "Option A", "box_2d": [280, 240, 305, 520], "x": 255, "y": 292}},
         {{"label": "Option B", "box_2d": [320, 240, 345, 520], "x": 255, "y": 332}},
@@ -258,9 +263,9 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
       "is_rethinking": false,
       "rethink_reasoning": "",
       "existing_answer": null,
+      "reasoning": "Calculating 12 * 12: 12 * 10 = 120, 12 * 2 = 24, 120 + 24 = 144. The exact answer is 144. Input box is currently empty. Focusing and typing 144.",
       "correct_answer": "144",
       "needs_action": true,
-      "reasoning": "12 * 12 = 144. Question is unsubmitted and input box is empty. Focusing box and typing 144.",
       "actions": [
         {{
           "type": "click",
@@ -404,7 +409,8 @@ def get_double_check_prompt(
     image_height: int,
     question: str,
     intended_answer: str,
-    intended_actions: list = None
+    intended_actions: list = None,
+    reasoning: str = ""
 ) -> str:
     """
     Returns the verification prompt instructing the vision model to double-check
@@ -415,6 +421,8 @@ def get_double_check_prompt(
     if intended_actions:
         actions_desc = f"\nIntended actions attempted:\n{json.dumps(intended_actions, indent=2)}"
 
+    reasoning_desc = f"\n- Academic Reasoning: {reasoning}" if reasoning else ""
+
     return f"""You are AVA's QA & Visual Verification Engine.
 The screenshot dimensions are {image_width} pixels wide by {image_height} pixels high.
 
@@ -422,8 +430,14 @@ An automated student assistant has just finished executing actions to answer the
 Before the student advances or submits, you must perform a strict, independent DOUBLE-CHECK of the screen.
 
 TARGET PROBLEM DETAILS:
-- Question: {question}
+- Question: {question}{reasoning_desc}
 - Target Correct Answer: {intended_answer}{actions_desc}
+
+CRITICAL VERIFICATION PRINCIPLES:
+- GROUND IN ACADEMIC REASONING: Compare what is visibly selected/typed on screen against the Academic Reasoning and Target Correct Answer.
+- If the on-screen selected option accurately matches the mathematical/academic derivation, DO NOT flag it as wrong!
+- NEVER overturn a correct answer or force the selection of an incorrect choice!
+- ONLY flag "messed_up": true if the visibly selected option directly contradicts the sound academic derivation or is factually wrong.
 
 YOUR VERIFICATION TASKS:
 1. INSPECT THE CURRENT ON-SCREEN STATE:

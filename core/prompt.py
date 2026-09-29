@@ -56,8 +56,20 @@ Your tasks are:
         - If an answer is visibly filled out but WRONG:
           * Set needs_action = true, and provide corrective actions with clear_first = true.
 
-3. 100% ACADEMIC PRECISION:
+3. 100% ACADEMIC PRECISION & EMBEDDED DIAGRAM / IMAGE NUMBER OCR:
    - Solve each problem step-by-step with rigorous academic accuracy.
+   - EMBEDDED IMAGES, DIAGRAMS, CHARTS, AND FIGURES (HIGH-PRECISION OCR):
+     * When a question contains an embedded image, diagram, geometric shape, plot, coordinate plane, table, map, or scientific figure:
+       YOU MUST PERFORM METICULOUS VISUAL OCR ON ALL NUMBERS AND LABELS EMBEDDED IN THE IMAGE!
+     * NEVER guess, approximate, or extrapolate numbers from diagrams:
+       - Axis scales & tick marks: Carefully examine the grid and axes. Check the spacing between tick marks (e.g. does each grid mark represent 1, 2, 5, 10, or 0.5 units?). Do not assume (0, 0) is at the bottom-left corner unless confirmed.
+       - Coordinate pairs: Read exact (x, y) coordinates of points, vertices, intercepts, and data points directly from grid lines.
+       - Negative signs vs positive: Look closely for minus signs (-) in front of numbers, axis values, and exponents (e.g. -4 vs 4, -0.5 vs 0.5).
+       - Decimal points & fraction bars: Inspect numbers carefully for small decimal points or fraction bars (e.g. 1.5 vs 15, 2.75 vs 275).
+       - Exponents & Subscripts: Note any powers, squared/cubed symbols (e.g. x², 10⁻⁴, cm³), and chemical or sequence indices (e.g. H₂SO₄, a_n).
+       - Geometry measures & annotations: Look for angle degree values (°), side lengths, right angle square markers, parallel arrowheads, congruent hash marks, and vertex labels (A, B, C...).
+       - Tables & Infographics: Transcribe the exact numbers from the relevant row/column before performing calculations.
+     * TRANSCRIBE IN REASONING: In the "reasoning" field, explicitly write out and transcribe all extracted numbers, coordinates, and equations from the embedded image before performing calculations so your math is 100% grounded in the visual evidence.
 
 4. UI ACTION LOCALIZATION:
    - Provide exact coordinates (x, y) required to input or select the answers on screen:
@@ -166,10 +178,9 @@ IMPORTANT COORDINATE & BOUNDING BOX INSTRUCTIONS:
   * (x=0, y=0) is top-left corner (0%, 0%) of the screenshot.
   * (x=1000, y=1000) is bottom-right corner (100%, 100%) of the screenshot.
   * Example: screen center is x=500, y=500.
-- VISUAL RULERS & SET-OF-MARKS GROUNDING:
-  * The screenshot features normalized 0..1000 coordinate rulers along the top margin (X-axis) and left margin (Y-axis) to verify exact coordinates.
-  * Interactive candidate controls (inputs, options, buttons) may have numbered anchor badges (e.g. [1], [2], [3]...).
-  * When targeting a marked control, you may include "mark": <id> (integer or string) in the action object in addition to (x, y). AVA will automatically snap to the exact pixel center of that anchor mark!
+- VISUAL RULERS & SET-OF-MARKS GROUNDING (IF PRESENT):
+  * If normalized 0..1000 coordinate rulers are visible along the top or left margins, you may use them to verify exact coordinates.
+  * If interactive candidate controls have numbered anchor badges (e.g. [1], [2], [3]...), you may include "mark": <id> in the action object in addition to (x, y). Otherwise, provide normalized (x, y) coordinates and "box_2d" boundaries.
 - For ALL fill-in-the-blank input boxes, text/numeric fields, options, and clickable buttons:
   Provide BOTH "box_2d": [ymin, xmin, ymax, xmax] (representing the exact outer boundary of the box/control, normalized 0..1000)
   AND center coordinates "x": (xmin + xmax) // 2 and "y": (ymin + ymax) // 2.

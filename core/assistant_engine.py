@@ -1092,6 +1092,11 @@ class AssistantEngine:
                             isx, isy = int(sx), int(sy)
                             roi = self.verifier.capture_roi(isx, isy)
                             sib_coords = self.verifier.get_sibling_choice_coordinates(isx, isy, result)
+                            if not sib_coords:
+                                # Without sibling choices on screen to compare against, standalone checks
+                                # must NOT suppress AI-generated actions before execution!
+                                all_already_done = False
+                                break
                             sib_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
                             is_sel, reason, _ = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sib_rois)
                             if not is_sel:
@@ -1108,8 +1113,18 @@ class AssistantEngine:
                     result["actions"] = []
                     result["ready_to_advance"] = True
 
+            q_text = str(result.get("question", "")).strip().lower()
+            is_interstitial = (
+                not q_text
+                or (
+                    any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
+                    and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation"])
+                )
+            )
+
             # If all parts are already confirmed CORRECT by platform and no actions are required,
-            # OR if question answer is already in place on screen (needs_action=False, actions=0) and ready to advance
+            # OR if this is an interstitial screen with no question,
+            # advance immediately ONLY if auto_next is enabled!
             is_already_filled = (
                 result.get("needs_action") is False
                 and len(result.get("actions", [])) == 0
@@ -1119,6 +1134,7 @@ class AssistantEngine:
                 and not bool(result.get("is_rethinking"))
                 and bool(result.get("next_button") or str(result.get("advance_action", "")).lower() == "scroll_down")
                 and not self._is_final_submission_button(result.get("next_button"))
+                and (eval_info["status"] == "correct" or is_interstitial)
             )
             if (
                 (eval_info["status"] == "correct" and (not result.get("needs_action") or len(result.get("actions", [])) == 0) and not result.get("check_button"))
@@ -1126,9 +1142,12 @@ class AssistantEngine:
             ):
                 if eval_info["status"] == "correct":
                     logger.info("Question is already marked CORRECT by platform on screen. No input actions needed.")
+                elif is_interstitial:
+                    logger.info("Interstitial/transition screen detected (no question). Advancing...")
                 else:
-                    logger.info("Question answer is already in place on screen (needs_action=False). Advancing to next question...")
-                if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
+                    logger.info("Question confirmed answered. Advancing...")
+
+                if self.config.auto_next and not self.executor.is_stopped():
                     time.sleep(0.4)
                     advance_action = str(result.get("advance_action", "")).lower()
                     if advance_action == "scroll_down":
@@ -1151,7 +1170,7 @@ class AssistantEngine:
                         self.trigger_solve()
                     return
                 else:
-                    msg = "Question confirmed correct" if eval_info["status"] == "correct" else "Question already answered on screen"
+                    msg = "Question confirmed correct" if eval_info["status"] == "correct" else "Ready to advance (F10)"
                     self.set_state(EngineState.IDLE, msg)
                     return
 
@@ -1259,7 +1278,7 @@ class AssistantEngine:
                 logger.info("confirm_and_execute: Question already marked CORRECT by platform.")
                 self.last_verification_detail = "already marked CORRECT by platform"
                 self._handle_adjustment("✓ Question already marked CORRECT by platform")
-                if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
+                if self.config.auto_next and not self.executor.is_stopped():
                     self.trigger_next_question()
                 else:
                     self.set_state(EngineState.IDLE, "Question confirmed correct")
@@ -1282,7 +1301,7 @@ class AssistantEngine:
             logger.info("execute_current_solution: Question already marked CORRECT by platform. Skipping input actions.")
             self.last_verification_detail = "already marked CORRECT by platform"
             self._handle_adjustment("✓ Question already marked CORRECT by platform")
-            if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
+            if self.config.auto_next and not self.executor.is_stopped():
                 self.trigger_next_question()
             else:
                 self.set_state(EngineState.IDLE, "Question confirmed correct")
@@ -1352,6 +1371,9 @@ class AssistantEngine:
                         isx, isy = int(sx), int(sy)
                         roi = self.verifier.capture_roi(isx, isy)
                         sib_coords = self.verifier.get_sibling_choice_coordinates(isx, isy, self.last_result)
+                        if not sib_coords:
+                            all_already_selected = False
+                            break
                         sibling_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
                         is_sel, reason, conf = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sibling_rois)
                         if is_sel:
@@ -1616,7 +1638,11 @@ class AssistantEngine:
             is_multi_part = self.last_result.get("is_multi_part", False)
             advance_action = str(self.last_result.get("advance_action", "")).lower()
 
-            should_advance = (self.config.auto_next or self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part))
+            should_advance = (
+                self.config.auto_next
+                or (self.config.chain_multi_parts and is_multi_part and has_pending_items)
+                or (self.config.autonomous_mode and bool(check_btn))
+            )
 
             if should_advance:
                 # If there are pending multi-part items, do NOT advance or click Next button!
@@ -1638,6 +1664,13 @@ class AssistantEngine:
 
                 # Branch A: AI detected a single-page scrolling quiz (advance by scrolling down)
                 if advance_action == "scroll_down":
+                    if not self.config.auto_next:
+                        logger.info("Auto-advance skipped: 'auto_next' is disabled in settings. Pausing at completed question.")
+                        self.set_state(
+                            EngineState.IDLE,
+                            "Question answered. Auto-next is disabled in settings — scroll down or press F10 to advance."
+                        )
+                        return
                     scroll_amt = int(self.last_result.get("scroll_amount", 450))
                     logger.info(f"Auto-advance: AI detected scrolling quiz, scrolling down {scroll_amt}px to next question...")
                     self._advance_by_scrolling_down(scroll_amt=scroll_amt, override_region=self.last_region)
@@ -1690,7 +1723,15 @@ class AssistantEngine:
                             logger.info("Post-submission evaluation: Platform confirmed CORRECT!")
                             self._handle_adjustment("✓ Platform confirmed answer CORRECT!")
 
-                    # Step 2: Click "Next" button if known, or dynamically locate the revealed button
+                    # Step 2: Next question advancing MUST strictly obey self.config.auto_next!
+                    if not self.config.auto_next:
+                        logger.info("Auto-advance skipped: 'auto_next' is disabled in settings. Pausing at completed question.")
+                        self.set_state(
+                            EngineState.IDLE,
+                            "Question answered. Auto-next is disabled in settings — click Next or press F10 to advance."
+                        )
+                        return
+
                     submit_btn = self.last_result.get("submit_button")
                     if not advanced and next_btn and isinstance(next_btn, dict):
                         # Safeguard: if next_btn is actually an assessment-level submit button, check for unfinished work!
@@ -1794,7 +1835,7 @@ class AssistantEngine:
                         return
 
                 # Step 3: Multi-part continuation or autonomous loop
-                if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
+                if self.config.auto_next and (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
                     load_delay = max(2.5, self.config.auto_next_delay + 1.0)
                     logger.info(f"Advancing to next question: Waiting {load_delay:.1f}s for page to render...")
                     self._handle_adjustment("⏳ Waiting for next question to load...")

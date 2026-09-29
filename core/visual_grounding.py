@@ -278,8 +278,8 @@ def prepare_grounded_image(
     image: Image.Image,
     region: Tuple[int, int, int, int],
     prior_actions: Optional[List[Dict[str, Any]]] = None,
-    enable_marks: bool = True,
-    enable_rulers: bool = True
+    enable_marks: bool = False,
+    enable_rulers: bool = False
 ) -> Tuple[Image.Image, Dict[int, Dict[str, Any]]]:
     """
     Prepares a fully grounded screenshot for AI vision consumption.

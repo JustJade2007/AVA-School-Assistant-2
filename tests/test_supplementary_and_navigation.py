@@ -259,7 +259,7 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
     def test_auto_advance_in_autonomous_mode(self):
         engine = AssistantEngine(config_manager=self.config_manager)
         engine.config_manager.config.autonomous_mode = True
-        engine.config_manager.config.auto_next = False  # autonomous_mode alone must trigger advancing!
+        engine.config_manager.config.auto_next = False  # When auto_next is False, Next button MUST NOT be clicked!
 
         engine.last_result = {
             "ready_to_advance": True,
@@ -272,6 +272,13 @@ class TestSupplementaryAndNavigation(unittest.TestCase):
 
         engine.execute_current_solution()
 
+        # When auto_next is False, next button must NOT be triggered
+        engine.trigger_next_button.assert_not_called()
+        engine.trigger_solve.assert_not_called()
+
+        # When auto_next is enabled, next button MUST be clicked
+        engine.config_manager.config.auto_next = True
+        engine.execute_current_solution()
         engine.trigger_next_button.assert_called_once()
         engine.trigger_solve.assert_called_once()
 

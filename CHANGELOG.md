@@ -8,6 +8,21 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.12.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Premature Auto-Advance & Option Detection Fix**:
+  - **Directional Contrast Heuristics**: Fixed contrast evaluation in `is_radio_or_checkbox_selected` in [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py) to evaluate directional contrast (core darker than gap in light theme, brighter in dark theme) and require core checkmark strokes, eliminating false positives where unselected radio circles with border rings were falsely classified as selected bullet dots.
+  - **Action Suppression Safeguard**: Enforced that pre-execution action suppression in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) requires discovered on-screen sibling choices, preventing standalone checks from canceling AI-generated clicks.
+  - **Unsubmitted Question Advance Guard**: Guarded `is_already_filled` in `_run_solve_pipeline` so unsubmitted questions with active question text cannot bypass execution and auto-advance.
+- **Strict Auto-Next Setting Enforcement**:
+  - **Settings Obedience**: Resolved an issue where AVA attempted to hit the Next button even when "Auto Click Next Question" was disabled in settings.
+  - **Decoupled from Autonomous Mode**: Updated [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) across `_run_solve_pipeline`, `confirm_and_execute`, and `execute_current_solution` so auto-advancing to the next question strictly requires `config.auto_next == True`, ensuring that `autonomous_mode` and `chain_multi_parts` respect the setting and pause at completed questions.
+- **Embedded Diagram & Image Numerical OCR Accuracy**:
+  - **Clean Screenshot Grounding**: Disabled intrusive Set-of-Marks tags and coordinate margin rulers by default in [core/capture.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/capture.py) and [core/visual_grounding.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/visual_grounding.py) that were obscuring numbers, geometry angles, and digits on diagrams.
+  - **High-Fidelity 4:4:4 Chroma Subsampling**: Upgraded JPEG encoding in [core/capture.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/capture.py) to quality 95 with `subsampling=0` to eliminate compression ringing around small numbers, decimal points, and minus signs.
+  - **Dedicated Image OCR System Prompt**: Added explicit guidance in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) directing vision models to meticulously transcribe embedded diagram numbers, coordinate axes, scale intervals, negative signs, decimals, exponents, and geometry labels.
+
 ## [2.2.11.a] - 2026-09-27
 
 ### Fixed & Enhanced

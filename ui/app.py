@@ -172,12 +172,13 @@ class AVASchoolAssistantApp:
             self.hud_window.withdraw()
 
         # 2. Hide or destroy Playground
-        if self.playground_window and self.playground_window.winfo_exists():
+        playground_window = self.playground_window
+        self.playground_window = None
+        if playground_window and playground_window.winfo_exists():
             try:
-                self.playground_window.destroy()
+                playground_window.destroy()
             except Exception:
                 pass
-            self.playground_window = None
 
         # 3. Stop background hotkeys & emergency stop solving
         try:

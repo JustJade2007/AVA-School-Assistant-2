@@ -123,6 +123,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.is_cloaked = True
         self.current_file_path: Optional[str] = None
         self._is_generating = False
+        self._is_closing = False
 
         self._setup_window()
         self._build_header()
@@ -133,7 +134,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.show_step(1)
 
         # Apply cloaking after window mapping
-        self.after(200, self._apply_initial_cloak)
+        self._after_if_open(200, self._apply_initial_cloak)
 
     @property
     def config(self):
@@ -154,6 +155,25 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
 
         # Protocol when closing via OS window X
         self.protocol("WM_DELETE_WINDOW", self._on_close_requested)
+
+    def _after_if_open(self, delay_ms: int, callback: Callable[[], None]):
+        """Run a UI callback only while this workspace is still alive."""
+        if self._is_closing:
+            return
+
+        def guarded_callback():
+            if self._is_closing:
+                return
+            try:
+                if self.winfo_exists():
+                    callback()
+            except tk.TclError:
+                pass
+
+        try:
+            self.after(delay_ms, guarded_callback)
+        except tk.TclError:
+            pass
 
     def _apply_initial_cloak(self):
         enabled = self.config.anti_capture_enabled if self.config else True
@@ -1149,8 +1169,8 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                     result = WebSourceIngestor.fetch(url, ai_client=self.ai_client)
                     if not result.get("success"):
                         err = result.get("error", "Failed to fetch URL")
-                        self.after(0, lambda: status_lbl.configure(text=f"Error: {err}", text_color="#ef4444"))
-                        self.after(0, lambda: fetch_btn.configure(state="normal", text="Fetch & Add Source"))
+                        self._after_if_open(0, lambda: status_lbl.configure(text=f"Error: {err}", text_color="#ef4444"))
+                        self._after_if_open(0, lambda: fetch_btn.configure(state="normal", text="Fetch & Add Source"))
                         return
 
                     stype = "youtube" if result.get("is_youtube") else "web"
@@ -1173,11 +1193,11 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                     except Exception as cite_err:
                         logger.warning(f"Could not generate citation for {url}: {cite_err}")
 
-                    self.after(0, lambda: self._finish_web_ingest(sub_win, src))
+                    self._after_if_open(0, lambda: self._finish_web_ingest(sub_win, src))
                 except Exception as e:
                     logger.error(f"Error fetching web source: {e}")
-                    self.after(0, lambda: status_lbl.configure(text=f"Exception: {e}", text_color="#ef4444"))
-                    self.after(0, lambda: fetch_btn.configure(state="normal", text="Fetch & Add Source"))
+                    self._after_if_open(0, lambda: status_lbl.configure(text=f"Exception: {e}", text_color="#ef4444"))
+                    self._after_if_open(0, lambda: fetch_btn.configure(state="normal", text="Fetch & Add Source"))
 
             threading.Thread(target=worker, daemon=True).start()
 
@@ -1229,7 +1249,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                                 self.project.bibliography_entries.append(cit)
                         except Exception as cite_err:
                             logger.warning(f"Could not generate citation for auto-imported YouTube link {u}: {cite_err}")
-                        self.after(0, self._render_sources_list)
+                        self._after_if_open(0, self._render_sources_list)
                 except Exception as ex:
                     logger.warning(f"Could not auto-import youtube link {u}: {ex}")
             threading.Thread(target=worker, daemon=True).start()
@@ -1329,6 +1349,13 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.withdraw()  # Temporarily hide workspace for clean snip
 
         def on_snip(region):
+            if self._is_closing:
+                return
+            try:
+                if not self.winfo_exists():
+                    return
+            except tk.TclError:
+                return
             self.deiconify()
             t = threading.Thread(target=self._process_snipped_rubric, args=(region,), daemon=True)
             t.start()
@@ -1346,12 +1373,12 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                     base64_image=b64,
                     prompt="Extract all grading criteria, guidelines, and point values from this rubric screenshot verbatim."
                 )
-                self.after(0, lambda: self._apply_snipped_rubric_text(ocr_text))
+                self._after_if_open(0, lambda: self._apply_snipped_rubric_text(ocr_text))
             else:
-                self.after(0, lambda: messagebox.showwarning("Notice", "AI Client not configured for OCR extraction."))
+                self._after_if_open(0, lambda: messagebox.showwarning("Notice", "AI Client not configured for OCR extraction."))
         except Exception as e:
             logger.error(f"Error snipping rubric: {e}")
-            self.after(0, lambda: messagebox.showerror("Snip Error", f"Could not extract rubric from snip: {e}"))
+            self._after_if_open(0, lambda: messagebox.showerror("Snip Error", f"Could not extract rubric from snip: {e}"))
 
     def _apply_snipped_rubric_text(self, text: str):
         self.rubric_raw_textbox.delete("1.0", "end")
@@ -1393,7 +1420,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 logger.error(f"Error parsing rubric: {e}")
                 criteria = []
             finally:
-                self.after(0, lambda: self._finish_rubric_parse(criteria))
+                self._after_if_open(0, lambda: self._finish_rubric_parse(criteria))
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -1692,10 +1719,10 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         def task():
             try:
                 sections = self.engine.generate_outline(self.project, customization=customization)
-                self.after(0, lambda: self._finish_outline_gen(sections))
+                self._after_if_open(0, lambda: self._finish_outline_gen(sections))
             except Exception as e:
                 logger.error(f"Error generating outline: {e}", exc_info=True)
-                self.after(0, lambda: self._on_outline_gen_failed(str(e)))
+                self._after_if_open(0, lambda: self._on_outline_gen_failed(str(e)))
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -2135,7 +2162,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 humanizer_bridge=self.humanizer_bridge,
                 auto_humanize=True,
             )
-            self.after(0, self._finish_draft_active_section)
+            self._after_if_open(0, self._finish_draft_active_section)
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -2163,7 +2190,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             h_text = res.get("humanized_text", text_to_humanize)
             sec.humanized_text = h_text
             sec.final_text = h_text
-            self.after(0, self._finish_rehumanize)
+            self._after_if_open(0, self._finish_rehumanize)
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -2190,7 +2217,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 humanizer_bridge=self.humanizer_bridge,
                 auto_humanize=True,
             )
-            self.after(0, self._finish_refine)
+            self._after_if_open(0, self._finish_refine)
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -2442,10 +2469,10 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             try:
                 report = self.teacher_evaluator.grade_document(self.project)
                 TeacherEvaluator.apply_to_project(report, self.project)
-                self.after(0, lambda: self._on_teacher_grading_finished(report))
+                self._after_if_open(0, lambda: self._on_teacher_grading_finished(report))
             except Exception as e:
                 logger.error(f"Teacher grading error: {e}", exc_info=True)
-                self.after(0, lambda: self._on_teacher_grading_failed(str(e)))
+                self._after_if_open(0, lambda: self._on_teacher_grading_failed(str(e)))
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -2859,6 +2886,10 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
     # -------------------------------------------------------------------------
 
     def _on_close_requested(self):
+        if self._is_closing:
+            return
+        self._is_closing = True
+
         # Auto-save session to temporary backup before exiting
         try:
             os.makedirs("projects", exist_ok=True)

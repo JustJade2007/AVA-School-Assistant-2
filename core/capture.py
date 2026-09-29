@@ -156,18 +156,18 @@ class ScreenCapture:
         scale_x = orig_w / float(curr_w)
         scale_y = orig_h / float(curr_h)
 
-        # Compress to JPEG
+        # Compress to high-fidelity JPEG with 4:4:4 chroma subsampling (crisp numbers/text)
         buffer = io.BytesIO()
-        img_resized.save(buffer, format="JPEG", quality=quality)
+        img_resized.save(buffer, format="JPEG", quality=quality, subsampling=0)
         base64_data = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
         return base64_data, curr_w, curr_h, scale_x, scale_y, offset_x, offset_y
 
     @staticmethod
-    def encode_image_to_base64(img: Image.Image, quality: int = 90) -> str:
-        """Compresses a PIL Image to JPEG and encodes as Base64 string."""
+    def encode_image_to_base64(img: Image.Image, quality: int = 95) -> str:
+        """Compresses a PIL Image to JPEG with 4:4:4 chroma subsampling and encodes as Base64 string."""
         buffer = io.BytesIO()
-        img.convert("RGB").save(buffer, format="JPEG", quality=quality)
+        img.convert("RGB").save(buffer, format="JPEG", quality=quality, subsampling=0)
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     def capture_and_ground(
@@ -175,14 +175,15 @@ class ScreenCapture:
         region: Optional[Tuple[int, int, int, int]] = None,
         monitor_idx: int = 1,
         max_dimension: int = 1920,
-        quality: int = 90,
+        quality: int = 95,
         prior_actions: Optional[List[Dict[str, Any]]] = None,
-        enable_marks: bool = True,
-        enable_rulers: bool = True
+        enable_marks: bool = False,
+        enable_rulers: bool = False
     ) -> Tuple[str, int, int, float, float, int, int, Dict[int, Dict[str, Any]]]:
         """
         Captures the screen, optionally scales down, grounds with marginal coordinate rulers
-        and Set-of-Marks interactive element tags, and encodes as Base64 JPEG.
+        and Set-of-Marks interactive element tags (disabled by default to prevent obscuring embedded numbers),
+        and encodes as Base64 JPEG.
         Returns:
             (base64_string, curr_w, curr_h, scale_x, scale_y, offset_x, offset_y, mark_registry)
         """
@@ -210,7 +211,7 @@ class ScreenCapture:
         scale_x = orig_w / float(curr_w)
         scale_y = orig_h / float(curr_h)
 
-        # Ground with coordinate rulers and candidate Set-of-Marks tags
+        # Ground with coordinate rulers and candidate Set-of-Marks tags (if enabled)
         grounded_img, mark_registry = prepare_grounded_image(
             image=img_resized,
             region=(offset_x, offset_y, orig_w, orig_h),

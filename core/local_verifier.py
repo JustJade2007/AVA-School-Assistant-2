@@ -853,13 +853,25 @@ class LocalVisualVerifier:
                     if core_vals and gap_vals:
                         avg_core = sum(core_vals) / len(core_vals)
                         avg_gap = sum(gap_vals) / len(gap_vals)
-                        contrast = abs(avg_gap - avg_core)
                         avg_sat = sum(core_sats) / len(core_sats)
 
-                        if contrast > best_contrast:
-                            best_contrast = contrast
-                        if avg_sat > best_sat:
-                            best_sat = avg_sat
+                        # Light theme: Core must be darker than gap ring (inner bullet dot inside hollow ring)
+                        # An unselected radio button has a white center (avg_core ~250) and a darker border ring (avg_gap < avg_core).
+                        # Thus, for light theme, avg_gap must be significantly LIGHTER than avg_core!
+                        if avg_gap >= 128:
+                            light_bullet_contrast = avg_gap - avg_core
+                            if light_bullet_contrast > best_contrast and avg_core < 170:
+                                best_contrast = light_bullet_contrast
+                            if avg_sat > best_sat and light_bullet_contrast > 10.0 and avg_core < 195:
+                                best_sat = avg_sat
+
+                        # Dark theme: Core must be brighter than gap ring (bright active bullet dot inside dark background)
+                        else:
+                            dark_bullet_contrast = avg_core - avg_gap
+                            if dark_bullet_contrast > best_contrast and (avg_core > 100 or avg_sat >= 20.0):
+                                best_contrast = dark_bullet_contrast
+                            if avg_sat > best_sat and dark_bullet_contrast > 10.0:
+                                best_sat = avg_sat
 
             # Evaluation 1: Radio button inner bullet dot
             if best_contrast >= 25.0:
@@ -879,7 +891,18 @@ class LocalVisualVerifier:
             dark_px = sum(inner_hist[:140])
             bright_px = sum(inner_hist[160:])
 
-            if inner_std >= 22.0 and (dark_px >= 8 or bright_px >= 8):
+            # Verify that the central core of the box (not just border edges) has checkmark strokes
+            core_r = min(3, box_r - 2)
+            if core_r >= 2:
+                core_crop = gray.crop((mid_x - core_r, mid_y - core_r, mid_x + core_r, mid_y + core_r))
+                c_hist = core_crop.histogram()
+                c_dark = sum(c_hist[:140])
+                c_bright = sum(c_hist[160:])
+                has_core_stroke = (c_dark >= 3 if (sum(inner_hist[:128]) < sum(inner_hist[128:])) else c_bright >= 3)
+            else:
+                has_core_stroke = True
+
+            if inner_std >= 22.0 and (dark_px >= 8 or bright_px >= 8) and has_core_stroke:
                 return True, f"checkbox_checkmark (std={inner_std:.1f})", 0.88
 
         except Exception as e:

@@ -391,21 +391,20 @@ class AssistantEngine:
                 rethink_reasoning = "Question marked incorrect by platform. Rethinking problem and entry format."
             details = f"marked_incorrect (ai={eval_status})"
 
-        # 1b. If visual markers indicate incorrect with high confidence & high pixel count (and not contradicted by AI 'correct' or 'needs_action=False')
+        # 1b. If post-submission differential verification explicitly confirmed newly appeared error markers
         elif (
-            local_markers.get("detected")
+            res.get("is_post_submission_differential")
+            and local_markers.get("detected")
             and local_markers.get("status") == "incorrect"
             and local_markers.get("confidence", 0) >= 0.88
-            and local_markers.get("red_pixels", 0) >= 1200
             and eval_status not in ["correct", "right"]
-            and res.get("needs_action") is not False
         ):
             final_status = "incorrect"
             is_answered = False
             is_rethinking = True
             if not rethink_reasoning:
-                rethink_reasoning = "Platform visual error indicator detected. Rethinking entry."
-            details = f"marked_incorrect (visual={local_markers.get('details', '')})"
+                rethink_reasoning = "Platform visual error indicator detected after submit."
+            details = f"marked_incorrect (differential_visual={local_markers.get('details', '')})"
 
         # 2. If visual markers explicitly indicate correct
         elif local_markers.get("detected") and local_markers.get("status") == "correct" and local_markers.get("confidence", 0) >= 0.85:
@@ -1754,23 +1753,6 @@ class AssistantEngine:
                             except Exception as e:
                                 logger.debug(f"Pre-next capture unavailable: {e}")
 
-                        # Failsafe: Briefly check screen to see if question was marked wrong before clicking Next
-                        if before_next_img is not None and self.config.local_verification_enabled:
-                            pre_markers = self.verifier.detect_platform_evaluation_markers(before_next_img)
-                            if pre_markers.get("status") == "incorrect" and pre_markers.get("confidence", 0) >= 0.85:
-                                logger.warning(
-                                    f"Failsafe: Pre-next screen check detected question is marked INCORRECT "
-                                    f"({pre_markers.get('details')})! Halting next button advance to avoid softlock."
-                                )
-                                self._handle_adjustment("⚠️ Answer marked INCORRECT! Halting advance to rethink...")
-                                self.last_result["ready_to_advance"] = False
-                                self.last_result["evaluation_status"] = "incorrect"
-                                self.last_result["is_rethinking"] = True
-                                time.sleep(0.5)
-                                self.set_state(EngineState.IDLE)
-                                self.trigger_solve(region=self.last_region)
-                                return
-
                         self.trigger_next_button()
 
                         # Zero-token verification: verify if screen transitioned to next question
@@ -2177,6 +2159,13 @@ class AssistantEngine:
                     logger.info(f"Auto-advance: Successfully detected '{desc}' button at ({nx}, {ny})")
                     self._handle_adjustment(f"Found Next button: ({nx}, {ny})")
 
+                    pre_submit_img = None
+                    if self.config.local_verification_enabled:
+                        try:
+                            pre_submit_img = self.capture.capture_screen(region=region)
+                        except Exception as e:
+                            logger.debug(f"Pre-submit capture error: {e}")
+
                     self.executor.click(int(nx), int(ny))
                     self._record_next_click()
 
@@ -2187,30 +2176,30 @@ class AssistantEngine:
                         logger.info("Navigation button clicked was Submit/Check. Waiting for Next button to be revealed...")
                         time.sleep(max(1.0, self.config.auto_next_delay))
                         try:
-                            # Failsafe: Briefly check screen to see if question was marked wrong before checking for second next button
+                            # Differential check: verify if newly appeared error markers appeared after clicking submit
                             post_submit_img = None
-                            if self.config.local_verification_enabled:
+                            if self.config.local_verification_enabled and pre_submit_img is not None:
                                 try:
                                     post_submit_img = self.capture.capture_screen(region=region)
                                 except Exception as e:
                                     logger.debug(f"Post-submit capture error: {e}")
 
-                            if post_submit_img is not None and self.config.local_verification_enabled:
-                                markers = self.verifier.detect_platform_evaluation_markers(post_submit_img)
-                                if markers.get("status") == "incorrect" and markers.get("confidence", 0) >= 0.85:
-                                    logger.warning(
-                                        f"Failsafe: Screen check detected question was marked INCORRECT after submit "
-                                        f"({markers.get('details')})! Halting second next button check to avoid softlock."
-                                    )
-                                    self._handle_adjustment("⚠️ Answer marked INCORRECT! Halting advance to rethink...")
-                                    if self.last_result:
-                                        self.last_result["evaluation_status"] = "incorrect"
-                                        self.last_result["is_rethinking"] = True
-                                        self.last_result["ready_to_advance"] = False
-                                    time.sleep(0.4)
-                                    self.set_state(EngineState.IDLE)
-                                    self.trigger_solve(region=region)
-                                    return False
+                                if post_submit_img is not None:
+                                    markers = self.verifier.verify_post_submission_evaluation(pre_submit_img, post_submit_img)
+                                    if markers.get("status") == "incorrect" and markers.get("confidence", 0) >= 0.85:
+                                        logger.warning(
+                                            f"Failsafe: Differential screen check detected answer was marked INCORRECT after submit "
+                                            f"({markers.get('details')})! Halting advance to rethink."
+                                        )
+                                        self._handle_adjustment("⚠️ Answer marked INCORRECT! Halting advance to rethink...")
+                                        if self.last_result:
+                                            self.last_result["evaluation_status"] = "incorrect"
+                                            self.last_result["is_rethinking"] = True
+                                            self.last_result["ready_to_advance"] = False
+                                        time.sleep(0.4)
+                                        self.set_state(EngineState.IDLE)
+                                        self.trigger_solve(region=region)
+                                        return False
 
                             b64_sub, sw, sh, s_sx, s_sy, s_ox, s_oy = self.capture.capture_and_encode(
                                 region=region,

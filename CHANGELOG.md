@@ -8,6 +8,20 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.13.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Evaluation Status False-Positive Fix ("Marked Wrong" When No Indication)**:
+  - **Strict "unsubmitted" Default**: Updated [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) to explicitly mandate that `evaluation_status` must strictly default to `"unsubmitted"` (`is_rethinking: false`) unless prominent, unmistakable, and explicit post-submission grading feedback is visible (e.g. an explicit red 'X' icon or red "Incorrect / Try Again" banner). Clarified that red required asterisks (*), red web page headers/logos, red buttons, and colored math diagram lines are never error indicators.
+  - **Eliminated Static Screen Marker Overrides**: In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), removed naive static full-screen red pixel checks that were falsely converting unsubmitted questions into `incorrect` status simply because a website or diagram contained red accents.
+  - **Differential Failsafe Comparison**: Converted post-submit verification to perform differential comparison against pre-submit screenshots, ensuring static page elements are ignored and only newly introduced platform failure banners are detected.
+  - **Clean Prompt Few-Shot Example**: Replaced the few-shot JSON example in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) to showcase standard unsubmitted questions rather than biasing the model toward `evaluation_status: "incorrect"`.
+
+- **Deliberate Wrong Answer Selection Fix**:
+  - **Absolute Accuracy Mandate**: Added an uncompromising accuracy directive in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) Section 3 instructing the AI to always click and type the mathematically, scientifically, and logically sound answer derived in its reasoning.
+  - **Eliminated Second-Guessing Bias**: Explicitly prohibited the AI from second-guessing its own calculations (e.g., thinking "the math says Option B, but Option B must have been tried, so I will choose Option C").
+  - **Cleaned Rethink Triggers**: Removed false-positive pre-next and post-submit rethink loops in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) that were triggering unnecessary re-solving cycles.
+
 ## [2.2.12.a] - 2026-09-29
 
 ### Fixed & Enhanced

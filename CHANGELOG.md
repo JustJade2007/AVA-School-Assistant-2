@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.14.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Eliminated Destructive Readjustment Probing on Successful Hits**:
+  - **Interaction Intent Classification**: Added robust classification for interaction targets (`is_input_focus`, `is_dropdown`, `is_button`) in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py) across both individual action execution and action sequence workflows.
+  - **Input Box Focus Protection**: Prevented lateral recovery offset probing (`-35px, -50px, -22px`) when clicking to focus text boxes and input blanks. Ensures clicking an input field delivers focus and maintains cursor positioning inside the box so subsequent `type_text` actions enter answers correctly without being clicked out of or defocused.
+  - **Dropdown Menu Preservation**: Added dropdown menu expansion detection below the dropdown button (`target_y + 40`) and prohibited lateral readjustment probing for dropdown controls. Prevents the automation executor from clicking away and closing expanded dropdown option menus before the target option can be selected.
+  - **Calibrated Verification Acceptance**: Removed overly strict `diff_score >= 1.6` requirement on confirmed action completions in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py), accepting verified visual responses (`diff_ok`) and preventing spurious readjustment attempts when the primary hit was already successful.
+  - **Sequence-Level Failsafe Alignment**: Integrated sequence-level intent tagging so that focus clicks preceding typing are acknowledged and verified by the per-input failsafe instead of being erroneously reported as unconfirmed.
+
 ## [2.2.13.a] - 2026-09-29
 
 ### Fixed & Enhanced

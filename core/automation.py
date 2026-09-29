@@ -423,10 +423,39 @@ class AutomationExecutor:
             action["intended_x"] = target_x
             action["intended_y"] = target_y
 
+            desc_lower = str(desc or "").lower()
+            element_type = str(action.get("element_type", "")).lower()
+
+            # Classify interaction target type to prevent misdirected recovery probing
+            is_input_focus = bool(
+                action.get("is_input_focus") or
+                element_type in ["input", "textbox", "field"] or
+                any(k in desc_lower for k in [
+                    "focus", "input box", "textbox", "text box", "fill-in", "fill in", "input field",
+                    "blank", "type text", "enter text", "type into", "type answer"
+                ])
+            )
+            is_dropdown = bool(
+                action.get("is_dropdown") or
+                element_type in ["dropdown", "select", "combobox"] or
+                any(k in desc_lower for k in [
+                    "dropdown", "drop down", "drop-down", "combobox", "combo box", "expand menu",
+                    "open dropdown", "options menu", "menu button"
+                ]) or (desc_lower.startswith("select ") and not any(r in desc_lower for r in ["radio", "checkbox", "option", "choice"]))
+            )
+            is_button = bool(
+                action.get("is_button") or
+                action.get("button_type") or
+                element_type == "button" or
+                any(k in desc_lower for k in [
+                    "button", "submit", "check answer", "next", "continue", "done"
+                ])
+            )
+
             # Fetch sibling choice points to empower comparative verification across custom website themes
             sibling_coords = []
             sibling_rois = None
-            if self.local_verification_enabled and hasattr(self.verifier, "get_sibling_choice_coordinates"):
+            if self.local_verification_enabled and not (is_input_focus or is_dropdown or is_button) and hasattr(self.verifier, "get_sibling_choice_coordinates"):
                 try:
                     sibling_coords = self.verifier.get_sibling_choice_coordinates(target_x, target_y, action.get("result_data"))
                     if sibling_coords:
@@ -437,12 +466,19 @@ class AutomationExecutor:
             # Local verification setup: capture baseline ROI and option row band
             before_roi = None
             before_band = None
+            before_menu_roi = None
             band_origin_x, band_origin_y = max(0, target_x - 85), max(0, target_y - 25)
             if self.local_verification_enabled:
                 before_roi = self.verifier.capture_roi(target_x, target_y)
                 before_band, band_origin_x, band_origin_y = self.verifier.capture_band(
                     target_x, target_y, offset_left=85, offset_right=35, radius_h=25
                 )
+                if is_dropdown:
+                    try:
+                        # Capture region directly below the button where options dropdown menu unfolds
+                        before_menu_roi = self.verifier.capture_roi(target_x, target_y + 40, radius_w=40, radius_h=35)
+                    except Exception as e:
+                        logger.debug(f"Could not capture dropdown pre-menu ROI: {e}")
 
             # Perform primary click
             self.click(target_x, target_y, double=is_double)
@@ -473,39 +509,82 @@ class AutomationExecutor:
             physical_view = None
 
             if self.local_verification_enabled and before_roi:
-                time.sleep(0.09)
+                post_click_delay = 0.14 if (is_dropdown or is_input_focus) else 0.10
+                time.sleep(post_click_delay)
                 after_roi = self.verifier.capture_roi(target_x, target_y)
                 after_band, _, _ = self.verifier.capture_band(
                     target_x, target_y, offset_left=85, offset_right=35, radius_h=25
                 )
 
-                # 1. Direct radio / checkbox selection check at click location (using sibling comparison if available)
-                sel, r_reason, conf = self.verifier.is_radio_or_checkbox_selected(after_roi, sibling_rois=sibling_rois)
-                if sel:
+                if is_dropdown:
+                    # Dropdown verification: check if dropdown button or menu below it changed
+                    after_menu_roi = self.verifier.capture_roi(target_x, target_y + 40, radius_w=40, radius_h=35)
+                    menu_ok, menu_diff = False, 0.0
+                    if before_menu_roi and after_menu_roi:
+                        menu_ok, menu_diff = self.verifier.verify_action_completion(
+                            before_menu_roi, after_menu_roi, action_type="click", threshold_changed_pixels=10, threshold_mean_diff=1.0
+                        )
+                    btn_ok, btn_diff = self.verifier.verify_action_completion(
+                        before_roi, after_roi, action_type="click", threshold_changed_pixels=8, threshold_mean_diff=0.8
+                    )
                     is_confirmed = True
-                    verification_reason = r_reason
-                    attempted_clicks[0]["verified"] = True
-                    attempted_clicks[0]["reason"] = r_reason
-                else:
-                    # 2. Check for option row background highlight
-                    row_hl, hl_score = self.verifier.is_option_row_highlighted(before_band, after_band)
-                    if row_hl:
-                        is_confirmed = True
-                        verification_reason = f"row_highlight (diff={hl_score:.1f})"
-                        attempted_clicks[0]["verified"] = True
-                        attempted_clicks[0]["reason"] = verification_reason
+                    if menu_ok or btn_ok:
+                        verification_reason = f"dropdown_opened (menu_diff={menu_diff:.1f}, btn_diff={btn_diff:.1f})"
                     else:
-                        # 3. Check for general pixel difference
-                        diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
-                        if diff_ok and diff_score >= 1.6:
+                        verification_reason = "dropdown_clicked_primary"
+                    attempted_clicks[0]["verified"] = True
+                    attempted_clicks[0]["reason"] = verification_reason
+
+                elif is_input_focus:
+                    # Input box focus verification: check for cursor blink or outline focus ring
+                    diff_ok, diff_score = self.verifier.verify_action_completion(
+                        before_roi, after_roi, action_type="click", threshold_changed_pixels=6, threshold_mean_diff=0.6
+                    )
+                    is_confirmed = True
+                    verification_reason = f"input_focused (diff={diff_score:.1f})" if diff_ok else "input_focus_delivered"
+                    attempted_clicks[0]["verified"] = True
+                    attempted_clicks[0]["reason"] = verification_reason
+
+                elif is_button:
+                    # Button click verification: check for button press / state change
+                    diff_ok, diff_score = self.verifier.verify_action_completion(
+                        before_roi, after_roi, action_type="click", threshold_changed_pixels=8, threshold_mean_diff=0.8
+                    )
+                    is_confirmed = True
+                    verification_reason = f"button_pressed (diff={diff_score:.1f})" if diff_ok else "button_click_delivered"
+                    attempted_clicks[0]["verified"] = True
+                    attempted_clicks[0]["reason"] = verification_reason
+
+                else:
+                    # Standard option selection (radio button / checkbox / multiple-choice row)
+                    # 1. Direct radio / checkbox selection check at click location (using sibling comparison if available)
+                    sel, r_reason, conf = self.verifier.is_radio_or_checkbox_selected(after_roi, sibling_rois=sibling_rois)
+                    if sel:
+                        is_confirmed = True
+                        verification_reason = r_reason
+                        attempted_clicks[0]["verified"] = True
+                        attempted_clicks[0]["reason"] = r_reason
+                    else:
+                        # 2. Check for option row background highlight
+                        row_hl, hl_score = self.verifier.is_option_row_highlighted(before_band, after_band)
+                        if row_hl:
                             is_confirmed = True
-                            verification_reason = f"pixel_diff (score={diff_score:.1f})"
+                            verification_reason = f"row_highlight (diff={hl_score:.1f})"
                             attempted_clicks[0]["verified"] = True
                             attempted_clicks[0]["reason"] = verification_reason
+                        else:
+                            # 3. Check for general pixel difference
+                            diff_ok, diff_score = self.verifier.verify_action_completion(before_roi, after_roi, action_type="click")
+                            if diff_ok:
+                                is_confirmed = True
+                                verification_reason = f"pixel_diff (score={diff_score:.1f})"
+                                attempted_clicks[0]["verified"] = True
+                                attempted_clicks[0]["reason"] = verification_reason
 
                 # --- SMART ZERO-TOKEN RECOVERY PROBING (EXACTLY UP TO 3 READJUSTMENTS) ---
-                # If primary click missed (e.g. coordinates landed on text label instead of radio circle):
-                if not is_confirmed:
+                # Only probe for genuine unconfirmed option selections (e.g. coordinates landed on text label instead of radio circle).
+                # NEVER probe for input focus, dropdowns, or buttons where clicking off-target defocuses or closes elements.
+                if not is_confirmed and not (is_input_focus or is_dropdown or is_button):
                     # View where the mouse actually is on the physical screen compared to the target
                     if hasattr(self.verifier, "locate_physical_target_near_mouse"):
                         try:
@@ -637,7 +716,7 @@ class AutomationExecutor:
                             "reason": "unverified"
                         }
 
-                        if p_sel or (p_diff_ok and p_diff_score >= 1.6) or p_row_hl:
+                        if p_sel or p_diff_ok or p_row_hl:
                             reason_str = p_reason if p_sel else ("row_highlight" if p_row_hl else f"diff_confirmed={p_diff_score:.1f}")
                             logger.info(
                                 f"[OK] Zero-token recovery SUCCESS on readjustment {attempt_idx}/{max_attempts} "
@@ -1015,6 +1094,25 @@ class AutomationExecutor:
                 is_scrolled_target = bool(action.get("in_scrolled_view", False))
                 scroll_amt = abs(int(action.get("scroll_amount", 500)))
                 self.ensure_scrolled_view(is_scrolled_target, scroll_amt)
+
+                # Context-aware action tagging across the sequence:
+                # If click is immediately followed by type_text, tag it as an input focus click
+                desc_lower = str(action.get("description", "")).lower()
+                if act_type in ["click", "double_click"]:
+                    if idx < len(actions) - 1:
+                        next_act = actions[idx + 1]
+                        if next_act.get("type", "").lower() == "type_text":
+                            action["is_input_focus"] = True
+                    if any(k in desc_lower for k in [
+                        "focus", "input box", "textbox", "text box", "fill-in", "fill in", "input field",
+                        "blank", "type text", "enter text", "type into", "type answer"
+                    ]):
+                        action["is_input_focus"] = True
+                    if any(k in desc_lower for k in [
+                        "dropdown", "drop down", "drop-down", "combobox", "combo box", "expand menu",
+                        "open dropdown", "options menu", "menu button"
+                    ]) or (desc_lower.startswith("select ") and not any(r in desc_lower for r in ["radio", "checkbox", "option", "choice"])):
+                        action["is_dropdown"] = True
 
                 self.execute_action(action)
 

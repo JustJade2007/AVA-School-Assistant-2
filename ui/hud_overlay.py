@@ -850,7 +850,7 @@ class HUDOverlay(ctk.CTkToplevel):
             EngineState.READING: ("●", "#38bdf8", f"Reading Question... {f'({detail})' if detail else ''}"),
             EngineState.WAITING_CONFIRMATION: ("●", "#f59e0b", "Solved - Press F9 to Confirm"),
             EngineState.EXECUTING: ("●", "#3b82f6", "Executing Actions..."),
-            EngineState.VERIFYING: ("●", "#06b6d4", "Verifying Answer (Zero-Token)..."),
+            EngineState.VERIFYING: ("●", "#06b6d4", f"{detail}" if detail else "Verifying Answer (Zero-Token)..."),
             EngineState.INSPECTING: ("●", "#ec4899", f"Inspecting Material... {f'({detail})' if detail else ''}"),
             EngineState.NAVIGATING: ("●", "#8b5cf6", "Navigating to Next..."),
             EngineState.PAUSED: ("■", "#ef4444", f"Paused {f'({detail})' if detail else ''}")
@@ -1138,7 +1138,7 @@ class HUDOverlay(ctk.CTkToplevel):
             else:
                 self.lbl_eval_platform_feedback.pack_forget()
             self.rethink_frame.pack_forget()
-        elif eval_status == "incorrect" or is_rethinking:
+        elif eval_status == "incorrect" and is_rethinking:
             self.eval_status_frame.pack(fill="x", padx=6, pady=(1, 2), before=self.lbl_answer)
             self.lbl_eval_badge.configure(
                 text="❌ PLATFORM: INCORRECT -> RETHINKING",
@@ -1185,12 +1185,12 @@ class HUDOverlay(ctk.CTkToplevel):
                 needs_act = itm.get("needs_action", True)
 
                 # Determine badge text and colors
-                if itm_eval == "correct" or state == "correct" or not needs_act:
+                if itm_eval in ["correct", "graded_correct"] or state in ["correct", "answered_correct"] or not needs_act:
                     badge_text = "✓ CORRECT"
                     badge_bg = "#064e3b"
                     badge_fg = "#34d399"
                     note = "(Kept untouched)"
-                elif itm_eval == "incorrect" or itm_rethinking or state == "wrong":
+                elif (itm_eval == "incorrect" and itm_rethinking) or state == "answered_incorrect":
                     badge_text = "❌ INCORRECT -> RETHINKING"
                     badge_bg = "#7f1d1d"
                     badge_fg = "#fca5a5"

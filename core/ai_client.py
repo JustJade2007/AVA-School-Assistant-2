@@ -329,7 +329,8 @@ class AIClient:
         calibration_scale_x: float = 1.0,
         calibration_scale_y: float = 1.0,
         coordinate_mode: str = "normalized_1000",
-        mark_registry: Optional[Dict[int, Tuple[int, int]]] = None
+        mark_registry: Optional[Dict[int, Tuple[int, int]]] = None,
+        reasoning: str = ""
     ) -> Dict[str, Any]:
         """
         Visually double-checks the current screenshot after actions have been executed,
@@ -340,14 +341,19 @@ class AIClient:
         if not self.api_key:
             return {"double_check_passed": True, "messed_up": False, "issue_type": "none", "details": "API key not configured", "corrective_actions": []}
 
-        from core.prompt import get_double_check_prompt
-        prompt = get_double_check_prompt(
-            image_width=image_width,
-            image_height=image_height,
-            question=question,
-            intended_answer=intended_answer,
-            intended_actions=intended_actions
-        )
+        try:
+            from core.prompt import get_double_check_prompt
+            prompt = get_double_check_prompt(
+                image_width=image_width,
+                image_height=image_height,
+                question=question,
+                intended_answer=intended_answer,
+                intended_actions=intended_actions,
+                reasoning=reasoning
+            )
+        except Exception as e:
+            logger.warning(f"Double-check prompt generation failed: {e}")
+            return {"double_check_passed": True, "messed_up": False, "issue_type": "none", "details": f"Prompt generation error: {e}", "corrective_actions": []}
 
         raw_response_text = ""
         try:
@@ -1102,16 +1108,45 @@ class AIClient:
                 item["proposed_answer"] = sub_ans
                 item["answer"] = sub_ans
 
-                # Normalize evaluation_status
+                # Normalize evaluation_status and current_state
                 raw_eval = str(item.get("evaluation_status", "")).strip().lower()
                 raw_state = str(item.get("current_state", "")).strip().lower()
+                itm_actions = item.get("actions", [])
+                has_itm_actions = bool(itm_actions and len(itm_actions) > 0)
+                needs_act = item.get("needs_action", True)
+                has_existing = bool(item.get("existing_answer"))
+                has_feedback = bool(item.get("platform_feedback") or result.get("platform_feedback"))
 
-                if raw_eval in ["correct", "graded_correct", "right", "passed"] or raw_state == "answered_correct":
+                # 1. Check for genuine correct indication from platform grading
+                if raw_eval in ["correct", "graded_correct", "right", "passed"]:
                     item["evaluation_status"] = "correct"
-                elif raw_eval in ["incorrect", "wrong", "failed", "error", "graded_incorrect"] or raw_state in ["answered_incorrect", "wrong"]:
-                    item["evaluation_status"] = "incorrect"
+                    item["current_state"] = "answered_correct"
+                    item["is_rethinking"] = False
+                # 2. Check for genuinely incorrect submission (requires explicit error feedback or rethink reasoning on a submitted answer)
+                elif (raw_eval in ["incorrect", "wrong", "failed", "error", "graded_incorrect"] or raw_state in ["answered_incorrect", "wrong"]):
+                    # SAFEGUARD: An unanswered, fresh question (with actions to answer, no existing answer, and no platform feedback)
+                    # can NEVER be marked incorrect!
+                    is_unanswered_fresh = (needs_act or has_itm_actions) and not has_existing and not has_feedback
+                    if is_unanswered_fresh:
+                        item["evaluation_status"] = "unsubmitted"
+                        item["current_state"] = "unanswered"
+                        item["is_rethinking"] = False
+                    # SAFEGUARD: An already-correct answer on screen (needs_action=False, actions=0, no feedback) can NEVER be marked incorrect!
+                    elif not needs_act and not has_itm_actions and not has_feedback:
+                        item["evaluation_status"] = "unsubmitted"
+                        item["current_state"] = "answered_correct"
+                        item["is_rethinking"] = False
+                    else:
+                        item["evaluation_status"] = "incorrect"
+                        item["current_state"] = "answered_incorrect"
                 else:
                     item["evaluation_status"] = "unsubmitted"
+                    if not has_existing and (needs_act or has_itm_actions):
+                        item["current_state"] = "unanswered"
+                    elif not needs_act and not has_itm_actions:
+                        item["current_state"] = "answered_correct"
+                    else:
+                        item["current_state"] = raw_state or "unanswered"
 
                 if item["evaluation_status"] == "incorrect":
                     any_incorrect = True
@@ -1123,17 +1158,21 @@ class AIClient:
                 elif item["evaluation_status"] != "correct":
                     all_correct = False
 
-            if not result.get("answer"):
-                if len(items) == 1:
-                    result["answer"] = items[0].get("correct_answer", "")
-                else:
-                    ans_parts = []
-                    for itm in items:
-                        p_label = itm.get("label") or itm.get("part_id") or "Part"
-                        p_ans = itm.get("correct_answer", "")
-                        if p_ans:
-                            ans_parts.append(f"{p_label}: {p_ans}")
-                    result["answer"] = " | ".join(ans_parts) if ans_parts else "See sub-parts below"
+            # Authoritative answer reconciliation:
+            # If items provide specific correct_answers derived through reasoning, ensure top-level answer matches
+            if len(items) == 1 and items[0].get("correct_answer"):
+                result["answer"] = items[0]["correct_answer"]
+            elif len(items) > 1:
+                ans_parts = []
+                for itm in items:
+                    p_label = itm.get("label") or itm.get("part_id") or "Part"
+                    p_ans = itm.get("correct_answer", "")
+                    if p_ans:
+                        ans_parts.append(f"{p_label}: {p_ans}")
+                if ans_parts:
+                    result["answer"] = " | ".join(ans_parts)
+            elif not result.get("answer"):
+                result["answer"] = result.get("summary") or "Answer determined"
 
             if not result.get("question"):
                 if len(items) == 1:
@@ -1149,10 +1188,22 @@ class AIClient:
 
         # Top-level evaluation_status normalization
         top_eval = str(result.get("evaluation_status", "")).strip().lower()
+        top_actions = result.get("actions", [])
+        has_top_actions = bool(top_actions and len(top_actions) > 0)
+        top_needs_act = result.get("needs_action", True)
+        top_feedback = bool(result.get("platform_feedback"))
+
         if top_eval in ["correct", "graded_correct", "right", "passed"] or all_correct:
             result["evaluation_status"] = "correct"
         elif top_eval in ["incorrect", "wrong", "failed", "error", "graded_incorrect"] or any_incorrect:
-            result["evaluation_status"] = "incorrect"
+            # SAFEGUARD: If the question is fresh/unanswered (needs action, has answering actions, no feedback)
+            # or already answered correctly without error feedback, suppress false-positive incorrect
+            if (has_top_actions or top_needs_act) and not top_feedback and not any_incorrect:
+                result["evaluation_status"] = "unsubmitted"
+            elif not has_top_actions and top_needs_act is False and not top_feedback and not any_incorrect:
+                result["evaluation_status"] = "unsubmitted"
+            else:
+                result["evaluation_status"] = "incorrect"
         else:
             result["evaluation_status"] = "unsubmitted"
 

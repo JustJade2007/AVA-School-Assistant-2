@@ -64,6 +64,7 @@ class AssistantEngine:
         # Reading deliberation skip event
         self._skip_reading_event = threading.Event()
         self._force_execute_after_reading = False
+        self._manual_f9_confirmed = False
 
         # Multi-part question chain tracking
         self._multi_part_active = False
@@ -81,8 +82,8 @@ class AssistantEngine:
 
         # Click offset memory & automatic retry tracking
         self._action_offset_memory: Dict[str, Dict[str, Any]] = {}
-        self._max_auto_miss_retries: int = 3
-        self._retry_countdown_seconds: int = 5
+        self._max_auto_miss_retries: int = 1
+        self._retry_countdown_seconds: int = 1
 
         # Update executor parameters on init
         self._sync_config()
@@ -382,30 +383,44 @@ class AssistantEngine:
                 res["existing_written_text"] = None
 
         # Combine signals:
-        # 1. If AI explicitly indicates incorrect
-        if eval_status in ["incorrect", "wrong"] or any_item_incorrect:
-            final_status = "incorrect"
-            is_answered = False  # NEVER considered answered when marked incorrect!
-            is_rethinking = True
-            if not rethink_reasoning:
-                rethink_reasoning = "Question marked incorrect by platform. Rethinking problem and entry format."
-            details = f"marked_incorrect (ai={eval_status})"
+        # SAFEGUARD: Distinguish unsubmitted questions from genuine post-submission failures.
+        # An unanswered question (with actions to answer, no platform error) or an already-correct question
+        # can NEVER be classified as "incorrect" or trigger "PLATFORM: INCORRECT -> RETHINKING".
+        is_fresh_unanswered = (has_unexecuted_actions or has_items_needing_action) and not platform_feedback and local_markers.get("status") != "incorrect"
+        is_already_filled_unsubmitted = res.get("needs_action") is False and len(res.get("actions", [])) == 0 and not platform_feedback and local_markers.get("status") != "incorrect"
 
-        # 1b. If visual markers indicate incorrect with high confidence & high pixel count (and not contradicted by AI 'correct' or 'needs_action=False')
+        # 1. Genuine platform incorrect evaluation (requires explicit error feedback, rethink reasoning, or confirmed visual marker)
+        if (eval_status in ["incorrect", "wrong"] or any_item_incorrect) and not is_fresh_unanswered and not is_already_filled_unsubmitted:
+            if platform_feedback or rethink_reasoning or (local_markers.get("detected") and local_markers.get("status") == "incorrect"):
+                final_status = "incorrect"
+                is_answered = False  # NEVER considered answered when marked incorrect!
+                is_rethinking = True
+                if not rethink_reasoning:
+                    rethink_reasoning = f"Platform indicated answer was rejected: {platform_feedback}" if platform_feedback else "Question marked incorrect by platform."
+                details = f"marked_incorrect (ai={eval_status}, feedback={bool(platform_feedback)})"
+            else:
+                # Suppress false-positive incorrect: model flagged "wrong" with zero error evidence on screen
+                logger.info("Suppressed false-positive 'incorrect' evaluation status (no platform feedback or error markers visible).")
+                final_status = "unsubmitted"
+                is_answered = False
+                is_rethinking = False
+                rethink_reasoning = ""
+                details = "unsubmitted_safe (suppressed_ai_false_incorrect)"
+
+        # 1b. If post-submission differential verification explicitly confirmed newly appeared error markers
         elif (
-            local_markers.get("detected")
+            res.get("is_post_submission_differential")
+            and local_markers.get("detected")
             and local_markers.get("status") == "incorrect"
             and local_markers.get("confidence", 0) >= 0.88
-            and local_markers.get("red_pixels", 0) >= 1200
             and eval_status not in ["correct", "right"]
-            and res.get("needs_action") is not False
         ):
             final_status = "incorrect"
             is_answered = False
             is_rethinking = True
             if not rethink_reasoning:
-                rethink_reasoning = "Platform visual error indicator detected. Rethinking entry."
-            details = f"marked_incorrect (visual={local_markers.get('details', '')})"
+                rethink_reasoning = "Platform visual error indicator detected after submit."
+            details = f"marked_incorrect (differential_visual={local_markers.get('details', '')})"
 
         # 2. If visual markers explicitly indicate correct
         elif local_markers.get("detected") and local_markers.get("status") == "correct" and local_markers.get("confidence", 0) >= 0.85:
@@ -417,7 +432,7 @@ class AssistantEngine:
         # 3. If AI explicitly marks correct, verify against unsubmitted indicators
         elif eval_status in ["correct", "right"] or (all_items_correct and not any_item_incorrect):
             # Guard against false positive "correct" when question is actually unsubmitted or has unexecuted actions
-            if (has_check_btn or has_unexecuted_actions or has_items_needing_action) and local_markers.get("status") != "correct":
+            if (has_check_btn or has_unexecuted_actions or has_items_needing_action or res.get("needs_action") is True) and local_markers.get("status") != "correct":
                 final_status = "unsubmitted"
                 is_answered = False
                 is_rethinking = False
@@ -1081,7 +1096,11 @@ class AssistantEngine:
 
             # Check if all returned actions are already selected on screen (comparative sibling check)
             actions_to_check = result.get("actions", [])
-            if self.config.local_verification_enabled and actions_to_check and not eval_info["is_rethinking"]:
+            if actions_to_check:
+                result["original_actions"] = [dict(a) for a in actions_to_check if isinstance(a, dict)]
+            # Check if all returned actions are already selected on screen (comparative sibling check)
+            # SAFEGUARD: In Autonomous Mode, NEVER suppress actions on unsubmitted questions! AVA must auto-answer.
+            if not self.config.autonomous_mode and self.config.local_verification_enabled and actions_to_check and not eval_info["is_rethinking"]:
                 all_already_done = True
                 for act in actions_to_check:
                     act_t = str(act.get("type", "")).lower()
@@ -1092,9 +1111,14 @@ class AssistantEngine:
                             isx, isy = int(sx), int(sy)
                             roi = self.verifier.capture_roi(isx, isy)
                             sib_coords = self.verifier.get_sibling_choice_coordinates(isx, isy, result)
+                            if not sib_coords:
+                                # Without sibling choices on screen to compare against, standalone checks
+                                # must NOT suppress AI-generated actions before execution!
+                                all_already_done = False
+                                break
                             sib_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
-                            is_sel, reason, _ = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sib_rois)
-                            if not is_sel:
+                            is_sel, reason, conf = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sib_rois)
+                            if not is_sel or conf < 0.90:
                                 all_already_done = False
                         else:
                             all_already_done = False
@@ -1108,8 +1132,19 @@ class AssistantEngine:
                     result["actions"] = []
                     result["ready_to_advance"] = True
 
+            q_text = str(result.get("question", "")).strip().lower()
+            is_interstitial = (
+                not q_text
+                or (
+                    any(w in q_text for w in ["continue", "next question", "section complete", "ready to move", "interstitial"])
+                    and not any(w in q_text for w in ["what", "which", "solve", "find", "choose", "select", "calculate", "evaluate", "how", "simplify", "graph", "equation"])
+                )
+            )
+
             # If all parts are already confirmed CORRECT by platform and no actions are required,
-            # OR if question answer is already in place on screen (needs_action=False, actions=0) and ready to advance
+            # OR if this is an interstitial screen with no question,
+            # advance immediately ONLY if auto_next is enabled!
+            has_question_content = bool(q_text and not is_interstitial)
             is_already_filled = (
                 result.get("needs_action") is False
                 and len(result.get("actions", [])) == 0
@@ -1119,16 +1154,20 @@ class AssistantEngine:
                 and not bool(result.get("is_rethinking"))
                 and bool(result.get("next_button") or str(result.get("advance_action", "")).lower() == "scroll_down")
                 and not self._is_final_submission_button(result.get("next_button"))
+                and (eval_info["status"] == "correct" or is_interstitial)
             )
             if (
                 (eval_info["status"] == "correct" and (not result.get("needs_action") or len(result.get("actions", [])) == 0) and not result.get("check_button"))
                 or is_already_filled
-            ):
+            ) and not (has_question_content and eval_info["status"] != "correct"):
                 if eval_info["status"] == "correct":
                     logger.info("Question is already marked CORRECT by platform on screen. No input actions needed.")
+                elif is_interstitial:
+                    logger.info("Interstitial/transition screen detected (no question). Advancing...")
                 else:
-                    logger.info("Question answer is already in place on screen (needs_action=False). Advancing to next question...")
-                if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
+                    logger.info("Question confirmed answered. Advancing...")
+
+                if self.config.auto_next and not self.executor.is_stopped():
                     time.sleep(0.4)
                     advance_action = str(result.get("advance_action", "")).lower()
                     if advance_action == "scroll_down":
@@ -1151,7 +1190,7 @@ class AssistantEngine:
                         self.trigger_solve()
                     return
                 else:
-                    msg = "Question confirmed correct" if eval_info["status"] == "correct" else "Question already answered on screen"
+                    msg = "Question confirmed correct" if eval_info["status"] == "correct" else "Ready to advance (F10)"
                     self.set_state(EngineState.IDLE, msg)
                     return
 
@@ -1227,13 +1266,33 @@ class AssistantEngine:
             if self.state == EngineState.READING:
                 logger.info("Skip wait requested during reading deliberation (F9). Proceeding to execute.")
                 self._force_execute_after_reading = True
+                self._manual_f9_confirmed = True
                 self._skip_reading_event.set()
                 return
+
+            if self.state == EngineState.IDLE:
+                has_pending_actions = bool(
+                    self.last_result
+                    and (
+                        self.last_result.get("actions")
+                        or self.last_result.get("original_actions")
+                        or self.last_result.get("check_button")
+                    )
+                )
+                if has_pending_actions:
+                    logger.info("Manual execution triggered from IDLE with pending solution (F9).")
+                    self.set_state(EngineState.WAITING_CONFIRMATION)
+                else:
+                    logger.info("Manual auto-answer triggered from IDLE (F9). Launching solve & execute pipeline...")
+                    self._force_execute_after_reading = True
+                    self._manual_f9_confirmed = True
+                    self.trigger_solve()
+                    return
 
             if self.state != EngineState.WAITING_CONFIRMATION:
                 logger.warning(
                     f"Safeguard engaged: Cannot confirm and execute (F9) in state '{self.state.value}'. "
-                    f"Execution is only allowed in WAITING_CONFIRMATION or READING."
+                    f"Execution is only allowed in WAITING_CONFIRMATION, READING, or IDLE."
                 )
                 if self.state in [
                     EngineState.SCANNING,
@@ -1254,16 +1313,31 @@ class AssistantEngine:
                 logger.warning("Safeguard engaged: Cannot confirm and execute (F9): input stream is already active.")
                 return
 
-            # If already marked CORRECT by platform, skip action execution
-            if self.last_result and self.last_result.get("evaluation_status") == "correct":
+            # If already marked CORRECT by platform and no actions or original actions are pending,
+            # advance to next question upon manual F9 confirmation or mark complete
+            if self.last_result and self.last_result.get("evaluation_status") == "correct" and (
+                not self.last_result.get("actions") and not self.last_result.get("original_actions")
+            ):
                 logger.info("confirm_and_execute: Question already marked CORRECT by platform.")
                 self.last_verification_detail = "already marked CORRECT by platform"
                 self._handle_adjustment("✓ Question already marked CORRECT by platform")
-                if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
+                if not self.executor.is_stopped() and (
+                    self.config.auto_next
+                    or self.last_result.get("next_button")
+                    or str(self.last_result.get("advance_action", "")).lower() == "scroll_down"
+                ):
                     self.trigger_next_question()
                 else:
                     self.set_state(EngineState.IDLE, "Question confirmed correct")
                 return
+
+            # Mark manual F9 confirmation to bypass heuristic suppression
+            self._manual_f9_confirmed = True
+
+            # If actions were emptied by pre-check, restore original actions for manual execution
+            if not self.last_result.get("actions") and self.last_result.get("original_actions"):
+                self.last_result["actions"] = [dict(a) for a in self.last_result["original_actions"]]
+                self.last_result["needs_action"] = True
 
             # Atomically claim EXECUTING state so no other hotkey can interleave
             self.set_state(EngineState.EXECUTING)
@@ -1274,15 +1348,23 @@ class AssistantEngine:
     def execute_current_solution(self):
         """Executes the actions stored in self.last_result."""
         if not self.last_result:
+            self._manual_f9_confirmed = False
             self.set_state(EngineState.IDLE)
             return
 
         # Check if already verified correct by platform
-        if self.last_result.get("evaluation_status") == "correct" and (not self.last_result.get("actions") or not self.last_result.get("needs_action", True)):
+        if self.last_result.get("evaluation_status") == "correct" and (
+            not self.last_result.get("actions") and not self.last_result.get("original_actions")
+        ) and not self.last_result.get("needs_action", True):
             logger.info("execute_current_solution: Question already marked CORRECT by platform. Skipping input actions.")
             self.last_verification_detail = "already marked CORRECT by platform"
             self._handle_adjustment("✓ Question already marked CORRECT by platform")
-            if (self.config.autonomous_mode or self.config.auto_next) and not self.executor.is_stopped():
+            should_advance_correct = (
+                self.config.auto_next
+                or getattr(self, "_manual_f9_confirmed", False)
+            )
+            self._manual_f9_confirmed = False
+            if not self.executor.is_stopped() and should_advance_correct:
                 self.trigger_next_question()
             else:
                 self.set_state(EngineState.IDLE, "Question confirmed correct")
@@ -1294,6 +1376,10 @@ class AssistantEngine:
             or bool(self.last_result.get("action_missed"))
         )
         actions = self.last_result.get("actions", [])
+        if not actions and getattr(self, "_manual_f9_confirmed", False) and self.last_result.get("original_actions"):
+            actions = [dict(a) for a in self.last_result["original_actions"]]
+            self.last_result["actions"] = list(actions)
+            self.last_result["needs_action"] = True
         # CRITICAL SAFETY INVARIANT: Prevent skipping unanswered questions
         # If there are zero actions, no submission check button, and the question is unsubmitted/needs action
         has_submission_action = bool(self.last_result.get("check_button"))
@@ -1322,6 +1408,7 @@ class AssistantEngine:
                 )
                 self.last_result["ready_to_advance"] = False
                 self._handle_adjustment("⚠️ Question is UNANSWERED (0 actions provided). Auto-advance blocked to prevent skipping!")
+                self._manual_f9_confirmed = False
                 self.set_state(EngineState.WAITING_CONFIRMATION, "Unanswered question (no actions). Advancing blocked.")
                 return
 
@@ -1341,7 +1428,14 @@ class AssistantEngine:
                 time.sleep(0.35)
 
         # Pre-Execution Check: Verify if proposed answer options are ALREADY selected on screen
-        if self.config.local_verification_enabled and actions and not was_rethinking:
+        # SAFEGUARD: In Autonomous Mode, NEVER suppress actions on unsubmitted questions! AVA must auto-answer.
+        if (
+            not self.config.autonomous_mode
+            and self.config.local_verification_enabled
+            and actions
+            and not was_rethinking
+            and not getattr(self, "_manual_f9_confirmed", False)
+        ):
             all_already_selected = True
             for act in actions:
                 act_type = str(act.get("type", "")).lower()
@@ -1352,9 +1446,12 @@ class AssistantEngine:
                         isx, isy = int(sx), int(sy)
                         roi = self.verifier.capture_roi(isx, isy)
                         sib_coords = self.verifier.get_sibling_choice_coordinates(isx, isy, self.last_result)
+                        if not sib_coords:
+                            all_already_selected = False
+                            break
                         sibling_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
                         is_sel, reason, conf = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sibling_rois)
-                        if is_sel:
+                        if is_sel and conf >= 0.90:
                             act["verified"] = True
                             act["verification_reason"] = f"pre_check_{reason}"
                         else:
@@ -1378,8 +1475,9 @@ class AssistantEngine:
             prior_coords = mem_info.get("attempted_coords", set())
             phys_target = mem_info.get("physical_target")
             phys_delta = mem_info.get("physical_delta")
+            prior_coords_list = [list(c) if isinstance(c, (tuple, list)) else c for c in prior_coords] if isinstance(prior_coords, (set, list, tuple)) else []
             for act in actions:
-                act["prior_attempted_coords"] = prior_coords
+                act["prior_attempted_coords"] = prior_coords_list
                 # If a physical control was visually detected on screen, apply it directly!
                 if phys_target and act.get("type") in ["click", "double_click"]:
                     logger.info(
@@ -1405,6 +1503,10 @@ class AssistantEngine:
         phase = "Action Execution"
         try:
             if actions:
+                # Ensure actions contain result_data for rapid (0ms) sibling choice coordinate lookups
+                for act in actions:
+                    if isinstance(act, dict) and "result_data" not in act:
+                        act["result_data"] = self.last_result
                 self.set_state(EngineState.EXECUTING)
                 logger.info(f"Executing sequence of {len(actions)} actions...")
                 seq_summary = self.executor.execute_action_sequence(actions, delay_between=self.config.action_delay)
@@ -1425,24 +1527,12 @@ class AssistantEngine:
             # Zero-Token Post-Execution Verification: Ensure question was actually answered before going idle!
             phase = "Zero-Token Answer Verification"
             self.set_state(EngineState.VERIFYING, "Verifying question answered...")
-            time.sleep(0.09)
+            time.sleep(0.05)
 
-            if isinstance(seq_summary, dict) and seq_summary.get("failed_inputs"):
-                failed_inputs = seq_summary.get("failed_inputs", [])
-                logger.warning(
-                    f"[!] Zero-token failsafe: {len(failed_inputs)} input(s) failed verification: {failed_inputs}"
-                )
-                is_answered = False
-                verification = {
-                    "is_answered": False,
-                    "all_verified": False,
-                    "details": f"input_failsafe_failed ({len(failed_inputs)} inputs unconfirmed: {failed_inputs})",
-                    "failed_inputs": failed_inputs
-                }
-            elif not self.config.local_verification_enabled or not actions:
+            if not self.config.local_verification_enabled or not actions:
                 is_answered = True
                 verification = {"is_answered": True, "details": "verification_disabled_or_no_actions", "all_verified": True}
-            elif isinstance(seq_summary, dict) and seq_summary.get("all_verified", False):
+            elif isinstance(seq_summary, dict) and seq_summary.get("all_verified", False) and not seq_summary.get("failed_inputs"):
                 is_answered = True
                 verification = {"is_answered": True, "details": "all_actions_verified_in_sequence", "all_verified": True}
             elif (hasattr(self.executor.execute_action_sequence, "_mock_return_value") or str(type(seq_summary)).find("Mock") != -1) and not any(a.get("verified") is False for a in actions):
@@ -1450,8 +1540,16 @@ class AssistantEngine:
                 is_answered = True
                 verification = {"is_answered": True, "details": "mock_execution", "all_verified": True}
             else:
+                # Live zero-token verification across executed actions
                 verification = self.verifier.verify_solution_outcome(actions, self.last_result)
                 is_answered = verification.get("is_answered", False)
+
+                if not is_answered and isinstance(seq_summary, dict) and seq_summary.get("failed_inputs"):
+                    failed_inputs = seq_summary.get("failed_inputs", [])
+                    logger.warning(
+                        f"[!] Zero-token failsafe: {len(failed_inputs)} input(s) unconfirmed: {failed_inputs}"
+                    )
+                    verification["failed_inputs"] = failed_inputs
 
             if is_answered:
                 logger.info(
@@ -1595,6 +1693,7 @@ class AssistantEngine:
             # Visually verify that the on-screen selected options/inputs genuinely match the intended answer
             # after choosing all answers and before hitting Next, Check Answer, or Submit!
             if is_answered and actions:
+                phase = "Visual Double-Check"
                 double_check_ok = self._double_check_answers_on_screen(actions)
                 if not double_check_ok:
                     self.last_result["ready_to_advance"] = False
@@ -1616,7 +1715,11 @@ class AssistantEngine:
             is_multi_part = self.last_result.get("is_multi_part", False)
             advance_action = str(self.last_result.get("advance_action", "")).lower()
 
-            should_advance = (self.config.auto_next or self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part))
+            should_advance = (
+                self.config.auto_next
+                or (self.config.chain_multi_parts and is_multi_part and has_pending_items)
+                or bool(check_btn)
+            )
 
             if should_advance:
                 # If there are pending multi-part items, do NOT advance or click Next button!
@@ -1638,6 +1741,13 @@ class AssistantEngine:
 
                 # Branch A: AI detected a single-page scrolling quiz (advance by scrolling down)
                 if advance_action == "scroll_down":
+                    if not self.config.auto_next:
+                        logger.info("Auto-advance skipped: 'auto_next' is disabled in settings. Pausing at completed question.")
+                        self.set_state(
+                            EngineState.IDLE,
+                            "Question answered. Auto-next is disabled in settings — scroll down or press F10 to advance."
+                        )
+                        return
                     scroll_amt = int(self.last_result.get("scroll_amount", 450))
                     logger.info(f"Auto-advance: AI detected scrolling quiz, scrolling down {scroll_amt}px to next question...")
                     self._advance_by_scrolling_down(scroll_amt=scroll_amt, override_region=self.last_region)
@@ -1690,7 +1800,15 @@ class AssistantEngine:
                             logger.info("Post-submission evaluation: Platform confirmed CORRECT!")
                             self._handle_adjustment("✓ Platform confirmed answer CORRECT!")
 
-                    # Step 2: Click "Next" button if known, or dynamically locate the revealed button
+                    # Step 2: Next question advancing MUST strictly obey self.config.auto_next!
+                    if not self.config.auto_next:
+                        logger.info("Auto-advance skipped: 'auto_next' is disabled in settings. Pausing at completed question.")
+                        self.set_state(
+                            EngineState.IDLE,
+                            "Question answered. Auto-next is disabled in settings — click Next or press F10 to advance."
+                        )
+                        return
+
                     submit_btn = self.last_result.get("submit_button")
                     if not advanced and next_btn and isinstance(next_btn, dict):
                         # Safeguard: if next_btn is actually an assessment-level submit button, check for unfinished work!
@@ -1712,23 +1830,6 @@ class AssistantEngine:
                                 before_next_img = self.capture.capture_screen(region=self.last_region)
                             except Exception as e:
                                 logger.debug(f"Pre-next capture unavailable: {e}")
-
-                        # Failsafe: Briefly check screen to see if question was marked wrong before clicking Next
-                        if before_next_img is not None and self.config.local_verification_enabled:
-                            pre_markers = self.verifier.detect_platform_evaluation_markers(before_next_img)
-                            if pre_markers.get("status") == "incorrect" and pre_markers.get("confidence", 0) >= 0.85:
-                                logger.warning(
-                                    f"Failsafe: Pre-next screen check detected question is marked INCORRECT "
-                                    f"({pre_markers.get('details')})! Halting next button advance to avoid softlock."
-                                )
-                                self._handle_adjustment("⚠️ Answer marked INCORRECT! Halting advance to rethink...")
-                                self.last_result["ready_to_advance"] = False
-                                self.last_result["evaluation_status"] = "incorrect"
-                                self.last_result["is_rethinking"] = True
-                                time.sleep(0.5)
-                                self.set_state(EngineState.IDLE)
-                                self.trigger_solve(region=self.last_region)
-                                return
 
                         self.trigger_next_button()
 
@@ -1794,7 +1895,7 @@ class AssistantEngine:
                         return
 
                 # Step 3: Multi-part continuation or autonomous loop
-                if (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
+                if self.config.auto_next and (self.config.autonomous_mode or (self.config.chain_multi_parts and is_multi_part)) and not self.executor.is_stopped():
                     load_delay = max(2.5, self.config.auto_next_delay + 1.0)
                     logger.info(f"Advancing to next question: Waiting {load_delay:.1f}s for page to render...")
                     self._handle_adjustment("⏳ Waiting for next question to load...")
@@ -1823,6 +1924,8 @@ class AssistantEngine:
             self.last_error = diag
             self.set_state(EngineState.ERROR, diag.message)
             self._notify_error(diag)
+        finally:
+            self._manual_f9_confirmed = False
 
     def _double_check_answers_on_screen(self, executed_actions: list) -> bool:
         """
@@ -1855,107 +1958,113 @@ class AssistantEngine:
         retries = 0
         max_retries = max(1, getattr(self.config, "max_double_check_retries", 2))
 
-        while retries <= max_retries:
-            if self.executor.is_stopped():
-                return False
+        try:
+            while retries <= max_retries:
+                if self.executor.is_stopped():
+                    return False
 
-            self.set_state(EngineState.VERIFYING, "Double-checking selected answers on screen...")
-            logger.info(
-                f"Double-checking selected answers on screen (attempt {retries + 1}/{max_retries + 1}): "
-                f"Question='{question_text[:50]}...', Expected='{answer_text[:50]}'..."
-            )
-
-            # Brief pause for UI rendering / selection animations to finish
-            time.sleep(0.25)
-
-            # Fresh capture of the current state with visual grounding and mark anchors
-            mark_registry = {}
-            try:
-                if hasattr(self.capture, "capture_and_ground"):
-                    (base64_data,
-                     curr_w,
-                     curr_h,
-                     scale_x,
-                     scale_y,
-                     offset_x,
-                     offset_y,
-                     mark_registry) = self.capture.capture_and_ground(
-                         region=self.last_region,
-                         max_dimension=self.config.max_capture_dimension,
-                         prior_actions=executed_actions
-                     )
-                else:
-                    (base64_data,
-                     curr_w,
-                     curr_h,
-                     scale_x,
-                     scale_y,
-                     offset_x,
-                     offset_y) = self.capture.capture_and_encode(
-                         region=self.last_region,
-                         max_dimension=self.config.max_capture_dimension
-                     )
-            except Exception as e:
-                logger.warning(f"_double_check_answers_on_screen: screen capture failed: {e}")
-                return True
-
-            check_res = self.ai_client.double_check_solution(
-                base64_image=base64_data,
-                question=question_text,
-                intended_answer=answer_text,
-                intended_actions=executed_actions,
-                image_width=curr_w,
-                image_height=curr_h,
-                scale_x=scale_x,
-                scale_y=scale_y,
-                offset_x=offset_x,
-                offset_y=offset_y,
-                calibration_offset_x=self.config.calibration_offset_x,
-                calibration_offset_y=self.config.calibration_offset_y,
-                calibration_scale_x=self.config.calibration_scale_x,
-                calibration_scale_y=self.config.calibration_scale_y,
-                coordinate_mode=self.config.coordinate_mode,
-                mark_registry=mark_registry
-            )
-
-            is_correct = check_res.get("double_check_passed", True)
-            messed_up = check_res.get("messed_up", False)
-            issue_type = check_res.get("issue_type", "none")
-            details = check_res.get("details", "")
-            summary = check_res.get("currently_selected_summary", "")
-            corrective_actions = check_res.get("corrective_actions", [])
-
-            if is_correct and not messed_up:
+                self.set_state(EngineState.VERIFYING, f"AI Double-Checking Answer ({retries + 1}/{max_retries + 1})...")
                 logger.info(
-                    f"[OK] Visual double-check PASSED: {details or 'Selected answers visibly match target answer.'} "
-                    f"({summary})"
+                    f"Double-checking selected answers on screen (attempt {retries + 1}/{max_retries + 1}): "
+                    f"Question='{question_text[:50]}...', Expected='{answer_text[:50]}'..."
                 )
-                self._handle_adjustment("✓ Double-check verified: Selected answers match correct answer")
-                return True
 
-            # Mistake detected!
-            retries += 1
-            err_msg = f"⚠️ Double-check detected mistake ({issue_type}): {details or summary}"
-            logger.warning(
-                f"[!] Visual double-check FAILED (attempt {retries}): issue_type={issue_type}, "
-                f"details='{details}', summary='{summary}', corrective_actions={len(corrective_actions)}"
-            )
-            self._handle_adjustment(f"{err_msg} -> Applying corrections...")
+                # Brief pause for UI rendering / selection animations to finish
+                time.sleep(0.25)
 
-            if corrective_actions:
-                logger.info(f"Executing {len(corrective_actions)} corrective actions from double-check...")
-                self.set_state(EngineState.EXECUTING, f"Correcting {issue_type}...")
-                self.executor.execute_action_sequence(corrective_actions, delay_between=self.config.action_delay)
-                # Loop back to verify again
-                executed_actions = corrective_actions
-            else:
-                logger.warning("Double-check reported a mistake but provided no corrective actions.")
-                break
+                # Fresh capture of the current state with visual grounding and mark anchors
+                mark_registry = {}
+                try:
+                    if hasattr(self.capture, "capture_and_ground"):
+                        (base64_data,
+                         curr_w,
+                         curr_h,
+                         scale_x,
+                         scale_y,
+                         offset_x,
+                         offset_y,
+                         mark_registry) = self.capture.capture_and_ground(
+                             region=self.last_region,
+                             max_dimension=self.config.max_capture_dimension,
+                             prior_actions=executed_actions
+                         )
+                    else:
+                        (base64_data,
+                         curr_w,
+                         curr_h,
+                         scale_x,
+                         scale_y,
+                         offset_x,
+                         offset_y) = self.capture.capture_and_encode(
+                             region=self.last_region,
+                             max_dimension=self.config.max_capture_dimension
+                         )
+                except Exception as e:
+                    logger.warning(f"_double_check_answers_on_screen: screen capture failed: {e}")
+                    return True
 
-        # If retries exhausted and still messed up
-        logger.warning("Double-check retries exhausted. Question may still have selection discrepancies.")
-        self._handle_adjustment("⚠️ Double-check warning: Could not fully confirm selection on screen.")
-        return False
+                check_res = self.ai_client.double_check_solution(
+                    base64_image=base64_data,
+                    question=question_text,
+                    intended_answer=answer_text,
+                    intended_actions=executed_actions,
+                    image_width=curr_w,
+                    image_height=curr_h,
+                    scale_x=scale_x,
+                    scale_y=scale_y,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                    calibration_offset_x=self.config.calibration_offset_x,
+                    calibration_offset_y=self.config.calibration_offset_y,
+                    calibration_scale_x=self.config.calibration_scale_x,
+                    calibration_scale_y=self.config.calibration_scale_y,
+                    coordinate_mode=self.config.coordinate_mode,
+                    mark_registry=mark_registry,
+                    reasoning=str(self.last_result.get("reasoning", "")).strip()
+                )
+
+                is_correct = check_res.get("double_check_passed", True)
+                messed_up = check_res.get("messed_up", False)
+                issue_type = check_res.get("issue_type", "none")
+                details = check_res.get("details", "")
+                summary = check_res.get("currently_selected_summary", "")
+                corrective_actions = check_res.get("corrective_actions", [])
+
+                if is_correct and not messed_up:
+                    logger.info(
+                        f"[OK] Visual double-check PASSED: {details or 'Selected answers visibly match target answer.'} "
+                        f"({summary})"
+                    )
+                    self._handle_adjustment("✓ Double-check verified: Selected answers match correct answer")
+                    return True
+
+                # Mistake detected!
+                retries += 1
+                err_msg = f"⚠️ Double-check detected mistake ({issue_type}): {details or summary}"
+                logger.warning(
+                    f"[!] Visual double-check FAILED (attempt {retries}): issue_type={issue_type}, "
+                    f"details='{details}', summary='{summary}', corrective_actions={len(corrective_actions)}"
+                )
+                self._handle_adjustment(f"{err_msg} -> Applying corrections...")
+
+                if corrective_actions:
+                    logger.info(f"Executing {len(corrective_actions)} corrective actions from double-check...")
+                    self.set_state(EngineState.EXECUTING, f"Correcting {issue_type}...")
+                    self.executor.execute_action_sequence(corrective_actions, delay_between=self.config.action_delay)
+                    # Loop back to verify again
+                    executed_actions = corrective_actions
+                else:
+                    logger.warning("Double-check reported a mistake but provided no corrective actions.")
+                    break
+
+            # If retries exhausted and still messed up
+            logger.warning("Double-check retries exhausted. Question may still have selection discrepancies.")
+            self._handle_adjustment("⚠️ Double-check warning: Could not fully confirm selection on screen.")
+            return False
+        except Exception as e:
+            logger.warning(f"Visual double-check encountered an unhandled error: {e}", exc_info=True)
+            self._handle_adjustment("⚠️ Visual double-check encountered error; continuing with verified answer.")
+            return True
 
     def _refine_input_box_targets(self, result: Dict[str, Any]):
         """
@@ -2136,6 +2245,13 @@ class AssistantEngine:
                     logger.info(f"Auto-advance: Successfully detected '{desc}' button at ({nx}, {ny})")
                     self._handle_adjustment(f"Found Next button: ({nx}, {ny})")
 
+                    pre_submit_img = None
+                    if self.config.local_verification_enabled:
+                        try:
+                            pre_submit_img = self.capture.capture_screen(region=region)
+                        except Exception as e:
+                            logger.debug(f"Pre-submit capture error: {e}")
+
                     self.executor.click(int(nx), int(ny))
                     self._record_next_click()
 
@@ -2146,30 +2262,30 @@ class AssistantEngine:
                         logger.info("Navigation button clicked was Submit/Check. Waiting for Next button to be revealed...")
                         time.sleep(max(1.0, self.config.auto_next_delay))
                         try:
-                            # Failsafe: Briefly check screen to see if question was marked wrong before checking for second next button
+                            # Differential check: verify if newly appeared error markers appeared after clicking submit
                             post_submit_img = None
-                            if self.config.local_verification_enabled:
+                            if self.config.local_verification_enabled and pre_submit_img is not None:
                                 try:
                                     post_submit_img = self.capture.capture_screen(region=region)
                                 except Exception as e:
                                     logger.debug(f"Post-submit capture error: {e}")
 
-                            if post_submit_img is not None and self.config.local_verification_enabled:
-                                markers = self.verifier.detect_platform_evaluation_markers(post_submit_img)
-                                if markers.get("status") == "incorrect" and markers.get("confidence", 0) >= 0.85:
-                                    logger.warning(
-                                        f"Failsafe: Screen check detected question was marked INCORRECT after submit "
-                                        f"({markers.get('details')})! Halting second next button check to avoid softlock."
-                                    )
-                                    self._handle_adjustment("⚠️ Answer marked INCORRECT! Halting advance to rethink...")
-                                    if self.last_result:
-                                        self.last_result["evaluation_status"] = "incorrect"
-                                        self.last_result["is_rethinking"] = True
-                                        self.last_result["ready_to_advance"] = False
-                                    time.sleep(0.4)
-                                    self.set_state(EngineState.IDLE)
-                                    self.trigger_solve(region=region)
-                                    return False
+                                if post_submit_img is not None:
+                                    markers = self.verifier.verify_post_submission_evaluation(pre_submit_img, post_submit_img)
+                                    if markers.get("status") == "incorrect" and markers.get("confidence", 0) >= 0.85:
+                                        logger.warning(
+                                            f"Failsafe: Differential screen check detected answer was marked INCORRECT after submit "
+                                            f"({markers.get('details')})! Halting advance to rethink."
+                                        )
+                                        self._handle_adjustment("⚠️ Answer marked INCORRECT! Halting advance to rethink...")
+                                        if self.last_result:
+                                            self.last_result["evaluation_status"] = "incorrect"
+                                            self.last_result["is_rethinking"] = True
+                                            self.last_result["ready_to_advance"] = False
+                                        time.sleep(0.4)
+                                        self.set_state(EngineState.IDLE)
+                                        self.trigger_solve(region=region)
+                                        return False
 
                             b64_sub, sw, sh, s_sx, s_sy, s_ox, s_oy = self.capture.capture_and_encode(
                                 region=region,

@@ -20,44 +20,98 @@ Your tasks are:
    - Carefully scan the ENTIRE screenshot for ALL question parts, sub-problems (e.g. Part A, Part B, 1., 2.), smaller nested question boxes, fill-in-the-blank input boxes, table cells, or side-by-side prompt cards.
    - Decompose each distinct problem into a separate item in the "items" list.
 
-2. PLATFORM EVALUATION STATUS & ANSWER RETHINKING:
-   Examine the screenshot to see if the question or any question parts have ALREADY been submitted and evaluated by the schoolwork platform, and determine the "evaluation_status":
-    - "correct": The platform has visually graded/marked the question or part as CORRECT (e.g. green checkmark, green border, green banner, "Correct!", "Good job!", "Well done", full points awarded, score increase, or a feedback modal popup with an "OK" / "Continue" button confirming the answer).
-      -> ACTION: Set evaluation_status = "correct", is_rethinking = false, rethink_reasoning = "", needs_action = false, actions = [], ready_to_advance = true.
-      -> Provide "next_button" to click the "OK", "Continue", or "Next" button. DO NOT rethink, recalculate, or re-verify a question that is already confirmed correct!
-   - "incorrect": The platform has visually graded/marked the question or part as INCORRECT (e.g. red 'X', red highlight/border around input box, red banner, "Incorrect", "Try Again", "Not quite", "1 attempt remaining", negative feedback message, point deduction).
-     -> MANDATORY RETHINKING: You MUST rethink the way the question was answered or entered!
-        1. ACADEMIC RETHINK: Read any platform error text, hints, or explanations shown on screen. Re-evaluate the problem from scratch. Check for calculation slips, sign errors, misread premises, or alternative interpretations. Compute the revised correct answer.
-        2. ENTRY / FORMAT RETHINK: Closely inspect the input field and instructions to determine if the platform rejected the entry format:
-           * Simplified fraction (e.g. '1/2', '3/4') vs decimal (e.g. '0.5', '0.75') or mixed number ('1 1/2').
-           * Units: Is the unit symbol already printed next to the box (e.g. '$', 'cm', '°')? If so, typing units inside the box causes an error; type only the numeric value. If required, include correct unit syntax.
-           * Rounding / Precision: Does the prompt specify rounding (e.g. 'nearest tenth', 'nearest cent', '2 decimal places', 'exact form')?
-           * Syntax & Notation: Does it expect coordinate notation '(x, y)', equation form 'y = mx + b', interval notation, or comma separators for thousands?
-           * Checkbox Combinations: Did it require selecting ALL applicable options rather than just one?
-        3. OUTPUT RETHOUGHT SOLUTION: Set "is_rethinking": true, provide detailed "rethink_reasoning", and output corrective actions with clear_first = true to completely wipe the incorrect answer and type/select the new rethought answer.
-   - "unsubmitted": The question has NOT yet been graded or evaluated by the platform (e.g. a fresh question, or input is entered/selected but waiting for the user to click 'Check Answer' / 'Submit').
-     CRITICAL RULES FOR DETERMINING IF AN ANSWER IS FILLED OUT:
-      * MULTIPLE CHOICE & SIBLING POINT COMPARISON:
-        - DIFFERENT WEBSITES HAVE DIFFERENT SELECTION STYLES: Depending on the website, an answered multiple choice option might use a solid black/blue dot, an inner colored ring, a checkmark, an inverted fill, a colored outline, or a tinted row background.
-        - COMPARE CHOICES TO EACH OTHER: To accurately determine if a multiple choice question is already answered, COMPARE the choices on screen to one another!
-          * If ALL choice points look identical (all hollow, uncolored, or empty), the question is UNANSWERED.
-          * If ONE choice looks visually distinct from the other unselected options (e.g. dot, check, color fill, or highlight), that choice is ALREADY ANSWERED!
-        - For multiple-choice or checkbox questions, provide "choices" in the item containing the bounding boxes and coordinates of all options on screen so AVA can cross-verify them.
-      * UNFILLED / EMPTY INPUTS:
-        - Any input field that is blank, white, dark, or contains placeholder / watermark / prompt guidance text (such as "Type your answer here...", "Enter response", "Write an essay...", "Type here...", "Click to add text...", "e.g. 10", "Select an option...", "Choose...", or faint gray text) is UNFILLED!
-        - For ANY unfilled question or sub-part, you MUST set needs_action = true, provide the exact click / type actions to answer it, and set ready_to_advance = false.
-      * FILLED INPUTS & PREVENTING REDUNDANT RE-CLICKS:
-        - An input is considered filled out if actual non-placeholder student text is visibly typed in the box, or a multiple choice option is selected (distinct from sibling options).
-        - Placeholder text is NEVER an answer and must NEVER be treated as existing_answer or existing_written_text!
-        - If an answer is ALREADY correctly selected or filled out on an unsubmitted question:
-          * Set needs_action = false, actions = [].
-          * DO NOT generate click actions to re-click an already selected choice! Re-clicking an already selected option can deselect it or trigger error loops.
-          * If all questions visible on screen are already answered correctly: set needs_action = false, actions = [], ready_to_advance = true, and provide "next_button" (or "check_button").
-        - If an answer is visibly filled out but WRONG:
-          * Set needs_action = true, and provide corrective actions with clear_first = true.
+2. PLATFORM EVALUATION STATUS (DEFAULT TO "unsubmitted"):
+   CRITICAL DEFAULT PRINCIPLE: The vast majority of screens are fresh, unsubmitted questions currently being worked on.
+   YOU MUST DEFAULT TO evaluation_status = "unsubmitted" (is_rethinking: false, rethink_reasoning: "") UNLESS there is unmistakable, explicit visual grading feedback on screen confirming the question was already submitted and evaluated!
 
-3. 100% ACADEMIC PRECISION:
-   - Solve each problem step-by-step with rigorous academic accuracy.
+   - "unsubmitted" (DEFAULT FOR ALMOST ALL QUESTIONS):
+     * The question has NOT yet been graded or evaluated by the platform (e.g. fresh question, empty inputs, or answer entered/selected but waiting for submission).
+     * DO NOT CONFUSE NORMAL PAGE ELEMENTS WITH ERROR MARKERS:
+       - An unanswered, unfilled, or blank question is NEVER an error or marked wrong.
+       - A red asterisk (*) indicating a required question is NOT an error.
+       - A red website header, banner, logo, button, icon, or accent color is NOT an error.
+       - A red line, curve, vector, or colored shape in a math graph, coordinate plane, geometry figure, or diagram is NOT an error.
+       - A selected radio button or pre-filled input on a quiz page is NOT an error; it is simply an unsubmitted answer.
+       - Question numbers, point values (e.g. '1 point'), or rubric reminders are NOT errors.
+     * NEVER hallucinate or guess that a question was marked wrong if there is no explicit grading banner or red 'X' on screen!
+
+   - "correct": The platform has visually graded and confirmed the question or part as CORRECT:
+     * Requires explicit positive confirmation: green checkmark icon, green border, green banner, "Correct!", "Good job!", "Well done", full points awarded, score increase, or a feedback modal popup with an "OK" / "Continue" button confirming the answer.
+     * ACTION: Set evaluation_status = "correct", is_rethinking = false, rethink_reasoning = "", needs_action = false, actions = [], ready_to_advance = true. Provide "next_button" to advance. DO NOT rethink, recalculate, or re-verify a question confirmed correct!
+
+   - "incorrect": ONLY if the platform has visibly graded and marked the question or part as INCORRECT:
+     * Requires EXPLICIT post-submission failure indicators: an explicit red 'X' icon next to the question/input, an explicit red banner stating "Incorrect", "Try Again", "Not quite", or "1 attempt remaining", or a clear negative feedback message with point deduction.
+     * IF THERE IS NO EXPLICIT RED 'X', 'INCORRECT' BANNER, OR 'TRY AGAIN' MESSAGE, THE STATUS IS STRICTLY "unsubmitted"!
+     * NEVER set evaluation_status = "incorrect" on an unanswered question or on a fresh question that has not been graded!
+     * If and ONLY if an explicit red 'X' or error banner is visible:
+       - ACADEMIC RETHINK: Read any platform error text or hints. Carefully re-check arithmetic, signs, reading comprehension, or premises. Compute the revised correct answer.
+       - ENTRY / FORMAT RETHINK: Check if platform rejected entry format: simplified fraction vs decimal, units printed outside box vs inside, rounding specification (nearest tenth/cent), coordinate notation (x, y), or all-applicable checkboxes.
+       - Set "is_rethinking": true, provide detailed "rethink_reasoning", and output corrective actions with clear_first = true.
+
+   CRITICAL RULES FOR DETERMINING IF AN ANSWER IS FILLED OUT (ON UNSUBMITTED QUESTIONS):
+    * UNANSWERED QUESTIONS (NEVER MARK AS WRONG):
+      - If all radio buttons or checkboxes are hollow/unselected, or text fields are blank/empty/placeholder:
+        * The question is UNANSWERED!
+        * Set evaluation_status = "unsubmitted" (NEVER "incorrect" or "wrong").
+        * Set current_state = "unanswered" (NEVER "wrong" or "answered_incorrect").
+        * Set is_rethinking = false, rethink_reasoning = "".
+        * Set needs_action = true, provide the exact click or type actions to answer it, and set ready_to_advance = false.
+    * MULTIPLE CHOICE & SIBLING POINT COMPARISON:
+      - To determine if a multiple choice question is already answered, COMPARE the choices to each other:
+        * If ALL choice points look identical (all hollow, uncolored, or empty), the question is UNANSWERED.
+        * If ONE choice looks visually distinct from the other unselected options (e.g. dot, check, color fill, or highlight), that choice is ALREADY ANSWERED!
+      - For multiple-choice or checkbox questions, provide "choices" in the item containing the bounding boxes and coordinates of all options on screen so AVA can cross-verify them.
+    * UNFILLED / EMPTY INPUTS:
+      - Any input field that is blank, white, dark, or contains placeholder / watermark / prompt guidance text (such as "Type your answer here...", "Enter response", "Write an essay...", "Type here...", "Click to add text...", "e.g. 10", "Select an option...", "Choose...", or faint gray text) is UNFILLED!
+      - For ANY unfilled question or sub-part, you MUST set needs_action = true, provide the exact click / type actions to answer it, and set ready_to_advance = false.
+    * FILLED INPUTS & PREVENTING REDUNDANT RE-CLICKS:
+      - An input is considered filled out if actual non-placeholder student text is visibly typed in the box, or a multiple choice option is selected (distinct from sibling options).
+      - Placeholder text is NEVER an answer and must NEVER be treated as existing_answer or existing_written_text!
+    * UNANSWERED QUESTIONS (ALWAYS GENERATE ACTIONS TO ANSWER):
+      - IF NO CHOICE IS CURRENTLY SELECTED (all radio circles or checkboxes are hollow, empty, unshaded, or uncolored, or text box is empty/placeholder):
+        * The question is UNANSWERED.
+        * YOU MUST ALWAYS GENERATE THE ACTION TO CLICK/SELECT THE TARGET OPTION OR TYPE THE ANSWER!
+        * Set evaluation_status = "unsubmitted", current_state = "unanswered", is_rethinking = false, rethink_reasoning = "".
+        * Set needs_action = true, provide the exact click or type actions in "actions".
+        * Set ready_to_advance = false.
+        * NEVER set needs_action = false or actions = [] on an unanswered question!
+        * NEVER provide next_button or advance past an unanswered question!
+    * PRESERVING GENUINELY PRE-SELECTED ANSWERS:
+      - ONLY IF a choice is ALREADY physically selected on screen (an unambiguous inner filled bullet dot is visible in the radio button, a checkmark is visible in the checkbox, or student text is visibly typed in the box):
+        * If that pre-selected choice matches your academic derivation of the correct answer:
+          - The question is already filled out correctly.
+          - Set evaluation_status = "unsubmitted", current_state = "answered_correct", is_rethinking = false, rethink_reasoning = "".
+          - Set needs_action = false, actions = [].
+        * If that pre-selected choice is WRONG (contradicts sound academic derivation on an unsubmitted question):
+          - Set evaluation_status = "unsubmitted", current_state = "answered_incorrect", is_rethinking = false.
+          - Set needs_action = true, and provide corrective actions with clear_first = true.
+      - WHEN IN DOUBT WHETHER AN OPTION IS SELECTED: ALWAYS output the action to click/select the correct answer! It is always safe to click the target option.
+
+3. 100% ACADEMIC PRECISION — NEVER PURPOSEFULLY CHOOSE A WRONG ANSWER:
+   - ABSOLUTE ACCURACY MANDATE (NEVER INTENTIONALLY SELECT WRONG ANSWERS):
+     * Your primary mission is 100% academic correctness. Always calculate and determine the true, mathematically, scientifically, and grammatically accurate answer.
+     * YOU MUST ALWAYS CHOOSE, CLICK, AND TYPE THE TRUE CORRECT ANSWER THAT YOUR MATHEMATICAL AND LOGICAL REASONING DERIVES!
+     * UNDER NO CIRCUMSTANCES SHOULD YOU EVER DELIBERATELY, PURPOSEFULLY, OR INTENTIONALLY SELECT OR TYPE A WRONG ANSWER!
+     * If your reasoning concludes that Option B (or value X) is the correct answer, YOU MUST SELECT OPTION B (or type value X).
+     * NEVER second-guess your own sound calculations by thinking: "The math says Option B, but maybe Option B was already tried and rejected, so I should pick Option C". NEVER do this!
+     * Even if you are rethinking an attempt genuinely marked incorrect by an explicit red 'X', carefully re-verify arithmetic, reading comprehension, units, and formatting (decimals vs fractions, rounding). BUT NEVER intentionally choose an answer known to be academically wrong!
+   - STRICT CONSISTENCY BETWEEN REASONING, ANSWER, AND ACTIONS:
+     * In your JSON output, the "reasoning" field is evaluated FIRST so you can solve the problem step-by-step.
+     * Your "answer" field (and each item's "correct_answer") MUST 100% MATCH the exact conclusion of your "reasoning"!
+     * NEVER state Option A in your reasoning and then output Option B in "answer"!
+     * The "actions" generated MUST strictly target the exact same option specified in both "reasoning" and "answer"!
+   - EMBEDDED IMAGES, DIAGRAMS, CHARTS, AND FIGURES (HIGH-PRECISION OCR):
+     * When a question contains an embedded image, diagram, geometric shape, plot, coordinate plane, table, map, or scientific figure:
+       YOU MUST PERFORM METICULOUS VISUAL OCR ON ALL NUMBERS AND LABELS EMBEDDED IN THE IMAGE!
+     * NEVER guess, approximate, or extrapolate numbers from diagrams:
+       - Axis scales & tick marks: Carefully examine the grid and axes. Check the spacing between tick marks (e.g. does each grid mark represent 1, 2, 5, 10, or 0.5 units?). Do not assume (0, 0) is at the bottom-left corner unless confirmed.
+       - Coordinate pairs: Read exact (x, y) coordinates of points, vertices, intercepts, and data points directly from grid lines.
+       - Negative signs vs positive: Look closely for minus signs (-) in front of numbers, axis values, and exponents (e.g. -4 vs 4, -0.5 vs 0.5).
+       - Decimal points & fraction bars: Inspect numbers carefully for small decimal points or fraction bars (e.g. 1.5 vs 15, 2.75 vs 275).
+       - Exponents & Subscripts: Note any powers, squared/cubed symbols (e.g. x², 10⁻⁴, cm³), and chemical or sequence indices (e.g. H₂SO₄, a_n).
+       - Geometry measures & annotations: Look for angle degree values (°), side lengths, right angle square markers, parallel arrowheads, congruent hash marks, and vertex labels (A, B, C...).
+       - Tables & Infographics: Transcribe the exact numbers from the relevant row/column before performing calculations.
+     * TRANSCRIBE IN REASONING: In the "reasoning" field, explicitly write out and transcribe all extracted numbers, coordinates, and equations from the embedded image before performing calculations so your math is 100% grounded in the visual evidence.
 
 4. UI ACTION LOCALIZATION:
    - Provide exact coordinates (x, y) required to input or select the answers on screen:
@@ -166,10 +220,9 @@ IMPORTANT COORDINATE & BOUNDING BOX INSTRUCTIONS:
   * (x=0, y=0) is top-left corner (0%, 0%) of the screenshot.
   * (x=1000, y=1000) is bottom-right corner (100%, 100%) of the screenshot.
   * Example: screen center is x=500, y=500.
-- VISUAL RULERS & SET-OF-MARKS GROUNDING:
-  * The screenshot features normalized 0..1000 coordinate rulers along the top margin (X-axis) and left margin (Y-axis) to verify exact coordinates.
-  * Interactive candidate controls (inputs, options, buttons) may have numbered anchor badges (e.g. [1], [2], [3]...).
-  * When targeting a marked control, you may include "mark": <id> (integer or string) in the action object in addition to (x, y). AVA will automatically snap to the exact pixel center of that anchor mark!
+- VISUAL RULERS & SET-OF-MARKS GROUNDING (IF PRESENT):
+  * If normalized 0..1000 coordinate rulers are visible along the top or left margins, you may use them to verify exact coordinates.
+  * If interactive candidate controls have numbered anchor badges (e.g. [1], [2], [3]...), you may include "mark": <id> in the action object in addition to (x, y). Otherwise, provide normalized (x, y) coordinates and "box_2d" boundaries.
 - For ALL fill-in-the-blank input boxes, text/numeric fields, options, and clickable buttons:
   Provide BOTH "box_2d": [ymin, xmin, ymax, xmax] (representing the exact outer boundary of the box/control, normalized 0..1000)
   AND center coordinates "x": (xmin + xmax) // 2 and "y": (ymin + ymax) // 2.
@@ -180,8 +233,8 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
 {{
   "status": "ready",
   "question": "Primary question text (or combined question summary if multi-part)",
-  "answer": "Clear, direct final answer (e.g. 'Option B (144)' or 'Part 1: Option A | Part 2: 144')",
-  "reasoning": "Clear step-by-step academic explanation of the solution",
+  "reasoning": "Clear step-by-step academic explanation and calculation of the solution (SOLVE THE PROBLEM FIRST HERE)",
+  "answer": "Clear, direct final answer derived strictly from the reasoning above (e.g. 'Option B (144)' or 'Part 1: Option A | Part 2: 144')",
   "summary": "Brief summary of questions and parts detected",
   "is_written_response": false,
   "min_word_count": null,
@@ -205,9 +258,9 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
       "is_rethinking": false,
       "rethink_reasoning": "",
       "existing_answer": null,
+      "reasoning": "Photosynthesis is the process by which plants convert sunlight, water, and CO2 into glucose and oxygen. Comparing choices, Option B correctly defines this. Selecting Option B.",
       "correct_answer": "Option B",
       "needs_action": true,
-      "reasoning": "Question is unsubmitted and unselected (radio buttons have empty circles). Clicking Option B.",
       "choices": [
         {{"label": "Option A", "box_2d": [280, 240, 305, 520], "x": 255, "y": 292}},
         {{"label": "Option B", "box_2d": [320, 240, 345, 520], "x": 255, "y": 332}},
@@ -227,14 +280,14 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
     {{
       "part_id": "Part 2",
       "question_text": "What is 12 * 12?",
-      "evaluation_status": "incorrect",
-      "current_state": "answered_incorrect",
-      "is_rethinking": true,
-      "rethink_reasoning": "Previous entry was marked incorrect. Rethinking entry format: platform requires exact integer without units.",
-      "existing_answer": "120",
+      "evaluation_status": "unsubmitted",
+      "current_state": "unanswered",
+      "is_rethinking": false,
+      "rethink_reasoning": "",
+      "existing_answer": null,
+      "reasoning": "Calculating 12 * 12: 12 * 10 = 120, 12 * 2 = 24, 120 + 24 = 144. The exact answer is 144. Input box is currently empty. Focusing and typing 144.",
       "correct_answer": "144",
       "needs_action": true,
-      "reasoning": "12 * 12 = 144. Box currently has incorrect 120. Clearing and typing 144.",
       "actions": [
         {{
           "type": "click",
@@ -249,10 +302,10 @@ You MUST respond with VALID JSON ONLY, strictly conforming to this schema:
           "box_2d": [535, 360, 565, 480],
           "x": 420,
           "y": 550,
-          "clear_first": true,
+          "clear_first": false,
           "text": "144",
           "in_scrolled_view": false,
-          "description": "Clear incorrect value and type 144"
+          "description": "Type 144 into input box"
         }}
       ]
     }}
@@ -373,12 +426,23 @@ Output raw JSON only without markdown fences.
 """
 
 
+def _json_safe_default(obj):
+    if isinstance(obj, (set, tuple)):
+        return list(obj)
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
+
+
 def get_double_check_prompt(
     image_width: int,
     image_height: int,
     question: str,
     intended_answer: str,
-    intended_actions: list = None
+    intended_actions: list = None,
+    reasoning: str = ""
 ) -> str:
     """
     Returns the verification prompt instructing the vision model to double-check
@@ -387,7 +451,29 @@ def get_double_check_prompt(
     """
     actions_desc = ""
     if intended_actions:
-        actions_desc = f"\nIntended actions attempted:\n{json.dumps(intended_actions, indent=2)}"
+        # Sanitize actions for prompt readability and strip internal telemetry/non-serializable state
+        sanitized_actions = []
+        for act in intended_actions:
+            if isinstance(act, dict):
+                clean_act = {}
+                for k, v in act.items():
+                    if k in ("prior_attempted_coords", "attempted_clicks", "raw_response"):
+                        continue
+                    if isinstance(v, set):
+                        clean_act[k] = list(v)
+                    else:
+                        clean_act[k] = v
+                sanitized_actions.append(clean_act)
+            else:
+                sanitized_actions.append(act)
+
+        try:
+            serialized = json.dumps(sanitized_actions, indent=2, default=_json_safe_default)
+        except Exception:
+            serialized = str(sanitized_actions)
+        actions_desc = f"\nIntended actions attempted:\n{serialized}"
+
+    reasoning_desc = f"\n- Academic Reasoning: {reasoning}" if reasoning else ""
 
     return f"""You are AVA's QA & Visual Verification Engine.
 The screenshot dimensions are {image_width} pixels wide by {image_height} pixels high.
@@ -396,8 +482,15 @@ An automated student assistant has just finished executing actions to answer the
 Before the student advances or submits, you must perform a strict, independent DOUBLE-CHECK of the screen.
 
 TARGET PROBLEM DETAILS:
-- Question: {question}
+- Question: {question}{reasoning_desc}
 - Target Correct Answer: {intended_answer}{actions_desc}
+
+CRITICAL VERIFICATION PRINCIPLES:
+- GROUND IN ACADEMIC REASONING: Compare what is visibly selected/typed on screen against the Academic Reasoning and Target Correct Answer.
+- If the on-screen selected option or typed text accurately matches the mathematical/academic derivation or Target Correct Answer, DO NOT flag it as wrong! Set double_check_passed = true, messed_up = false, issue_type = "none".
+- NEVER overturn a correct answer or force the selection of an incorrect choice!
+- NEVER flag an already-correct selection or unsubmitted correct answer as "wrong_option" or "wrong_text".
+- ONLY flag "messed_up": true if the visibly selected option directly contradicts the sound academic derivation or is factually wrong.
 
 YOUR VERIFICATION TASKS:
 1. INSPECT THE CURRENT ON-SCREEN STATE:

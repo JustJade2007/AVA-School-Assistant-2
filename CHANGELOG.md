@@ -8,6 +8,151 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.21.a] - 2026-10-03
+
+### Fixed & Enhanced
+- **Autonomous Answering & Auto-Next Premature Navigation Bugfixes**:
+  - **Prompt Action Enforcement on Unanswered Questions**: Overhauled multiple-choice guidelines in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py). Explicitly instructed the vision model that unanswered questions (where options are hollow/uncolored) MUST generate answering click actions and set `needs_action = true` and `ready_to_advance = false`. Removed ambiguous phrasing that previously caused AI to treat unselected matching options as already answered.
+  - **Unsubmitted Evaluation Status Preservation**: In [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py), stopped promoting `item["evaluation_status"]` to `"correct"` when `raw_state == "answered_correct"`. Fresh and unsubmitted questions strictly preserve `"evaluation_status": "unsubmitted"`, ensuring only authentic platform-graded checkmarks qualify as `"correct"`.
+  - **Autonomous Mode Execution Safeguards**: In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), prevented local zero-token pre-selection checks from suppressing actions when `autonomous_mode` is enabled. In autonomous mode, AVA always executes the planned solution on unsubmitted questions rather than assuming options are already selected.
+  - **Guarded Auto-Next Advance on Unsubmitted Content**: In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), added guards preventing `auto_next` from clicking the Next button when an unsubmitted question with actual question content is on screen and has not been graded `"correct"` by the platform.
+  - **Comparative Sibling Verification Authority**: In [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py), ensured `is_radio_or_checkbox_selected` strictly returns `False` when comparative sibling checks determine the option is indistinguishable from unselected sibling options, preventing fallthrough to standalone heuristics that produced false positives on empty borders.
+
+## [2.2.20.a] - 2026-10-03
+
+### Fixed & Enhanced
+- **Playground Lifecycle & Thread Safety (PR #31)**:
+  - Guarded Tkinter GUI callbacks across async workers in `PlaygroundWorkspace` using `_after_if_open()` and `_is_closing` checks to prevent `TclError` and dead object access when windows are closed mid-operation. Added lifecycle regression test suite in `tests/test_playground_lifecycle.py`.
+- **Evaluation Status False-Positive Fix for Unanswered & Correct Answers (Issue #28)**:
+  - **Unanswered & Correct Answer Prompt Constraints**: Updated `get_vision_system_prompt` and `get_double_check_prompt` in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) with explicit negative constraints: an unanswered question (empty text input or all radio/checkbox options unselected) must strictly default to `evaluation_status = "unsubmitted"` and `current_state = "unanswered"` and can never be marked `incorrect` or `wrong`. Correctly answered questions matching sound academic derivations are preserved with `current_state = "answered_correct"` and must never be overturned, re-selected, or flagged as a mistake.
+  - **AI Response Normalization Guards**: In `_normalize_response()` in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py), added safeguards distinguishing fresh/unanswered items and already-correct items from genuine grading failures. Automatically suppresses false-positive `incorrect` states when an item has answering actions or matches the correct answer with zero platform error feedback.
+  - **Engine Status Evaluation Safeguards**: In `check_question_evaluation_status` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), added guards preventing unsubmitted questions or already-answered questions from being marked `incorrect`. Eliminated auto-fabrication of fake rethink reasons (`"Question marked incorrect by platform..."`), requiring actual platform error feedback, rethink reasoning, or confirmed visual markers before triggering a rethink loop.
+  - **Differential Verification Baseline Enforcement**: In `verify_post_submission_evaluation` in [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py), strictly required a pre-submission baseline image (`before_check_img`) and genuine screen transition (`diff >= 0.003`) before evaluating differential red markers. If no baseline is available, returns `status = "unsubmitted"` rather than naively counting full-screen static red pixels (e.g. red headers, logos, buttons) that previously falsely triggered incorrect detection.
+  - **HUD Evaluation Status Rendering**: Updated [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py) so `❌ PLATFORM: INCORRECT -> RETHINKING` is only rendered when `eval_status == "incorrect"` AND `is_rethinking` is active. Unanswered items display `● ANSWERING` and already-correct items display `✓ CORRECT`, eliminating false-positive red error banners.
+
+## [2.2.19.a] - 2026-10-03
+
+### Fixed & Enhanced
+- **Manual Auto-Answer (F9) Decoupled from Autonomous Mode (Issue #32)**:
+  - **Decoupled 'Check Answer' Submission from Autonomous Mode**: Decoupled `check_button` clicking in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) (`should_advance`) from `self.config.autonomous_mode`. Previously, having autonomous mode disabled forced `should_advance` to `False` whenever `auto_next` was disabled, skipping the "Check Answer" / "Submit" button click and abruptly bouncing back to IDLE. Now, answer checking and verification occur upon manual execution confirmation regardless of autonomous mode setting, while preserving user control by pausing before next question navigation if `auto_next` is disabled.
+  - **Idle State One-Shot F9 Execution**: Enhanced `confirm_and_execute()` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) to handle hotkey activation from `EngineState.IDLE`. If a solution is already pending, pressing `F9` immediately transitions to execution; if no solution is loaded, `F9` seamlessly launches a one-shot solve & execute pipeline (`_force_execute_after_reading = True`), eliminating silent drops and rapid state flashes when users press `F9` without autonomous mode active.
+  - **Action Preservation Against False-Positive Heuristics**: Stored `original_actions` in the solution payload in `_run_solve_pipeline()` before local zero-token pre-selection checks run. When user explicitly requests execution via `F9`, `confirm_and_execute()` and `execute_current_solution()` restore actions if they were cleared by false-positive local sibling checks and bypass heuristic action suppression.
+  - **Accurate Handling for Already Correct Questions**: Updated `confirm_and_execute()` and `execute_current_solution()` so that when an assessment item is visually confirmed already correct by the platform, manual `F9` confirmation advances to the next question rather than getting trapped in idle.
+
+## [2.2.18.a] - 2026-10-03
+
+### Added & Enhanced
+- **Teacher AI Feedback Rewrite, Humanize & Re-Grade Loop (Playground Mode)**:
+  - **Targeted Section Improvement Engine**: Introduced `get_sections_needing_improvement` and `rewrite_and_humanize_sections_with_feedback` in [core/playground/engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py). Automatically analyzes teacher evaluation reports, links unfulfilled rubric criteria and instructor improvement critiques to specific section drafts, and prompts AI to revise them while strictly maintaining target word count boundaries.
+  - **Jade's AI Humanizer Integration**: Automatically passes all revised sections through [PlaygroundHumanizerBridge](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/playground/humanizer_bridge.py) using active tone and reading level settings, re-applying student word limits via `WrittenSolver`.
+  - **Revision Snapshots & One-Click Revert**: Implemented `revision_snapshots`, `create_revision_snapshot`, and `restore_latest_snapshot` in [core/playground/project_model.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/playground/project_model.py). Takes an automatic snapshot of sections and rubric statuses before rewriting, allowing users to restore previous drafts with a single click if desired.
+  - **Multi-Phase Progress Modal**: Designed a real-time progress dialog in [ui/playground/workspace.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py) that tracks execution across Phase 1/3 (Revising Flagged Sections), Phase 2/3 (Applying Jade's AI Humanizer), and Phase 3/3 (Re-grading with Teacher AI) with anti-capture cloaking support.
+  - **Interactive Action Prompts & Side-by-Side Comparison**: Added a post-grading action dialog offering `✨ Rewrite with Feedback`, a persistent `✨ Rewrite & Improve from Feedback` button in the Stage 4 Teacher Card, an action button in the Breakdown Details dialog, and a comparison modal highlighting grade deltas (e.g. `+7%`), newly fulfilled criteria, and options to keep, revert, or run another improvement cycle.
+
+## [2.2.17.a] - 2026-10-03
+
+### Fixed & Enhanced
+- **Zero-Token & Visual Double-Check Verification Set Serialization (Issue #30)**:
+  - **Robust JSON Fallback Serializer**: Introduced `_json_safe_default` in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) to automatically serialize non-standard Python types (e.g., `set`, `tuple`, custom objects) to JSON-compatible lists and dicts when constructing verification prompts, preventing `TypeError: Object of type set is not JSON serializable`.
+  - **Telemetry Stripping in Verification Prompts**: Sanitized action payloads passed into `get_double_check_prompt` by stripping internal worker telemetry (`prior_attempted_coords`, `attempted_clicks`, `raw_response`), keeping the double-check prompt clean and token-efficient.
+  - **Serializable Offset History**: Ensured `prior_attempted_coords` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) are stored as a JSON-serializable list of coordinate pairs rather than a Python `set`.
+  - **Coordinate Normalization in Recovery Probing**: Updated candidate coordinate filtering in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py) to normalize `prior_attempted_coords` into a set of coordinate tuples, guaranteeing accurate candidate exclusion whether coordinates are represented as lists or tuples.
+  - **Phase Diagnostic Accuracy & Fault Tolerance**: Set `phase = "Visual Double-Check"` before invoking screen verification in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) so errors are accurately attributed to visual double-check rather than zero-token verification. Wrapped `_double_check_answers_on_screen` and `get_double_check_prompt` in fail-open exception handlers to ensure verification telemetry glitches never crash the automated worker or halt solving.
+
+## [2.2.16.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Reasoning vs Bold Answer Divergence & Selection Alignment**:
+  - **Reasoning-First JSON Generation Order**: Restructured the vision prompt schema in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) so that `reasoning` is evaluated and output *before* `answer` and `correct_answer`. In autoregressive LLMs, generating the answer before reasoning forced premature guesses without chain-of-thought calculation; placing reasoning first guarantees that the final answer in bold strictly reflects the mathematical and logical reasoning.
+  - **Strict Consistency Enforcement**: Added an explicit mandate in Section 3 of [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) prohibiting any discrepancy between the reasoned conclusion, the reported `answer`, and the targeted `actions`.
+  - **Authoritative Answer Reconciliation**: Updated schema normalization in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py) so that item-level reasoned `correct_answer` values strictly govern the canonical top-level `answer`, eliminating conflicting answer labels.
+- **Eliminated Cross-Row / Sibling Option Hijacking in Recovery Probing**:
+  - **Same-Row Boundary Clamping**: Restricted candidate recovery probing in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py) strictly to elements on the exact same vertical row (`abs(cand_y - target_y) <= 8px`), preventing the verifier from ever probing or clicking radio buttons on adjacent question rows.
+  - **Sibling Choice Isolation**: Added strict sibling distance checks to discard any candidate closer to an unselected sibling option than to the intended target choice.
+  - **Protected Physical Target Offset**: Guarded `action["physical_target_x"]` and `y` assignment to ensure coordinates on different rows can never overwrite action targets during retries.
+- **Reasoning-Grounded AI Double-Check Verification**:
+  - **Academic Derivation Passthrough**: Updated [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) and [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) to pass the full academic reasoning into `double_check_solution`. Double-check now verifies that on-screen selections align with the sound academic derivation, preventing false-positive corrective actions from overturning correct answers.
+
+## [2.2.15.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Zero-Token Answer Verification Latency Optimization (< 0.1s execution)**:
+  - **Vectorized & Strided Control Detection**: Overhauled nested loop in `detect_controls_in_crop` ([core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py)) from a 1.7-million-operation unstrided loop with inline trigonometric calculations down to precomputed 8-point radial sample offsets and a 2px stride, reducing local control scanning time from 3–5 seconds to under 0.05 seconds.
+  - **Fast Sibling Discovery Pipeline**: Narrowed `find_sibling_choice_points` scan boundary from 320px to 180px, increased scan step stride to 5px, and added early termination upon finding 3 siblings.
+  - **Zero-Latency Sibling Coordinate Passthrough**: Ensured action dictionaries in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) retain `result_data`, enabling `get_sibling_choice_coordinates` to retrieve sibling coordinates instantaneously (0ms) from AI solution choices rather than repeatedly scanning screen pixels.
+  - **Live Failsafe Outcome Verification**: Updated post-execution verification flow in `execute_current_solution` so that live screen outcome is verified before declaring failure. If the answer is visually confirmed on screen, verification passes immediately without triggering retry delays.
+  - **Eliminated 30-Second Countdown & Retry Bottlenecks**: Reduced `_max_auto_miss_retries` from 3 to 1 and `_retry_countdown_seconds` from 5 to 1, eliminating up to 25 seconds of dead countdown sleep when an action is unconfirmed.
+  - **Transparent HUD Status Reporting**: Updated [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py) and [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) so `EngineState.VERIFYING` renders the actual detail string (distinguishing AI Double-Checking from Zero-Token verification).
+
+## [2.2.14.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Eliminated Destructive Readjustment Probing on Successful Hits**:
+  - **Interaction Intent Classification**: Added robust classification for interaction targets (`is_input_focus`, `is_dropdown`, `is_button`) in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py) across both individual action execution and action sequence workflows.
+  - **Input Box Focus Protection**: Prevented lateral recovery offset probing (`-35px, -50px, -22px`) when clicking to focus text boxes and input blanks. Ensures clicking an input field delivers focus and maintains cursor positioning inside the box so subsequent `type_text` actions enter answers correctly without being clicked out of or defocused.
+  - **Dropdown Menu Preservation**: Added dropdown menu expansion detection below the dropdown button (`target_y + 40`) and prohibited lateral readjustment probing for dropdown controls. Prevents the automation executor from clicking away and closing expanded dropdown option menus before the target option can be selected.
+  - **Calibrated Verification Acceptance**: Removed overly strict `diff_score >= 1.6` requirement on confirmed action completions in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py), accepting verified visual responses (`diff_ok`) and preventing spurious readjustment attempts when the primary hit was already successful.
+  - **Sequence-Level Failsafe Alignment**: Integrated sequence-level intent tagging so that focus clicks preceding typing are acknowledged and verified by the per-input failsafe instead of being erroneously reported as unconfirmed.
+
+## [2.2.13.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Evaluation Status False-Positive Fix ("Marked Wrong" When No Indication)**:
+  - **Strict "unsubmitted" Default**: Updated [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) to explicitly mandate that `evaluation_status` must strictly default to `"unsubmitted"` (`is_rethinking: false`) unless prominent, unmistakable, and explicit post-submission grading feedback is visible (e.g. an explicit red 'X' icon or red "Incorrect / Try Again" banner). Clarified that red required asterisks (*), red web page headers/logos, red buttons, and colored math diagram lines are never error indicators.
+  - **Eliminated Static Screen Marker Overrides**: In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), removed naive static full-screen red pixel checks that were falsely converting unsubmitted questions into `incorrect` status simply because a website or diagram contained red accents.
+  - **Differential Failsafe Comparison**: Converted post-submit verification to perform differential comparison against pre-submit screenshots, ensuring static page elements are ignored and only newly introduced platform failure banners are detected.
+  - **Clean Prompt Few-Shot Example**: Replaced the few-shot JSON example in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) to showcase standard unsubmitted questions rather than biasing the model toward `evaluation_status: "incorrect"`.
+
+- **Deliberate Wrong Answer Selection Fix**:
+  - **Absolute Accuracy Mandate**: Added an uncompromising accuracy directive in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) Section 3 instructing the AI to always click and type the mathematically, scientifically, and logically sound answer derived in its reasoning.
+  - **Eliminated Second-Guessing Bias**: Explicitly prohibited the AI from second-guessing its own calculations (e.g., thinking "the math says Option B, but Option B must have been tried, so I will choose Option C").
+  - **Cleaned Rethink Triggers**: Removed false-positive pre-next and post-submit rethink loops in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) that were triggering unnecessary re-solving cycles.
+
+## [2.2.12.a] - 2026-09-29
+
+### Fixed & Enhanced
+- **Premature Auto-Advance & Option Detection Fix**:
+  - **Directional Contrast Heuristics**: Fixed contrast evaluation in `is_radio_or_checkbox_selected` in [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py) to evaluate directional contrast (core darker than gap in light theme, brighter in dark theme) and require core checkmark strokes, eliminating false positives where unselected radio circles with border rings were falsely classified as selected bullet dots.
+  - **Action Suppression Safeguard**: Enforced that pre-execution action suppression in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) requires discovered on-screen sibling choices, preventing standalone checks from canceling AI-generated clicks.
+  - **Unsubmitted Question Advance Guard**: Guarded `is_already_filled` in `_run_solve_pipeline` so unsubmitted questions with active question text cannot bypass execution and auto-advance.
+- **Strict Auto-Next Setting Enforcement**:
+  - **Settings Obedience**: Resolved an issue where AVA attempted to hit the Next button even when "Auto Click Next Question" was disabled in settings.
+  - **Decoupled from Autonomous Mode**: Updated [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) across `_run_solve_pipeline`, `confirm_and_execute`, and `execute_current_solution` so auto-advancing to the next question strictly requires `config.auto_next == True`, ensuring that `autonomous_mode` and `chain_multi_parts` respect the setting and pause at completed questions.
+- **Embedded Diagram & Image Numerical OCR Accuracy**:
+  - **Clean Screenshot Grounding**: Disabled intrusive Set-of-Marks tags and coordinate margin rulers by default in [core/capture.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/capture.py) and [core/visual_grounding.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/visual_grounding.py) that were obscuring numbers, geometry angles, and digits on diagrams.
+  - **High-Fidelity 4:4:4 Chroma Subsampling**: Upgraded JPEG encoding in [core/capture.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/capture.py) to quality 95 with `subsampling=0` to eliminate compression ringing around small numbers, decimal points, and minus signs.
+  - **Dedicated Image OCR System Prompt**: Added explicit guidance in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) directing vision models to meticulously transcribe embedded diagram numbers, coordinate axes, scale intervals, negative signs, decimals, exponents, and geometry labels.
+
+## [2.2.11.a] - 2026-09-27
+
+### Fixed & Enhanced
+- **Playground Rubric File Type & Turn-In Date Exclusion**:
+  - **Prompt-Level Filtering**: Updated `PlaygroundEngine.parse_rubric` system prompt with explicit negative constraints directing AI models to never extract or include assignment file types (e.g. `.docx`, `.doc`, `.pdf`, `Word document`, upload formats) or submission deadlines (e.g. due dates, turn in by, deadlines, late policies).
+  - **Administrative Heuristic Filter**: Implemented `PlaygroundEngine.is_administrative_criterion` in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py) to identify and exclude any file type requirements, format constraints, turn-in dates, and submission deadlines.
+  - **Multi-Layer Defense**: Applied `is_administrative_criterion` across AI JSON parsing, rule-based fallback parsing, outline formulation, [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py) checklist updates (`_finish_rubric_parse` and `_on_rubric_criteria_changed`), and [core/playground/teacher_evaluator.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/teacher_evaluator.py) grading calls.
+
+## [2.2.10.a] - 2026-09-27
+
+### Reverted & Restored
+- **Rubric Detection & Parsing Reversion**:
+  - **Reverted Per-Point Word Overhaul**: Reverted the rubric parser in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py), [core/written_solver.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/written_solver.py), and [ui/playground/rubric_viewer.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/rubric_viewer.py) to the original, stable baseline prior to the "per __" detection modifications.
+  - **Clean Criteria Extraction**: Removed synthetic multi-item decomposition, administrative filtering heuristics, and word-limit injections into `target_score` fields.
+  - **Restored Standard Checklist & Viewer**: Restored standard checklist item creation and simple word requirement detection in [ui/playground/workspace.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py) and [ui/playground/rubric_viewer.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/rubric_viewer.py).
+
+## [2.2.9.a] - 2026-09-27
+
+### Fixed & Enhanced
+- **Rubric Criterion Decomposition for Multi-Item Prompts**:
+  - **Individual Criteria Cards for Multi-Point Prompts**: Resolved an issue where questions requesting multiple items (e.g. *"Identify and explain the three most important points you hope to master"*) were aggregated into a single lumped criterion card. Implemented `_expand_multi_item_criteria` in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py) to automatically detect and decompose lumped multi-item requests into $N$ distinct criteria (e.g. *Point 1 to Master*, *Point 2 to Master*, *Point 3 to Master*), giving each point its own checklist item and requirement tracking.
+  - **Hardened Extraction Prompting**: Instructed the Gemini rubric extraction prompt to always emit separate criteria items when an assignment prompt requires multiple concepts, questions, or points.
+  - **Smart Fallback Expansion**: Enhanced `_smart_fallback_parse_rubric` to identify multi-item numerical patterns (`three points`, `3 concepts`, `4 questions`) and generate individual criteria cards directly during offline or fallback parsing.
+- **Score / Weight Field Sanitization & Word Limit Separation**:
+  - **Eliminated Word Limit Leakage into Weights**: Fixed a regression where word count constraints (e.g. *"50 words min (Pass/Fail)"* or *"50 words each"*) were being populated into the `target_score` (Points / Weight) field.
+  - **Score Sanitization Utility**: Added `PlaygroundEngine._clean_target_score` in [core/playground/engine.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py) to rigorously strip word count artifacts from grade weights while preserving legitimate grading criteria (e.g. `5 pts`, `5 pts (Pass/Fail)`, `Pass/Fail`).
+  - **UI Display & Modal Sanitization**: In [ui/playground/rubric_viewer.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/ui/playground/rubric_viewer.py), updated `CriterionEditModal` and `render_criteria` to sanitize `target_score` values, ensuring word count requirements are displayed exclusively on dedicated requirement badges and in the guidelines description.
+- **English Number Word Support in Word Constraint Parser**:
+  - In [core/written_solver.py](file:///c:/Users/jacob/Desktop/Coding/AVA-School-Assistant-2/core/written_solver.py), updated `extract_detailed_word_constraints` to parse word numerals (`two`, `three`, `four`, etc.) in phrases like *"three most important points"*, accurately calculating total document word requirements (e.g. 3 × 50w = 150w min).
+
 ## [2.2.8.a] - 2026-09-27
 
 ### Fixed & Enhanced

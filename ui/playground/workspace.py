@@ -8,6 +8,7 @@ Dedicated long-form writing studio featuring a 4-stage pipeline:
 Includes anti-screen capture cloaking by default with a header toggle.
 """
 
+import copy
 import os
 import threading
 import tkinter as tk
@@ -124,6 +125,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.current_file_path: Optional[str] = None
         self._is_generating = False
         self._is_closing = False
+        self._title_user_edited = False
 
         self._setup_window()
         self._build_header()
@@ -732,6 +734,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
 
     def _on_title_entry_changed(self):
         new_title = self.title_entry.get().strip()
+        self._title_user_edited = True
         if new_title:
             self.project.title = new_title
             self.title_display.configure(text=new_title)
@@ -1010,68 +1013,46 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         if hasattr(self, "stage_2_rubric_viewer"):
             self.stage_2_rubric_viewer.set_criteria(valid_criteria)
         logger.info(f"Rubric criteria live-synced: {len(valid_criteria)} criteria")
-        self._auto_detect_word_requirements(force=True)
+        self._auto_detect_word_requirements()
 
-    def _auto_detect_word_requirements(self, force: bool = False):
+    def _auto_detect_word_requirements(self):
         topic_text = self.topic_textbox.get("1.0", "end").strip()
         rubric_text = self.rubric_raw_textbox.get("1.0", "end").strip()
         if rubric_text.startswith("Paste rubric text here"):
             rubric_text = ""
         combined = f"{topic_text}\n{rubric_text}".strip()
+        if not combined:
+            return
 
-        criteria = getattr(self.project, "rubric_criteria", []) or []
-        crit_count = len(criteria)
-
-        # 1. Check constraints from combined prompt text
-        constraints = WrittenSolver.extract_detailed_word_constraints(
-            combined,
-            item_count=crit_count if crit_count > 0 else None
-        )
+        crit_count = len(self.project.rubric_criteria) if getattr(self.project, "rubric_criteria", None) else None
+        constraints = WrittenSolver.extract_detailed_word_constraints(combined, item_count=crit_count)
         detected_target = constraints.get("total_min_words")
         num_items = constraints.get("num_items")
         per_item = constraints.get("per_item_words")
 
-        # 2. Check if individual criteria have explicit word constraints
-        criteria_word_sum = 0
-        criteria_with_word_limits = 0
-        for c in criteria:
-            c_text = f"{c.title}\n{c.description}\n{c.target_score or ''}"
-            c_constraint = WrittenSolver.extract_detailed_word_constraints(c_text)
-            c_words = c_constraint.get("per_item_words") or c_constraint.get("min_words")
-            if c_words:
-                criteria_word_sum += c_words
-                criteria_with_word_limits += 1
-            elif per_item:
-                criteria_word_sum += per_item
-                criteria_with_word_limits += 1
+        if not detected_target and per_item:
+            if crit_count and crit_count > 1:
+                detected_target = per_item * crit_count
+                num_items = crit_count
 
-        # 3. Sum up per-point requirements (e.g. 50 words each across questions/points)
-        if per_item and crit_count >= 1:
-            detected_target = per_item * crit_count
-            num_items = crit_count
-        elif criteria_with_word_limits > 0 and criteria_with_word_limits == crit_count:
-            detected_target = criteria_word_sum
-            num_items = crit_count
-        elif not detected_target and not per_item:
+        if not detected_target and not per_item:
             detected_target = constraints.get("min_words")
 
         if detected_target and detected_target > 0:
             current_val = self.words_entry.get().strip()
-            # If force=True, or current_val is default / empty / matches existing target, update words_entry
-            if force or current_val in ("1000", "500", "0", "", str(self.project.target_total_words)):
+            # If current_val is default 1000 or empty or matches current target
+            if current_val in ("1000", "", str(self.project.target_total_words)):
                 self.words_entry.delete(0, "end")
                 self.words_entry.insert(0, str(detected_target))
                 self.project.target_total_words = detected_target
 
             if num_items and per_item:
-                msg = f"✨ Detected: {num_items} points × {per_item}w each = {detected_target}w total limit (Target: ~{int(per_item * 1.1)}w each)"
-            elif criteria_with_word_limits > 0 and num_items:
-                msg = f"✨ Detected: {num_items} points = {detected_target}w total limit (Summed from rubric criteria)"
+                msg = f"✨ Detected: {num_items} points × {per_item}w/point = {detected_target}w total (Target: ~{int(per_item * 1.1)}w each)"
             else:
                 msg = f"✨ Detected: {detected_target}w requirement (Target: {detected_target}–{int(detected_target * 1.2)}w)"
             self.detected_words_label.configure(text=msg)
         elif per_item:
-            msg = f"✨ Detected: {per_item}w PER POINT (Total will be calculated once points/criteria are parsed)"
+            msg = f"✨ Detected: {per_item}w PER POINT (Total will be calculated once points/criteria are set)"
             self.detected_words_label.configure(text=msg)
 
     def _import_source_file(self):
@@ -1419,12 +1400,21 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             except Exception as e:
                 logger.error(f"Error parsing rubric: {e}")
                 criteria = []
-            finally:
-                self._after_if_open(0, lambda: self._finish_rubric_parse(criteria))
+
+            auto_title = ""
+            if not self._title_user_edited:
+                try:
+                    temp_project = copy.copy(self.project)
+                    temp_project.rubric_criteria = criteria
+                    auto_title = self.engine.generate_project_title(temp_project)
+                except Exception as e:
+                    logger.warning(f"Error auto-generating project title: {e}")
+
+            self._after_if_open(0, lambda: self._finish_rubric_parse(criteria, auto_title))
 
         threading.Thread(target=task, daemon=True).start()
 
-    def _finish_rubric_parse(self, criteria: List[RubricCriterion]):
+    def _finish_rubric_parse(self, criteria: List[RubricCriterion], auto_title: str = ""):
         if hasattr(self, "stage_1_parse_btn"):
             self.stage_1_parse_btn.configure(
                 state="normal",
@@ -1437,14 +1427,13 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         ]
         self.project.rubric_criteria = valid_criteria
         self.stage_1_rubric_viewer.set_criteria(valid_criteria)
-        self._auto_detect_word_requirements(force=True)
+        self._auto_detect_word_requirements()
 
-        if not valid_criteria:
-            messagebox.showinfo(
-                "Parsing Notice",
-                "No specific grading criteria could be extracted from the provided text.\n"
-                "You can add items manually using the '+ Add Custom Criterion' button."
-            )
+        if auto_title and not self._title_user_edited:
+            self.project.title = auto_title
+            self.title_entry.delete(0, "end")
+            self.title_entry.insert(0, auto_title)
+            self.title_display.configure(text=auto_title)
 
     # -------------------------------------------------------------------------
     # Stage 2: Outline Formulation & Plan
@@ -2095,6 +2084,11 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 fg_color="#451a03"
             )
 
+        # Auto-draft sections that have no content yet, so navigating to an
+        # empty section always greets the user with a starting draft.
+        if not sec.get_active_text().strip():
+            self._start_drafting_section(sec)
+
     def _on_final_text_edited(self, event=None):
         if not self.project.sections or self.current_section_idx >= len(self.project.sections):
             return
@@ -2151,9 +2145,13 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             return
 
         sec = self.project.sections[self.current_section_idx]
-        self.draft_ai_btn.configure(text="⏳ Drafting...", state="disabled")
+        self._start_drafting_section(sec)
 
-        tone = self.tone_menu.get().lower()
+    def _start_drafting_section(self, sec: SectionDraft):
+        if self._is_generating:
+            return
+        self._is_generating = True
+        self.draft_ai_btn.configure(text="⏳ Drafting...", state="disabled")
 
         def task():
             self.engine.draft_section(
@@ -2167,6 +2165,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         threading.Thread(target=task, daemon=True).start()
 
     def _finish_draft_active_section(self):
+        self._is_generating = False
         self.draft_ai_btn.configure(text="⚡ Draft Section with AI", state="normal")
         self._load_active_section_into_editor()
 
@@ -2354,6 +2353,18 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         )
         self.view_rubric_breakdown_btn.pack(side="right")
 
+        self.rewrite_with_feedback_btn = ctk.CTkButton(
+            self.teacher_card,
+            text="✨ Rewrite & Improve from Feedback",
+            command=self._start_teacher_rewrite_flow,
+            fg_color="#059669",
+            hover_color="#047857",
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            state="disabled"
+        )
+        self.rewrite_with_feedback_btn.pack(fill="x", padx=12, pady=(0, 10))
+
         # Checkbox for export inclusion
         self.include_teacher_report_cb = ctk.CTkCheckBox(
             right_scroll,
@@ -2442,6 +2453,8 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 text="Have an independent AI teacher evaluate your paper against the rubric."
             )
             self.view_rubric_breakdown_btn.configure(state="disabled")
+            if hasattr(self, "rewrite_with_feedback_btn"):
+                self.rewrite_with_feedback_btn.configure(state="disabled")
             return
 
         letter = report.get("letter_grade", "N/A")
@@ -2456,6 +2469,8 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         summary = report.get("summary", "").strip() or report.get("overall_feedback", "")[:120] + "..."
         self.teacher_comment_lbl.configure(text=summary)
         self.view_rubric_breakdown_btn.configure(state="normal")
+        if hasattr(self, "rewrite_with_feedback_btn"):
+            self.rewrite_with_feedback_btn.configure(state="normal")
 
     def _grade_with_teacher_action(self):
         full_text = self.project.get_full_document_text()
@@ -2484,14 +2499,336 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         fulfilled = sum(1 for c in self.project.rubric_criteria if c.fulfilled)
         self.export_criteria_lbl.configure(text=f"Rubric Criteria Met: {fulfilled} / {len(self.project.rubric_criteria)}")
 
+        self._show_post_grade_action_dialog(report)
+
+    def _show_post_grade_action_dialog(self, report: Dict[str, Any]):
         letter = report.get("letter_grade", "N/A")
         score = report.get("numerical_score", 0)
-        summary = report.get("summary", "")
-        messagebox.showinfo(
-            "Teacher Evaluation Complete",
-            f"Official Teacher Grade: {letter} ({score}%)\n\n{summary}\n\n"
-            "Click 'Details' to inspect the full rubric critique and strengths/weaknesses breakdown."
+        pct = report.get("percentage", float(score))
+        summary = report.get("summary", "") or report.get("overall_feedback", "")
+        improvements = report.get("areas_for_improvement", [])
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Teacher Evaluation Results")
+        dlg.geometry("560x380")
+        dlg.resizable(False, False)
+        dlg.configure(fg_color="#09090b")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        if self.is_cloaked and is_anti_capture_supported():
+            apply_anti_capture(dlg)
+
+        # Header banner
+        hdr = ctk.CTkFrame(dlg, fg_color="#18181b", corner_radius=0)
+        hdr.pack(fill="x")
+        ctk.CTkLabel(hdr, text="🎓 Teacher Evaluation Complete", font=ctk.CTkFont(size=15, weight="bold"), text_color="#f8fafc").pack(side="left", padx=16, pady=12)
+
+        badge_color = "#34d399" if pct >= 80 else ("#fbbf24" if pct >= 70 else "#f87171")
+        ctk.CTkLabel(hdr, text=f"Grade: {letter} ({score}/100 • {pct:.1f}%)", font=ctk.CTkFont(size=13, weight="bold"), text_color=badge_color).pack(side="right", padx=16, pady=12)
+
+        # Body
+        body = ctk.CTkFrame(dlg, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=20, pady=14)
+
+        ctk.CTkLabel(body, text=summary, font=ctk.CTkFont(size=12), text_color="#cbd5e1", wraplength=520, justify="left").pack(anchor="w", pady=(0, 8))
+
+        if improvements:
+            imp_frame = ctk.CTkFrame(body, fg_color="#18181b", corner_radius=6, border_width=1, border_color="#27272a")
+            imp_frame.pack(fill="x", pady=(0, 10))
+            ctk.CTkLabel(imp_frame, text="Flagged for Improvement:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#fcd34d").pack(anchor="w", padx=10, pady=(6, 2))
+            for imp in improvements[:3]:
+                ctk.CTkLabel(imp_frame, text=f"• {imp}", font=ctk.CTkFont(size=11), text_color="#94a3b8", wraplength=500, justify="left").pack(anchor="w", padx=10, pady=(0, 3))
+            ctk.CTkLabel(imp_frame, text="").pack(pady=1)
+
+        prompt_lbl = ctk.CTkLabel(
+            body,
+            text="Would you like AVA to rewrite the flagged sections with teacher feedback,\nrun Jade's Humanizer, and re-grade the paper?",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38bdf8",
+            justify="center"
         )
+        prompt_lbl.pack(pady=(2, 10))
+
+        btn_bar = ctk.CTkFrame(dlg, fg_color="#18181b", height=50)
+        btn_bar.pack(fill="x")
+
+        def on_rewrite():
+            dlg.destroy()
+            self._start_teacher_rewrite_flow()
+
+        def on_details():
+            dlg.destroy()
+            self._show_teacher_breakdown_dialog()
+
+        ctk.CTkButton(
+            btn_bar,
+            text="🔍 Details",
+            command=on_details,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            width=80,
+            height=32,
+            font=ctk.CTkFont(size=11)
+        ).pack(side="left", padx=12, pady=9)
+
+        ctk.CTkButton(
+            btn_bar,
+            text="Keep Current Draft",
+            command=dlg.destroy,
+            fg_color="#27272a",
+            hover_color="#3f3f46",
+            width=120,
+            height=32,
+            font=ctk.CTkFont(size=11)
+        ).pack(side="right", padx=12, pady=9)
+
+        ctk.CTkButton(
+            btn_bar,
+            text="✨ Rewrite with Feedback",
+            command=on_rewrite,
+            fg_color="#059669",
+            hover_color="#047857",
+            height=32,
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(side="right", padx=(0, 4), pady=9)
+
+    def _start_teacher_rewrite_flow(self):
+        report = self.project.teacher_grade_report
+        if not report:
+            messagebox.showinfo("No Grade Available", "Please grade the document with Teacher AI before requesting a rewrite.")
+            return
+
+        full_text = self.project.get_full_document_text()
+        if not full_text.strip():
+            messagebox.showwarning("Empty Document", "Document has no section drafts to rewrite.")
+            return
+
+        # Snapshot current state before making edits
+        prev_letter = report.get("letter_grade", "N/A")
+        prev_score = report.get("numerical_score", 0)
+        snapshot = self.project.create_revision_snapshot(f"Pre-Rewrite Grade: {prev_letter} ({prev_score}%)")
+
+        # Disable buttons during rewrite
+        if hasattr(self, "rewrite_with_feedback_btn"):
+            self.rewrite_with_feedback_btn.configure(state="disabled", text="⏳ Improving...")
+        self.grade_teacher_btn.configure(state="disabled")
+
+        # Create Progress Modal
+        progress_dlg = ctk.CTkToplevel(self)
+        progress_dlg.title("AVA Teacher Feedback Optimizer")
+        progress_dlg.geometry("520x240")
+        progress_dlg.resizable(False, False)
+        progress_dlg.configure(fg_color="#09090b")
+        progress_dlg.transient(self)
+        progress_dlg.grab_set()
+
+        if self.is_cloaked and is_anti_capture_supported():
+            apply_anti_capture(progress_dlg)
+
+        p_hdr = ctk.CTkFrame(progress_dlg, fg_color="#18181b", corner_radius=0)
+        p_hdr.pack(fill="x")
+        ctk.CTkLabel(p_hdr, text="✨ Teacher Feedback Improvement Pipeline", font=ctk.CTkFont(size=14, weight="bold"), text_color="#f8fafc").pack(anchor="w", padx=16, pady=12)
+
+        p_body = ctk.CTkFrame(progress_dlg, fg_color="transparent")
+        p_body.pack(fill="both", expand=True, padx=20, pady=16)
+
+        step_lbl = ctk.CTkLabel(p_body, text="Phase 1/3: Analyzing & Revising Flagged Sections...", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38bdf8")
+        step_lbl.pack(anchor="w", pady=(0, 6))
+
+        p_bar = ctk.CTkProgressBar(p_body, height=12, fg_color="#27272a", progress_color="#6366f1")
+        p_bar.pack(fill="x", pady=(0, 10))
+        p_bar.set(0.05)
+
+        detail_lbl = ctk.CTkLabel(p_body, text="Initializing section revision engine...", font=ctk.CTkFont(size=11), text_color="#94a3b8", wraplength=480, justify="left")
+        detail_lbl.pack(anchor="w", pady=(0, 10))
+
+        def update_progress(msg: str, frac: float):
+            try:
+                if progress_dlg.winfo_exists():
+                    p_bar.set(max(0.05, min(0.95, frac)))
+                    detail_lbl.configure(text=msg)
+                    if frac < 0.45:
+                        step_lbl.configure(text="Phase 1/3: Revising Flagged Sections...")
+                    elif frac < 0.85:
+                        step_lbl.configure(text="Phase 2/3: Applying Jade's AI Humanizer...")
+                    else:
+                        step_lbl.configure(text="Phase 3/3: Re-grading with Teacher AI...")
+            except Exception:
+                pass
+
+        def worker():
+            try:
+                # 1 & 2: Rewrite & Humanize
+                self.engine.rewrite_and_humanize_sections_with_feedback(
+                    project=self.project,
+                    teacher_report=report,
+                    humanizer_bridge=self.humanizer_bridge,
+                    progress_callback=lambda msg, f: self.after(0, lambda m=msg, fr=f: update_progress(m, fr)),
+                )
+
+                # 3: Re-grade with Teacher AI
+                self.after(0, lambda: update_progress("Re-evaluating document against rubric...", 0.88))
+                new_report = self.teacher_evaluator.grade_document(self.project)
+                TeacherEvaluator.apply_to_project(new_report, self.project)
+
+                self.after(0, lambda: self._on_teacher_rewrite_completed(report, new_report, snapshot, progress_dlg))
+            except Exception as e:
+                logger.error(f"Teacher rewrite pipeline failed: {e}", exc_info=True)
+                self.after(0, lambda: self._on_teacher_rewrite_failed(str(e), progress_dlg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_teacher_rewrite_completed(self, old_report: Dict[str, Any], new_report: Dict[str, Any], snapshot: Dict[str, Any], progress_dlg: ctk.CTkToplevel):
+        try:
+            if progress_dlg.winfo_exists():
+                progress_dlg.destroy()
+        except Exception:
+            pass
+
+        if hasattr(self, "rewrite_with_feedback_btn"):
+            self.rewrite_with_feedback_btn.configure(state="normal", text="✨ Rewrite & Improve from Feedback")
+        self.grade_teacher_btn.configure(state="normal")
+
+        # Sync Stage 4 data
+        self._sync_stage_4_data()
+
+        # Show Results Comparison Modal
+        self._show_rewrite_comparison_dialog(old_report, new_report, snapshot)
+
+    def _on_teacher_rewrite_failed(self, err_msg: str, progress_dlg: ctk.CTkToplevel):
+        try:
+            if progress_dlg.winfo_exists():
+                progress_dlg.destroy()
+        except Exception:
+            pass
+
+        if hasattr(self, "rewrite_with_feedback_btn"):
+            self.rewrite_with_feedback_btn.configure(state="normal", text="✨ Rewrite & Improve from Feedback")
+        self.grade_teacher_btn.configure(state="normal")
+
+        messagebox.showerror("Improvement Error", f"Failed to rewrite and re-grade document:\n{err_msg}")
+
+    def _show_rewrite_comparison_dialog(self, old_report: Dict[str, Any], new_report: Dict[str, Any], snapshot: Dict[str, Any]):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Revision & Re-Grade Results")
+        dlg.geometry("700x560")
+        dlg.minsize(620, 480)
+        dlg.configure(fg_color="#09090b")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        if self.is_cloaked and is_anti_capture_supported():
+            apply_anti_capture(dlg)
+
+        # Header
+        hdr = ctk.CTkFrame(dlg, fg_color="#18181b", corner_radius=0)
+        hdr.pack(fill="x")
+        ctk.CTkLabel(hdr, text="✨ Teacher Feedback Revision Complete", font=ctk.CTkFont(size=16, weight="bold"), text_color="#f8fafc").pack(side="left", padx=16, pady=12)
+
+        # Scores
+        old_score = old_report.get("numerical_score", 0)
+        old_letter = old_report.get("letter_grade", "N/A")
+        old_pct = old_report.get("percentage", float(old_score))
+
+        new_score = new_report.get("numerical_score", 0)
+        new_letter = new_report.get("letter_grade", "N/A")
+        new_pct = new_report.get("percentage", float(new_score))
+
+        score_diff = new_score - old_score
+        diff_text = f"+{score_diff}%" if score_diff > 0 else (f"{score_diff}%" if score_diff < 0 else "±0%")
+        diff_color = "#34d399" if score_diff > 0 else ("#f87171" if score_diff < 0 else "#94a3b8")
+
+        diff_badge = ctk.CTkLabel(hdr, text=f"Change: {diff_text}", font=ctk.CTkFont(size=13, weight="bold"), text_color=diff_color)
+        diff_badge.pack(side="right", padx=16, pady=12)
+
+        body_scroll = ctk.CTkScrollableFrame(dlg, fg_color="transparent")
+        body_scroll.pack(fill="both", expand=True, padx=20, pady=16)
+
+        # Comparison Cards Grid
+        grid = ctk.CTkFrame(body_scroll, fg_color="transparent")
+        grid.pack(fill="x", pady=(0, 14))
+
+        # Left: Previous Draft
+        left_card = ctk.CTkFrame(grid, fg_color="#18181b", corner_radius=8, border_width=1, border_color="#27272a")
+        left_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        ctk.CTkLabel(left_card, text="Previous Draft", font=ctk.CTkFont(size=12, weight="bold"), text_color="#94a3b8").pack(anchor="w", padx=12, pady=(10, 2))
+        old_bcolor = "#34d399" if old_pct >= 80 else ("#fbbf24" if old_pct >= 70 else "#f87171")
+        ctk.CTkLabel(left_card, text=f"{old_letter} ({old_score}/100)", font=ctk.CTkFont(size=16, weight="bold"), text_color=old_bcolor).pack(anchor="w", padx=12, pady=(0, 4))
+        
+        old_ful = sum(1 for c in snapshot.get("rubric_criteria", []) if c.get("fulfilled", False))
+        total_crit = len(self.project.rubric_criteria)
+        ctk.CTkLabel(left_card, text=f"Rubric Criteria Met: {old_ful} / {total_crit}", font=ctk.CTkFont(size=11), text_color="#cbd5e1").pack(anchor="w", padx=12, pady=(0, 8))
+
+        # Right: Revised & Humanized Draft
+        right_card = ctk.CTkFrame(grid, fg_color="#0f172a", corner_radius=8, border_width=1, border_color="#312e81")
+        right_card.pack(side="right", fill="both", expand=True, padx=(8, 0))
+
+        ctk.CTkLabel(right_card, text="✨ Revised & Humanized Draft", font=ctk.CTkFont(size=12, weight="bold"), text_color="#a5b4fc").pack(anchor="w", padx=12, pady=(10, 2))
+        new_bcolor = "#34d399" if new_pct >= 80 else ("#fbbf24" if new_pct >= 70 else "#f87171")
+        ctk.CTkLabel(right_card, text=f"{new_letter} ({new_score}/100)", font=ctk.CTkFont(size=16, weight="bold"), text_color=new_bcolor).pack(anchor="w", padx=12, pady=(0, 4))
+
+        new_ful = sum(1 for c in self.project.rubric_criteria if c.fulfilled)
+        ctk.CTkLabel(right_card, text=f"Rubric Criteria Met: {new_ful} / {total_crit}", font=ctk.CTkFont(size=11), text_color="#cbd5e1").pack(anchor="w", padx=12, pady=(0, 8))
+
+        # Instructor Commentary on New Draft
+        comm_card = ctk.CTkFrame(body_scroll, fg_color="#18181b", corner_radius=8, border_width=1, border_color="#27272a")
+        comm_card.pack(fill="x", pady=(0, 12))
+        ctk.CTkLabel(comm_card, text="New Instructor Critique", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38bdf8").pack(anchor="w", padx=14, pady=(10, 4))
+        new_sum = new_report.get("summary", "") or new_report.get("overall_feedback", "")
+        ctk.CTkLabel(comm_card, text=new_sum, font=ctk.CTkFont(size=11), text_color="#cbd5e1", wraplength=640, justify="left").pack(anchor="w", padx=14, pady=(0, 10))
+
+        # Newly fulfilled criteria or changes
+        eval_diffs = []
+        old_crit_map = {str(c.get("id")): c.get("fulfilled", False) for c in snapshot.get("rubric_criteria", [])}
+        for c in self.project.rubric_criteria:
+            prev_status = old_crit_map.get(str(c.id), False)
+            if not prev_status and c.fulfilled:
+                eval_diffs.append(f"✓ Newly Fulfilled: {c.title}")
+
+        if eval_diffs:
+            imp_frame = ctk.CTkFrame(body_scroll, fg_color="#064e3b", corner_radius=8, border_width=1, border_color="#047857")
+            imp_frame.pack(fill="x", pady=(0, 12))
+            ctk.CTkLabel(imp_frame, text="Criteria Improvements Achieved:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#6ee7b7").pack(anchor="w", padx=12, pady=(8, 4))
+            for diff_item in eval_diffs:
+                ctk.CTkLabel(imp_frame, text=diff_item, font=ctk.CTkFont(size=11), text_color="#e2e8f0").pack(anchor="w", padx=12, pady=(0, 4))
+            ctk.CTkLabel(imp_frame, text="").pack(pady=1)
+
+        # Word count note
+        total_words = self.project.total_word_count()
+        ctk.CTkLabel(body_scroll, text=f"Document Word Count: {total_words} words (Target: {self.project.target_total_words})", font=ctk.CTkFont(size=11), text_color="#94a3b8").pack(anchor="w", pady=(0, 4))
+
+        # Bottom Bar Actions
+        bbar = ctk.CTkFrame(dlg, fg_color="#18181b", height=52)
+        bbar.pack(fill="x")
+
+        def on_revert():
+            if messagebox.askyesno("Confirm Revert", "Are you sure you want to revert to the previous version and discard this revision?"):
+                success = self.project.restore_latest_snapshot()
+                if success:
+                    self._sync_stage_4_data()
+                    messagebox.showinfo("Reverted", "Successfully restored the previous draft and grade.")
+                    dlg.destroy()
+                else:
+                    messagebox.showerror("Error", "Could not restore previous snapshot.")
+
+        def on_keep():
+            self._sync_stage_4_data()
+            dlg.destroy()
+
+        def on_iterate():
+            dlg.destroy()
+            self._start_teacher_rewrite_flow()
+
+        revert_btn = ctk.CTkButton(bbar, text="↩️ Revert to Previous Draft", command=on_revert, fg_color="#7f1d1d", hover_color="#991b1b", height=32, font=ctk.CTkFont(size=11))
+        revert_btn.pack(side="left", padx=16, pady=10)
+
+        iterate_btn = ctk.CTkButton(bbar, text="🔄 Another Cycle", command=on_iterate, fg_color="#27272a", hover_color="#3f3f46", height=32, font=ctk.CTkFont(size=11))
+        iterate_btn.pack(side="right", padx=16, pady=10)
+
+        keep_btn = ctk.CTkButton(bbar, text="✓ Keep New Revision", command=on_keep, fg_color="#059669", hover_color="#047857", height=32, font=ctk.CTkFont(size=12, weight="bold"))
+        keep_btn.pack(side="right", padx=(0, 8), pady=10)
 
     def _on_teacher_grading_failed(self, err_msg: str):
         self.grade_teacher_btn.configure(text="🎓 Grade with Teacher AI", state="normal")
@@ -2606,9 +2943,20 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 if fb:
                     ctk.CTkLabel(crit_card, text=fb, font=ctk.CTkFont(size=11), text_color="#94a3b8", wraplength=690, justify="left").pack(anchor="w", padx=14, pady=(0, 10))
 
-        # Close button bottom bar
+        # Bottom action bar
         btn_bar = ctk.CTkFrame(dlg, fg_color="#18181b", height=50)
         btn_bar.pack(fill="x")
+
+        rewrite_btn = ctk.CTkButton(
+            btn_bar,
+            text="✨ Rewrite & Improve with Feedback",
+            command=lambda: [dlg.destroy(), self._start_teacher_rewrite_flow()],
+            fg_color="#059669",
+            hover_color="#047857",
+            height=34,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        rewrite_btn.pack(side="left", padx=16, pady=8)
 
         close_btn = ctk.CTkButton(btn_bar, text="Close Report", command=dlg.destroy, width=120, height=34, fg_color="#27272a", hover_color="#3f3f46")
         close_btn.pack(side="right", padx=16, pady=8)
@@ -2703,6 +3051,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.project = PlaygroundProject()
         self.current_file_path = None
         self.current_section_idx = 0
+        self._title_user_edited = False
 
         self.title_entry.delete(0, "end")
         self.title_entry.insert(0, self.project.title)
@@ -2777,6 +3126,8 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         try:
             self.project = PlaygroundProject.load_from_file(path)
             self.current_file_path = path
+            # A loaded project already has its own title; don't auto-overwrite it.
+            self._title_user_edited = True
 
             # Update UI
             self.title_entry.delete(0, "end")

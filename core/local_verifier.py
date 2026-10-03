@@ -670,7 +670,7 @@ class LocalVisualVerifier:
         self,
         target_x: int,
         target_y: int,
-        max_scan_dist: int = 320,
+        max_scan_dist: int = 180,
         min_spacing: int = 18
     ) -> List[Tuple[int, int]]:
         """
@@ -704,7 +704,7 @@ class LocalVisualVerifier:
             for step_dir in [-1, 1]:
                 y_range = range(mid_strip_y + (step_dir * min_spacing),
                                 (0 if step_dir == -1 else sh - 10),
-                                step_dir * 3)
+                                step_dir * 5)
                 for cur_y in y_range:
                     if cur_y < 10 or cur_y >= sh - 10:
                         continue
@@ -734,7 +734,7 @@ class LocalVisualVerifier:
                         cand_x = target_x
                         cand_y = target_y + rel_diff
                         siblings.append((cand_x, cand_y))
-                        if len(siblings) >= 5:
+                        if len(siblings) >= 3:
                             break
 
             if siblings:
@@ -808,6 +808,8 @@ class LocalVisualVerifier:
             is_comp_sel, comp_reason, comp_conf, diff_score = self.compare_choice_to_siblings(roi_img, sibling_rois)
             if is_comp_sel:
                 return True, comp_reason, comp_conf
+            else:
+                return False, comp_reason, 0.0
 
         # Tier 2: Standalone computer vision heuristics (with light and dark theme support)
         try:
@@ -819,12 +821,17 @@ class LocalVisualVerifier:
             mid_x = w // 2
             mid_y = h // 2
 
+            # Center pixel check: an unselected light-theme radio button or checkbox has a white/light center (> 180)
+            center_val = g_pixels[mid_x, mid_y]
+            cr, cg, cb = rgb_pixels[mid_x, mid_y]
+            center_sat = max(abs(cr - cg), abs(cg - cb), abs(cr - cb))
+
             best_contrast = 0.0
             best_sat = 0.0
 
-            # Scan small window (+-2 px) around center to handle sub-pixel jitter
-            # without expanding into the outer border ring (which starts at r >= 8 px)
-            scan_r = min(2, mid_x - 6, mid_y - 6)
+            # Scan small window (+-1 px) around center to handle sub-pixel jitter
+            # without expanding into the outer border ring (which starts at r >= 6 px)
+            scan_r = min(1, mid_x - 6, mid_y - 6)
             for cx in range(mid_x - scan_r, mid_x + scan_r + 1):
                 for cy in range(mid_y - scan_r, mid_y + scan_r + 1):
                     # 1. Inner core pixels (radius <= 3.5 px, dx^2 + dy^2 <= 12)
@@ -853,21 +860,33 @@ class LocalVisualVerifier:
                     if core_vals and gap_vals:
                         avg_core = sum(core_vals) / len(core_vals)
                         avg_gap = sum(gap_vals) / len(gap_vals)
-                        contrast = abs(avg_gap - avg_core)
                         avg_sat = sum(core_sats) / len(core_sats)
 
-                        if contrast > best_contrast:
-                            best_contrast = contrast
-                        if avg_sat > best_sat:
-                            best_sat = avg_sat
+                        # Light theme: Core must be darker than gap ring (inner bullet dot inside hollow ring)
+                        # An unselected radio button has a white center (avg_core ~250) and a darker border ring (avg_gap < avg_core).
+                        # Thus, for light theme, avg_gap must be significantly LIGHTER than avg_core, AND center must be dark/colored!
+                        if avg_gap >= 128:
+                            light_bullet_contrast = avg_gap - avg_core
+                            if light_bullet_contrast > best_contrast and avg_core < 140 and (center_val < 155 or center_sat >= 18):
+                                best_contrast = light_bullet_contrast
+                            if avg_sat > best_sat and light_bullet_contrast > 10.0 and avg_core < 180 and center_sat >= 18:
+                                best_sat = avg_sat
+
+                        # Dark theme: Core must be brighter than gap ring (bright active bullet dot inside dark background)
+                        else:
+                            dark_bullet_contrast = avg_core - avg_gap
+                            if dark_bullet_contrast > best_contrast and (avg_core > 110 or avg_sat >= 20.0):
+                                best_contrast = dark_bullet_contrast
+                            if avg_sat > best_sat and dark_bullet_contrast > 10.0:
+                                best_sat = avg_sat
 
             # Evaluation 1: Radio button inner bullet dot
-            if best_contrast >= 25.0:
+            if best_contrast >= 18.0:
                 conf = min(1.0, 0.70 + (best_contrast / 100.0))
                 return True, f"radio_inner_bullet (contrast={best_contrast:.1f})", conf
 
             # Evaluation 2: Colored active bullet dot (blue, green, purple active dots)
-            if best_sat >= 22.0 and best_contrast >= 12.0:
+            if best_sat >= 16.0 and best_contrast >= 10.0:
                 return True, f"radio_colored_bullet (sat={best_sat:.1f}, contrast={best_contrast:.1f})", 0.90
 
             # Evaluation 3: Checkbox checkmark or solid fill
@@ -879,7 +898,18 @@ class LocalVisualVerifier:
             dark_px = sum(inner_hist[:140])
             bright_px = sum(inner_hist[160:])
 
-            if inner_std >= 22.0 and (dark_px >= 8 or bright_px >= 8):
+            # Verify that the central core of the box (not just border edges) has checkmark strokes
+            core_r = min(3, box_r - 2)
+            if core_r >= 2:
+                core_crop = gray.crop((mid_x - core_r, mid_y - core_r, mid_x + core_r, mid_y + core_r))
+                c_hist = core_crop.histogram()
+                c_dark = sum(c_hist[:140])
+                c_bright = sum(c_hist[160:])
+                has_core_stroke = (c_dark >= 3 if (sum(inner_hist[:128]) < sum(inner_hist[128:])) else c_bright >= 3)
+            else:
+                has_core_stroke = True
+
+            if inner_std >= 22.0 and (dark_px >= 8 or bright_px >= 8) and has_core_stroke:
                 return True, f"checkbox_checkmark (std={inner_std:.1f})", 0.88
 
         except Exception as e:
@@ -1078,39 +1108,38 @@ class LocalVisualVerifier:
                     logger.debug(f"Input box check in crop error: {e}")
 
             # 2. Circular radio buttons & square checkboxes
-            # Scan in a horizontal band surrounding the expected control row
-            min_cx = max(10, int(min(crop_mouse_x, crop_ref_x) - 120))
-            max_cx = min(cw - 10, int(max(crop_mouse_x, crop_ref_x) + 40))
-            min_cy = max(8, int(min(crop_mouse_y, crop_ref_y) - 22))
-            max_cy = min(ch - 8, int(max(crop_mouse_y, crop_ref_y) + 22))
+            # Precompute circle sampling offsets for radii [8, 10] (8-point angular sampling)
+            circle_offsets = {
+                8: [
+                    (8, 0), (6, 6), (0, 8), (-6, 6),
+                    (-8, 0), (-6, -6), (0, -8), (6, -6)
+                ],
+                10: [
+                    (10, 0), (7, 7), (0, 10), (-7, 7),
+                    (-10, 0), (-7, -7), (0, -10), (7, -7)
+                ]
+            }
 
-            for cy in range(min_cy, max_cy):
-                for cx in range(min_cx, max_cx):
-                    # Test circular radio button perimeters at radii 7..11px
-                    for r in [7, 8, 9, 10, 11]:
+            min_cx = max(12, int(min(crop_mouse_x, crop_ref_x) - 70))
+            max_cx = min(cw - 12, int(max(crop_mouse_x, crop_ref_x) + 30))
+            min_cy = max(10, int(min(crop_mouse_y, crop_ref_y) - 16))
+            max_cy = min(ch - 10, int(max(crop_mouse_y, crop_ref_y) + 16))
+
+            # Stride by 2 pixels for instantaneous detection (< 0.05s)
+            for cy in range(min_cy, max_cy, 2):
+                for cx in range(min_cx, max_cx, 2):
+                    # Test circular radio button perimeters at precomputed offsets
+                    for r, offsets in circle_offsets.items():
                         if cx - r < 2 or cx + r >= cw - 2 or cy - r < 2 or cy + r >= ch - 2:
                             continue
-                        pts = []
-                        for k in range(12):
-                            theta = 2.0 * math.pi * k / 12.0
-                            cos_t = math.cos(theta)
-                            sin_t = math.sin(theta)
-                            val = max(ep[int(cx + (r + dr) * cos_t), int(cy + (r + dr) * sin_t)] for dr in [-1, 0, 1])
-                            pts.append(val)
-                        hits = sum(1 for p in pts if p >= 26)
-                        if hits >= 9:
+                        hits = sum(1 for dx, dy in offsets if ep[cx + dx, cy + dy] >= 26)
+                        if hits >= 6:
                             # Corner edge check to distinguish square checkbox from circular radio button
-                            corner_hits = 0
-                            for dr in [-1, 0, 1]:
-                                ch_count = sum(
-                                    1 for (cdx, cdy) in [(-r - dr, -r - dr), (r + dr, -r - dr), (-r - dr, r + dr), (r + dr, r + dr)]
-                                    if 0 <= cx + cdx < cw and 0 <= cy + cdy < ch and ep[cx + cdx, cy + cdy] >= 26
-                                )
-                                if ch_count >= 3:
-                                    corner_hits = max(corner_hits, ch_count)
-
+                            corner_hits = sum(
+                                1 for (cdx, cdy) in [(-r, -r), (r, -r), (-r, r), (r, r)]
+                                if 0 <= cx + cdx < cw and 0 <= cy + cdy < ch and ep[cx + cdx, cy + cdy] >= 26
+                            )
                             c_type = "checkbox_square" if corner_hits >= 3 else "radio_circle"
-                            score = hits / 12.0
                             candidates.append({
                                 "type": c_type,
                                 "x": origin_x + cx,
@@ -1118,20 +1147,19 @@ class LocalVisualVerifier:
                                 "cx": cx,
                                 "cy": cy,
                                 "size": r,
-                                "score": score
+                                "score": hits / 8.0
                             })
 
-                    # Test square checkbox boundaries with half-widths 6..10px
-                    for hw in [6, 7, 8, 9, 10]:
+                    # Test square checkbox boundaries with half-widths 7 and 9
+                    for hw in [7, 9]:
                         if cx - hw < 2 or cx + hw >= cw - 2 or cy - hw < 2 or cy + hw >= ch - 2:
                             continue
-                        t_hits = sum(1 for x in range(cx - hw + 2, cx + hw - 1) if ep[x, cy - hw] >= 26)
-                        b_hits = sum(1 for x in range(cx - hw + 2, cx + hw - 1) if ep[x, cy + hw] >= 26)
-                        l_hits = sum(1 for y in range(cy - hw + 2, cy + hw - 1) if ep[cx - hw, y] >= 26)
-                        r_hits = sum(1 for y in range(cy - hw + 2, cy + hw - 1) if ep[cx + hw, y] >= 26)
-                        span = max(1, 2 * hw - 3)
-                        edge_ratios = [t_hits / span, b_hits / span, l_hits / span, r_hits / span]
-                        if all(er >= 0.40 for er in edge_ratios) and sum(edge_ratios) >= 2.2:
+                        box_samples = [
+                            ep[cx - hw, cy], ep[cx + hw, cy], ep[cx, cy - hw], ep[cx, cy + hw],
+                            ep[cx - hw, cy - hw], ep[cx + hw, cy - hw], ep[cx - hw, cy + hw], ep[cx + hw, cy + hw]
+                        ]
+                        sq_hits = sum(1 for p in box_samples if p >= 26)
+                        if sq_hits >= 6:
                             candidates.append({
                                 "type": "checkbox_square",
                                 "x": origin_x + cx,
@@ -1139,7 +1167,7 @@ class LocalVisualVerifier:
                                 "cx": cx,
                                 "cy": cy,
                                 "size": hw,
-                                "score": sum(edge_ratios) / 4.0
+                                "score": sq_hits / 8.0
                             })
 
             # 3. Visual center snapping fallback if no discrete shapes detected
@@ -1353,24 +1381,43 @@ class LocalVisualVerifier:
 
             # If not yet verified by inline execution, perform live check
             if not is_act_verified:
-                sx = act.get("screen_x", act.get("x"))
-                sy = act.get("screen_y", act.get("y"))
-                if sx is not None and sy is not None:
-                    isx, isy = int(sx), int(sy)
-                    live_roi = self.capture_roi(isx, isy)
-                    if act_type in ["click", "double_click"]:
-                        # Fetch sibling choice coordinates (from AI choices or on-screen vertical scan)
-                        sib_coords = self.get_sibling_choice_coordinates(isx, isy, result_data)
-                        sibling_rois = [self.capture_roi(cx, cy) for cx, cy in sib_coords]
-                        sel, r_reason, conf = self.is_radio_or_checkbox_selected(live_roi, sibling_rois=sibling_rois)
-                        if sel:
-                            is_act_verified = True
-                            reason = f"live_{r_reason}"
-                    elif act_type == "type_text":
-                        filled, f_reason, conf = self.is_text_input_filled(live_roi)
-                        if filled:
-                            is_act_verified = True
-                            reason = f"live_{f_reason}"
+                desc_lower = str(act.get("description", "")).lower()
+                el_type = str(act.get("element_type", "")).lower()
+                is_input_focus = bool(act.get("is_input_focus") or el_type in ["input", "textbox", "textarea"])
+                is_dropdown = bool(act.get("is_dropdown") or el_type in ["dropdown", "select", "combobox"] or "dropdown" in desc_lower)
+                is_button = bool(act.get("is_button") or el_type == "button" or any(k in desc_lower for k in ["button", "submit", "check answer", "next", "continue", "done"]))
+
+                if is_dropdown or is_button:
+                    is_act_verified = True
+                    reason = "live_action_type_confirmed"
+                else:
+                    sx = act.get("screen_x", act.get("x"))
+                    sy = act.get("screen_y", act.get("y"))
+                    if sx is not None and sy is not None:
+                        isx, isy = int(sx), int(sy)
+                        live_roi = self.capture_roi(isx, isy)
+                        if act_type in ["click", "double_click"]:
+                            # Fetch sibling choice coordinates (from AI choices or on-screen vertical scan)
+                            sib_coords = self.get_sibling_choice_coordinates(isx, isy, result_data)
+                            sibling_rois = [self.capture_roi(cx, cy) for cx, cy in sib_coords] if sib_coords else None
+                            sel, r_reason, conf = self.is_radio_or_checkbox_selected(live_roi, sibling_rois=sibling_rois)
+                            if sel:
+                                is_act_verified = True
+                                reason = f"live_{r_reason}"
+                            elif is_input_focus:
+                                is_act_verified = True
+                                reason = "live_input_focus_confirmed"
+                        elif act_type == "type_text":
+                            filled, f_reason, conf = self.is_text_input_filled(live_roi)
+                            if filled:
+                                is_act_verified = True
+                                reason = f"live_{f_reason}"
+                            else:
+                                wide_roi = self.capture_roi(isx, isy, radius_w=35, radius_h=15)
+                                w_filled, w_reason, _ = self.is_text_input_filled(wide_roi)
+                                if w_filled:
+                                    is_act_verified = True
+                                    reason = f"live_{w_reason}"
 
             if is_act_verified:
                 verified_count += 1
@@ -1672,39 +1719,64 @@ class LocalVisualVerifier:
         Detects if newly introduced visual elements signify an incorrect or correct outcome.
         Uses differential comparison to ignore static pre-existing colored elements.
         """
-        if after_check_img is None:
+        if after_check_img is None or before_check_img is None:
             return {
                 "detected": False,
                 "status": "unsubmitted",
                 "is_incorrect": False,
                 "is_correct": False,
                 "confidence": 0.0,
-                "details": "no_after_image",
+                "details": "no_before_or_after_image_for_differential",
                 "screen_transitioned": False,
                 "transition_diff": 0.0
             }
 
-        target_img = after_check_img
         trans_ok = False
         diff = 0.0
+        target_img = None
 
-        if before_check_img is not None and after_check_img is not None:
-            try:
-                trans_ok, diff = self.verify_screen_transition(before_check_img, after_check_img)
-                # If images are identical size, create a difference mask to inspect ONLY what changed
-                if before_check_img.size == after_check_img.size:
-                    diff_img = ImageChops.difference(before_check_img.convert("RGB"), after_check_img.convert("RGB"))
-                    # Mask of pixels that changed by at least 15 intensity
-                    diff_gray = diff_img.convert("L")
-                    mask = diff_gray.point(lambda p: 255 if p > 15 else 0)
-                    # Apply mask onto after_check_img so only new pixels are evaluated
-                    masked_after = Image.new("RGB", after_check_img.size, (255, 255, 255))
-                    masked_after.paste(after_check_img.convert("RGB"), mask=mask)
-                    target_img = masked_after
-            except Exception as e:
-                logger.debug(f"Differential evaluation mask error: {e}")
+        try:
+            trans_ok, diff = self.verify_screen_transition(before_check_img, after_check_img)
+            # If no screen transition occurred after clicking submit, do not evaluate
+            if not trans_ok or diff < 0.003:
+                return {
+                    "detected": False,
+                    "status": "unsubmitted",
+                    "is_incorrect": False,
+                    "is_correct": False,
+                    "confidence": 0.0,
+                    "details": f"no_transition_after_submit (diff={diff:.4f})",
+                    "screen_transitioned": trans_ok,
+                    "transition_diff": diff
+                }
 
-        markers = self.detect_platform_evaluation_markers(target_img, min_cluster_pixels=1200)
+            # If images are identical size, create a difference mask to inspect ONLY newly introduced pixels
+            if before_check_img.size == after_check_img.size:
+                diff_img = ImageChops.difference(before_check_img.convert("RGB"), after_check_img.convert("RGB"))
+                # Mask of pixels that changed by at least 15 intensity
+                diff_gray = diff_img.convert("L")
+                mask = diff_gray.point(lambda p: 255 if p > 15 else 0)
+                # Apply mask onto after_check_img so ONLY newly appeared pixels are evaluated
+                masked_after = Image.new("RGB", after_check_img.size, (255, 255, 255))
+                masked_after.paste(after_check_img.convert("RGB"), mask=mask)
+                target_img = masked_after
+        except Exception as e:
+            logger.debug(f"Differential evaluation mask error: {e}")
+            target_img = None
+
+        if target_img is None:
+            return {
+                "detected": False,
+                "status": "unsubmitted",
+                "is_incorrect": False,
+                "is_correct": False,
+                "confidence": 0.0,
+                "details": "differential_mask_unavailable",
+                "screen_transitioned": trans_ok,
+                "transition_diff": diff
+            }
+
+        markers = self.detect_platform_evaluation_markers(target_img, min_cluster_pixels=1500)
         markers["is_incorrect"] = (markers.get("status") == "incorrect")
         markers["is_correct"] = (markers.get("status") == "correct")
         markers["screen_transitioned"] = trans_ok

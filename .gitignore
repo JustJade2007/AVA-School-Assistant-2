@@ -232,6 +232,7 @@ logs/
 # Antigravity & AI IDE client artifacts
 .antigravity/
 .gemini/
+.agents/
 scratch/
 
 # Keys and secrets documentation

@@ -64,6 +64,7 @@ It integrates high-resolution screen reading, multimodal vision AI reasoning, hu
     - **Interactive Review & Humanizing**: Section-by-section drafting with mandatory user review checkpoints, direct inline editing, prompt refinements, and auto-polishing via **Jade's AI Humanizer**.
     - **Quick Settings Access**: Instant access to configuration, AI model switching, Jade's AI Humanizer controls, and API keys directly from the persistent Playground header toolbar and the Home dashboard module card.
     - **Academic .docx Export**: Full compiled document preview and formatted Word export supporting MLA 9th, APA 7th, and Standard Technical Report presets.
+    - **Unbiased Teacher AI Grading & Iterative Feedback Rewrite Loop**: Independent collegiate instructor AI evaluates the compiled document against the rubric, generating letter grades (A–F), numerical scores (0–100), criteria fulfillment statuses, and constructive critiques. Includes an automated multi-phase improvement loop (`Rewrite Flagged Sections` ➔ `Humanize with Jade's AI Humanizer` ➔ `Re-Grade with Teacher AI`) with revision snapshot safety, one-click revert, and side-by-side score comparisons.
     - **Complete Isolation**: Suspends all default solving hotkeys (`F8`, etc.) and safely minimizes/hides the HUD overlay until you return.
 13. **Zero-Token Visual Grounding (Coordinate Rulers & Set-of-Marks)**:
     - **Normalized Marginal Rulers**: Overlays fine-grained high-contrast coordinate axes (0..1000) along top and left image boundaries to eliminate spatial estimation errors.

@@ -1117,8 +1117,8 @@ class AIClient:
                 has_existing = bool(item.get("existing_answer"))
                 has_feedback = bool(item.get("platform_feedback") or result.get("platform_feedback"))
 
-                # 1. Check for genuine correct indication
-                if raw_eval in ["correct", "graded_correct", "right", "passed"] or raw_state == "answered_correct":
+                # 1. Check for genuine correct indication from platform grading
+                if raw_eval in ["correct", "graded_correct", "right", "passed"]:
                     item["evaluation_status"] = "correct"
                     item["current_state"] = "answered_correct"
                     item["is_rethinking"] = False

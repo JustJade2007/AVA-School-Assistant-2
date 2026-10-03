@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.21.a] - 2026-10-03
+
+### Fixed & Enhanced
+- **Autonomous Answering & Auto-Next Premature Navigation Bugfixes**:
+  - **Prompt Action Enforcement on Unanswered Questions**: Overhauled multiple-choice guidelines in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py). Explicitly instructed the vision model that unanswered questions (where options are hollow/uncolored) MUST generate answering click actions and set `needs_action = true` and `ready_to_advance = false`. Removed ambiguous phrasing that previously caused AI to treat unselected matching options as already answered.
+  - **Unsubmitted Evaluation Status Preservation**: In [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py), stopped promoting `item["evaluation_status"]` to `"correct"` when `raw_state == "answered_correct"`. Fresh and unsubmitted questions strictly preserve `"evaluation_status": "unsubmitted"`, ensuring only authentic platform-graded checkmarks qualify as `"correct"`.
+  - **Autonomous Mode Execution Safeguards**: In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), prevented local zero-token pre-selection checks from suppressing actions when `autonomous_mode` is enabled. In autonomous mode, AVA always executes the planned solution on unsubmitted questions rather than assuming options are already selected.
+  - **Guarded Auto-Next Advance on Unsubmitted Content**: In [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), added guards preventing `auto_next` from clicking the Next button when an unsubmitted question with actual question content is on screen and has not been graded `"correct"` by the platform.
+  - **Comparative Sibling Verification Authority**: In [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py), ensured `is_radio_or_checkbox_selected` strictly returns `False` when comparative sibling checks determine the option is indistinguishable from unselected sibling options, preventing fallthrough to standalone heuristics that produced false positives on empty borders.
+
 ## [2.2.20.a] - 2026-10-03
 
 ### Fixed & Enhanced

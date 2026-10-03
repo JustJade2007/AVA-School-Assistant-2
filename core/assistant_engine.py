@@ -432,7 +432,7 @@ class AssistantEngine:
         # 3. If AI explicitly marks correct, verify against unsubmitted indicators
         elif eval_status in ["correct", "right"] or (all_items_correct and not any_item_incorrect):
             # Guard against false positive "correct" when question is actually unsubmitted or has unexecuted actions
-            if (has_check_btn or has_unexecuted_actions or has_items_needing_action) and local_markers.get("status") != "correct":
+            if (has_check_btn or has_unexecuted_actions or has_items_needing_action or res.get("needs_action") is True) and local_markers.get("status") != "correct":
                 final_status = "unsubmitted"
                 is_answered = False
                 is_rethinking = False
@@ -1098,7 +1098,9 @@ class AssistantEngine:
             actions_to_check = result.get("actions", [])
             if actions_to_check:
                 result["original_actions"] = [dict(a) for a in actions_to_check if isinstance(a, dict)]
-            if self.config.local_verification_enabled and actions_to_check and not eval_info["is_rethinking"]:
+            # Check if all returned actions are already selected on screen (comparative sibling check)
+            # SAFEGUARD: In Autonomous Mode, NEVER suppress actions on unsubmitted questions! AVA must auto-answer.
+            if not self.config.autonomous_mode and self.config.local_verification_enabled and actions_to_check and not eval_info["is_rethinking"]:
                 all_already_done = True
                 for act in actions_to_check:
                     act_t = str(act.get("type", "")).lower()
@@ -1115,8 +1117,8 @@ class AssistantEngine:
                                 all_already_done = False
                                 break
                             sib_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
-                            is_sel, reason, _ = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sib_rois)
-                            if not is_sel:
+                            is_sel, reason, conf = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sib_rois)
+                            if not is_sel or conf < 0.90:
                                 all_already_done = False
                         else:
                             all_already_done = False
@@ -1142,6 +1144,7 @@ class AssistantEngine:
             # If all parts are already confirmed CORRECT by platform and no actions are required,
             # OR if this is an interstitial screen with no question,
             # advance immediately ONLY if auto_next is enabled!
+            has_question_content = bool(q_text and not is_interstitial)
             is_already_filled = (
                 result.get("needs_action") is False
                 and len(result.get("actions", [])) == 0
@@ -1156,7 +1159,7 @@ class AssistantEngine:
             if (
                 (eval_info["status"] == "correct" and (not result.get("needs_action") or len(result.get("actions", [])) == 0) and not result.get("check_button"))
                 or is_already_filled
-            ):
+            ) and not (has_question_content and eval_info["status"] != "correct"):
                 if eval_info["status"] == "correct":
                     logger.info("Question is already marked CORRECT by platform on screen. No input actions needed.")
                 elif is_interstitial:
@@ -1425,7 +1428,14 @@ class AssistantEngine:
                 time.sleep(0.35)
 
         # Pre-Execution Check: Verify if proposed answer options are ALREADY selected on screen
-        if self.config.local_verification_enabled and actions and not was_rethinking and not getattr(self, "_manual_f9_confirmed", False):
+        # SAFEGUARD: In Autonomous Mode, NEVER suppress actions on unsubmitted questions! AVA must auto-answer.
+        if (
+            not self.config.autonomous_mode
+            and self.config.local_verification_enabled
+            and actions
+            and not was_rethinking
+            and not getattr(self, "_manual_f9_confirmed", False)
+        ):
             all_already_selected = True
             for act in actions:
                 act_type = str(act.get("type", "")).lower()
@@ -1441,7 +1451,7 @@ class AssistantEngine:
                             break
                         sibling_rois = [self.verifier.capture_roi(cx, cy) for cx, cy in sib_coords]
                         is_sel, reason, conf = self.verifier.is_radio_or_checkbox_selected(roi, sibling_rois=sibling_rois)
-                        if is_sel:
+                        if is_sel and conf >= 0.90:
                             act["verified"] = True
                             act["verification_reason"] = f"pre_check_{reason}"
                         else:

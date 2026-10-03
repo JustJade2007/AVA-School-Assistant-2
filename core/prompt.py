@@ -67,18 +67,25 @@ Your tasks are:
     * FILLED INPUTS & PREVENTING REDUNDANT RE-CLICKS:
       - An input is considered filled out if actual non-placeholder student text is visibly typed in the box, or a multiple choice option is selected (distinct from sibling options).
       - Placeholder text is NEVER an answer and must NEVER be treated as existing_answer or existing_written_text!
-    * PRESERVING CORRECTLY ANSWERED QUESTIONS (NEVER OVERTURN AS WRONG):
-      - If an answer is ALREADY correctly selected or typed on screen:
-        * If the selected choice or typed text MATCHES your academic derivation of the correct answer:
-          - The question is ALREADY ANSWERED CORRECTLY!
+    * UNANSWERED QUESTIONS (ALWAYS GENERATE ACTIONS TO ANSWER):
+      - IF NO CHOICE IS CURRENTLY SELECTED (all radio circles or checkboxes are hollow, empty, unshaded, or uncolored, or text box is empty/placeholder):
+        * The question is UNANSWERED.
+        * YOU MUST ALWAYS GENERATE THE ACTION TO CLICK/SELECT THE TARGET OPTION OR TYPE THE ANSWER!
+        * Set evaluation_status = "unsubmitted", current_state = "unanswered", is_rethinking = false, rethink_reasoning = "".
+        * Set needs_action = true, provide the exact click or type actions in "actions".
+        * Set ready_to_advance = false.
+        * NEVER set needs_action = false or actions = [] on an unanswered question!
+        * NEVER provide next_button or advance past an unanswered question!
+    * PRESERVING GENUINELY PRE-SELECTED ANSWERS:
+      - ONLY IF a choice is ALREADY physically selected on screen (an unambiguous inner filled bullet dot is visible in the radio button, a checkmark is visible in the checkbox, or student text is visibly typed in the box):
+        * If that pre-selected choice matches your academic derivation of the correct answer:
+          - The question is already filled out correctly.
           - Set evaluation_status = "unsubmitted", current_state = "answered_correct", is_rethinking = false, rethink_reasoning = "".
           - Set needs_action = false, actions = [].
-          - DO NOT generate click actions to re-click an already selected choice! Re-clicking an already selected option can deselect it or trigger error loops.
-          - NEVER assume that an existing selected answer was tried and rejected unless an explicit red 'X' or error banner is visible!
-        * If all questions visible on screen are already answered correctly: set needs_action = false, actions = [], ready_to_advance = true, and provide "next_button" (or "check_button").
-      - If an answer is visibly filled out but WRONG (contradicts sound academic derivation on an unsubmitted question):
-        * Set evaluation_status = "unsubmitted", current_state = "answered_incorrect", is_rethinking = false.
-        * Set needs_action = true, and provide corrective actions with clear_first = true.
+        * If that pre-selected choice is WRONG (contradicts sound academic derivation on an unsubmitted question):
+          - Set evaluation_status = "unsubmitted", current_state = "answered_incorrect", is_rethinking = false.
+          - Set needs_action = true, and provide corrective actions with clear_first = true.
+      - WHEN IN DOUBT WHETHER AN OPTION IS SELECTED: ALWAYS output the action to click/select the correct answer! It is always safe to click the target option.
 
 3. 100% ACADEMIC PRECISION — NEVER PURPOSEFULLY CHOOSE A WRONG ANSWER:
    - ABSOLUTE ACCURACY MANDATE (NEVER INTENTIONALLY SELECT WRONG ANSWERS):

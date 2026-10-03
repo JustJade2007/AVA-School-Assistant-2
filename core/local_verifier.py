@@ -808,6 +808,8 @@ class LocalVisualVerifier:
             is_comp_sel, comp_reason, comp_conf, diff_score = self.compare_choice_to_siblings(roi_img, sibling_rois)
             if is_comp_sel:
                 return True, comp_reason, comp_conf
+            else:
+                return False, comp_reason, 0.0
 
         # Tier 2: Standalone computer vision heuristics (with light and dark theme support)
         try:
@@ -819,12 +821,17 @@ class LocalVisualVerifier:
             mid_x = w // 2
             mid_y = h // 2
 
+            # Center pixel check: an unselected light-theme radio button or checkbox has a white/light center (> 180)
+            center_val = g_pixels[mid_x, mid_y]
+            cr, cg, cb = rgb_pixels[mid_x, mid_y]
+            center_sat = max(abs(cr - cg), abs(cg - cb), abs(cr - cb))
+
             best_contrast = 0.0
             best_sat = 0.0
 
-            # Scan small window (+-2 px) around center to handle sub-pixel jitter
-            # without expanding into the outer border ring (which starts at r >= 8 px)
-            scan_r = min(2, mid_x - 6, mid_y - 6)
+            # Scan small window (+-1 px) around center to handle sub-pixel jitter
+            # without expanding into the outer border ring (which starts at r >= 6 px)
+            scan_r = min(1, mid_x - 6, mid_y - 6)
             for cx in range(mid_x - scan_r, mid_x + scan_r + 1):
                 for cy in range(mid_y - scan_r, mid_y + scan_r + 1):
                     # 1. Inner core pixels (radius <= 3.5 px, dx^2 + dy^2 <= 12)
@@ -857,18 +864,18 @@ class LocalVisualVerifier:
 
                         # Light theme: Core must be darker than gap ring (inner bullet dot inside hollow ring)
                         # An unselected radio button has a white center (avg_core ~250) and a darker border ring (avg_gap < avg_core).
-                        # Thus, for light theme, avg_gap must be significantly LIGHTER than avg_core!
+                        # Thus, for light theme, avg_gap must be significantly LIGHTER than avg_core, AND center must be dark/colored!
                         if avg_gap >= 128:
                             light_bullet_contrast = avg_gap - avg_core
-                            if light_bullet_contrast > best_contrast and avg_core < 170:
+                            if light_bullet_contrast > best_contrast and avg_core < 140 and (center_val < 155 or center_sat >= 18):
                                 best_contrast = light_bullet_contrast
-                            if avg_sat > best_sat and light_bullet_contrast > 10.0 and avg_core < 195:
+                            if avg_sat > best_sat and light_bullet_contrast > 10.0 and avg_core < 180 and center_sat >= 18:
                                 best_sat = avg_sat
 
                         # Dark theme: Core must be brighter than gap ring (bright active bullet dot inside dark background)
                         else:
                             dark_bullet_contrast = avg_core - avg_gap
-                            if dark_bullet_contrast > best_contrast and (avg_core > 100 or avg_sat >= 20.0):
+                            if dark_bullet_contrast > best_contrast and (avg_core > 110 or avg_sat >= 20.0):
                                 best_contrast = dark_bullet_contrast
                             if avg_sat > best_sat and dark_bullet_contrast > 10.0:
                                 best_sat = avg_sat

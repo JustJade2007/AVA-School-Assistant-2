@@ -11,6 +11,8 @@ The version format is `1.2.3.a`:
 ## [2.2.20.a] - 2026-10-03
 
 ### Fixed & Enhanced
+- **Playground Lifecycle & Thread Safety (PR #31)**:
+  - Guarded Tkinter GUI callbacks across async workers in `PlaygroundWorkspace` using `_after_if_open()` and `_is_closing` checks to prevent `TclError` and dead object access when windows are closed mid-operation. Added lifecycle regression test suite in `tests/test_playground_lifecycle.py`.
 - **Evaluation Status False-Positive Fix for Unanswered & Correct Answers (Issue #28)**:
   - **Unanswered & Correct Answer Prompt Constraints**: Updated `get_vision_system_prompt` and `get_double_check_prompt` in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) with explicit negative constraints: an unanswered question (empty text input or all radio/checkbox options unselected) must strictly default to `evaluation_status = "unsubmitted"` and `current_state = "unanswered"` and can never be marked `incorrect` or `wrong`. Correctly answered questions matching sound academic derivations are preserved with `current_state = "answered_correct"` and must never be overturned, re-selected, or flagged as a mistake.
   - **AI Response Normalization Guards**: In `_normalize_response()` in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py), added safeguards distinguishing fresh/unanswered items and already-correct items from genuine grading failures. Automatically suppresses false-positive `incorrect` states when an item has answering actions or matches the correct answer with zero platform error feedback.

@@ -637,11 +637,12 @@ class AutomationExecutor:
 
                     # Filter out any coordinates that have already been tried previously (from action history)
                     prior_tried = action.get("prior_attempted_coords", set())
-                    if not isinstance(prior_tried, (set, list)):
+                    if not isinstance(prior_tried, (set, list, tuple)):
                         prior_tried = set()
+                    prior_tried_set = {tuple(p) for p in prior_tried if isinstance(p, (tuple, list)) and len(p) == 2}
                     available_candidates = [
                         c for c in safe_candidates
-                        if c not in prior_tried and c != (target_x, target_y)
+                        if tuple(c) not in prior_tried_set and c != (target_x, target_y)
                     ]
 
                     # Select exactly up to 2 distinct same-row readjustment attempts

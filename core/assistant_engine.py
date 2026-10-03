@@ -1399,8 +1399,9 @@ class AssistantEngine:
             prior_coords = mem_info.get("attempted_coords", set())
             phys_target = mem_info.get("physical_target")
             phys_delta = mem_info.get("physical_delta")
+            prior_coords_list = [list(c) if isinstance(c, (tuple, list)) else c for c in prior_coords] if isinstance(prior_coords, (set, list, tuple)) else []
             for act in actions:
-                act["prior_attempted_coords"] = prior_coords
+                act["prior_attempted_coords"] = prior_coords_list
                 # If a physical control was visually detected on screen, apply it directly!
                 if phys_target and act.get("type") in ["click", "double_click"]:
                     logger.info(
@@ -1616,6 +1617,7 @@ class AssistantEngine:
             # Visually verify that the on-screen selected options/inputs genuinely match the intended answer
             # after choosing all answers and before hitting Next, Check Answer, or Submit!
             if is_answered and actions:
+                phase = "Visual Double-Check"
                 double_check_ok = self._double_check_answers_on_screen(actions)
                 if not double_check_ok:
                     self.last_result["ready_to_advance"] = False
@@ -1878,108 +1880,113 @@ class AssistantEngine:
         retries = 0
         max_retries = max(1, getattr(self.config, "max_double_check_retries", 2))
 
-        while retries <= max_retries:
-            if self.executor.is_stopped():
-                return False
+        try:
+            while retries <= max_retries:
+                if self.executor.is_stopped():
+                    return False
 
-            self.set_state(EngineState.VERIFYING, f"AI Double-Checking Answer ({retries + 1}/{max_retries + 1})...")
-            logger.info(
-                f"Double-checking selected answers on screen (attempt {retries + 1}/{max_retries + 1}): "
-                f"Question='{question_text[:50]}...', Expected='{answer_text[:50]}'..."
-            )
-
-            # Brief pause for UI rendering / selection animations to finish
-            time.sleep(0.25)
-
-            # Fresh capture of the current state with visual grounding and mark anchors
-            mark_registry = {}
-            try:
-                if hasattr(self.capture, "capture_and_ground"):
-                    (base64_data,
-                     curr_w,
-                     curr_h,
-                     scale_x,
-                     scale_y,
-                     offset_x,
-                     offset_y,
-                     mark_registry) = self.capture.capture_and_ground(
-                         region=self.last_region,
-                         max_dimension=self.config.max_capture_dimension,
-                         prior_actions=executed_actions
-                     )
-                else:
-                    (base64_data,
-                     curr_w,
-                     curr_h,
-                     scale_x,
-                     scale_y,
-                     offset_x,
-                     offset_y) = self.capture.capture_and_encode(
-                         region=self.last_region,
-                         max_dimension=self.config.max_capture_dimension
-                     )
-            except Exception as e:
-                logger.warning(f"_double_check_answers_on_screen: screen capture failed: {e}")
-                return True
-
-            check_res = self.ai_client.double_check_solution(
-                base64_image=base64_data,
-                question=question_text,
-                intended_answer=answer_text,
-                intended_actions=executed_actions,
-                image_width=curr_w,
-                image_height=curr_h,
-                scale_x=scale_x,
-                scale_y=scale_y,
-                offset_x=offset_x,
-                offset_y=offset_y,
-                calibration_offset_x=self.config.calibration_offset_x,
-                calibration_offset_y=self.config.calibration_offset_y,
-                calibration_scale_x=self.config.calibration_scale_x,
-                calibration_scale_y=self.config.calibration_scale_y,
-                coordinate_mode=self.config.coordinate_mode,
-                mark_registry=mark_registry,
-                reasoning=str(self.last_result.get("reasoning", "")).strip()
-            )
-
-            is_correct = check_res.get("double_check_passed", True)
-            messed_up = check_res.get("messed_up", False)
-            issue_type = check_res.get("issue_type", "none")
-            details = check_res.get("details", "")
-            summary = check_res.get("currently_selected_summary", "")
-            corrective_actions = check_res.get("corrective_actions", [])
-
-            if is_correct and not messed_up:
+                self.set_state(EngineState.VERIFYING, f"AI Double-Checking Answer ({retries + 1}/{max_retries + 1})...")
                 logger.info(
-                    f"[OK] Visual double-check PASSED: {details or 'Selected answers visibly match target answer.'} "
-                    f"({summary})"
+                    f"Double-checking selected answers on screen (attempt {retries + 1}/{max_retries + 1}): "
+                    f"Question='{question_text[:50]}...', Expected='{answer_text[:50]}'..."
                 )
-                self._handle_adjustment("✓ Double-check verified: Selected answers match correct answer")
-                return True
 
-            # Mistake detected!
-            retries += 1
-            err_msg = f"⚠️ Double-check detected mistake ({issue_type}): {details or summary}"
-            logger.warning(
-                f"[!] Visual double-check FAILED (attempt {retries}): issue_type={issue_type}, "
-                f"details='{details}', summary='{summary}', corrective_actions={len(corrective_actions)}"
-            )
-            self._handle_adjustment(f"{err_msg} -> Applying corrections...")
+                # Brief pause for UI rendering / selection animations to finish
+                time.sleep(0.25)
 
-            if corrective_actions:
-                logger.info(f"Executing {len(corrective_actions)} corrective actions from double-check...")
-                self.set_state(EngineState.EXECUTING, f"Correcting {issue_type}...")
-                self.executor.execute_action_sequence(corrective_actions, delay_between=self.config.action_delay)
-                # Loop back to verify again
-                executed_actions = corrective_actions
-            else:
-                logger.warning("Double-check reported a mistake but provided no corrective actions.")
-                break
+                # Fresh capture of the current state with visual grounding and mark anchors
+                mark_registry = {}
+                try:
+                    if hasattr(self.capture, "capture_and_ground"):
+                        (base64_data,
+                         curr_w,
+                         curr_h,
+                         scale_x,
+                         scale_y,
+                         offset_x,
+                         offset_y,
+                         mark_registry) = self.capture.capture_and_ground(
+                             region=self.last_region,
+                             max_dimension=self.config.max_capture_dimension,
+                             prior_actions=executed_actions
+                         )
+                    else:
+                        (base64_data,
+                         curr_w,
+                         curr_h,
+                         scale_x,
+                         scale_y,
+                         offset_x,
+                         offset_y) = self.capture.capture_and_encode(
+                             region=self.last_region,
+                             max_dimension=self.config.max_capture_dimension
+                         )
+                except Exception as e:
+                    logger.warning(f"_double_check_answers_on_screen: screen capture failed: {e}")
+                    return True
 
-        # If retries exhausted and still messed up
-        logger.warning("Double-check retries exhausted. Question may still have selection discrepancies.")
-        self._handle_adjustment("⚠️ Double-check warning: Could not fully confirm selection on screen.")
-        return False
+                check_res = self.ai_client.double_check_solution(
+                    base64_image=base64_data,
+                    question=question_text,
+                    intended_answer=answer_text,
+                    intended_actions=executed_actions,
+                    image_width=curr_w,
+                    image_height=curr_h,
+                    scale_x=scale_x,
+                    scale_y=scale_y,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                    calibration_offset_x=self.config.calibration_offset_x,
+                    calibration_offset_y=self.config.calibration_offset_y,
+                    calibration_scale_x=self.config.calibration_scale_x,
+                    calibration_scale_y=self.config.calibration_scale_y,
+                    coordinate_mode=self.config.coordinate_mode,
+                    mark_registry=mark_registry,
+                    reasoning=str(self.last_result.get("reasoning", "")).strip()
+                )
+
+                is_correct = check_res.get("double_check_passed", True)
+                messed_up = check_res.get("messed_up", False)
+                issue_type = check_res.get("issue_type", "none")
+                details = check_res.get("details", "")
+                summary = check_res.get("currently_selected_summary", "")
+                corrective_actions = check_res.get("corrective_actions", [])
+
+                if is_correct and not messed_up:
+                    logger.info(
+                        f"[OK] Visual double-check PASSED: {details or 'Selected answers visibly match target answer.'} "
+                        f"({summary})"
+                    )
+                    self._handle_adjustment("✓ Double-check verified: Selected answers match correct answer")
+                    return True
+
+                # Mistake detected!
+                retries += 1
+                err_msg = f"⚠️ Double-check detected mistake ({issue_type}): {details or summary}"
+                logger.warning(
+                    f"[!] Visual double-check FAILED (attempt {retries}): issue_type={issue_type}, "
+                    f"details='{details}', summary='{summary}', corrective_actions={len(corrective_actions)}"
+                )
+                self._handle_adjustment(f"{err_msg} -> Applying corrections...")
+
+                if corrective_actions:
+                    logger.info(f"Executing {len(corrective_actions)} corrective actions from double-check...")
+                    self.set_state(EngineState.EXECUTING, f"Correcting {issue_type}...")
+                    self.executor.execute_action_sequence(corrective_actions, delay_between=self.config.action_delay)
+                    # Loop back to verify again
+                    executed_actions = corrective_actions
+                else:
+                    logger.warning("Double-check reported a mistake but provided no corrective actions.")
+                    break
+
+            # If retries exhausted and still messed up
+            logger.warning("Double-check retries exhausted. Question may still have selection discrepancies.")
+            self._handle_adjustment("⚠️ Double-check warning: Could not fully confirm selection on screen.")
+            return False
+        except Exception as e:
+            logger.warning(f"Visual double-check encountered an unhandled error: {e}", exc_info=True)
+            self._handle_adjustment("⚠️ Visual double-check encountered error; continuing with verified answer.")
+            return True
 
     def _refine_input_box_targets(self, result: Dict[str, Any]):
         """

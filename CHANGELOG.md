@@ -8,6 +8,15 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.19.a] - 2026-10-03
+
+### Fixed & Enhanced
+- **Manual Auto-Answer (F9) Decoupled from Autonomous Mode (Issue #32)**:
+  - **Decoupled 'Check Answer' Submission from Autonomous Mode**: Decoupled `check_button` clicking in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) (`should_advance`) from `self.config.autonomous_mode`. Previously, having autonomous mode disabled forced `should_advance` to `False` whenever `auto_next` was disabled, skipping the "Check Answer" / "Submit" button click and abruptly bouncing back to IDLE. Now, answer checking and verification occur upon manual execution confirmation regardless of autonomous mode setting, while preserving user control by pausing before next question navigation if `auto_next` is disabled.
+  - **Idle State One-Shot F9 Execution**: Enhanced `confirm_and_execute()` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) to handle hotkey activation from `EngineState.IDLE`. If a solution is already pending, pressing `F9` immediately transitions to execution; if no solution is loaded, `F9` seamlessly launches a one-shot solve & execute pipeline (`_force_execute_after_reading = True`), eliminating silent drops and rapid state flashes when users press `F9` without autonomous mode active.
+  - **Action Preservation Against False-Positive Heuristics**: Stored `original_actions` in the solution payload in `_run_solve_pipeline()` before local zero-token pre-selection checks run. When user explicitly requests execution via `F9`, `confirm_and_execute()` and `execute_current_solution()` restore actions if they were cleared by false-positive local sibling checks and bypass heuristic action suppression.
+  - **Accurate Handling for Already Correct Questions**: Updated `confirm_and_execute()` and `execute_current_solution()` so that when an assessment item is visually confirmed already correct by the platform, manual `F9` confirmation advances to the next question rather than getting trapped in idle.
+
 ## [2.2.18.a] - 2026-10-03
 
 ### Added & Enhanced

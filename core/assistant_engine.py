@@ -64,6 +64,7 @@ class AssistantEngine:
         # Reading deliberation skip event
         self._skip_reading_event = threading.Event()
         self._force_execute_after_reading = False
+        self._manual_f9_confirmed = False
 
         # Multi-part question chain tracking
         self._multi_part_active = False
@@ -1080,6 +1081,8 @@ class AssistantEngine:
 
             # Check if all returned actions are already selected on screen (comparative sibling check)
             actions_to_check = result.get("actions", [])
+            if actions_to_check:
+                result["original_actions"] = [dict(a) for a in actions_to_check if isinstance(a, dict)]
             if self.config.local_verification_enabled and actions_to_check and not eval_info["is_rethinking"]:
                 all_already_done = True
                 for act in actions_to_check:
@@ -1245,13 +1248,33 @@ class AssistantEngine:
             if self.state == EngineState.READING:
                 logger.info("Skip wait requested during reading deliberation (F9). Proceeding to execute.")
                 self._force_execute_after_reading = True
+                self._manual_f9_confirmed = True
                 self._skip_reading_event.set()
                 return
+
+            if self.state == EngineState.IDLE:
+                has_pending_actions = bool(
+                    self.last_result
+                    and (
+                        self.last_result.get("actions")
+                        or self.last_result.get("original_actions")
+                        or self.last_result.get("check_button")
+                    )
+                )
+                if has_pending_actions:
+                    logger.info("Manual execution triggered from IDLE with pending solution (F9).")
+                    self.set_state(EngineState.WAITING_CONFIRMATION)
+                else:
+                    logger.info("Manual auto-answer triggered from IDLE (F9). Launching solve & execute pipeline...")
+                    self._force_execute_after_reading = True
+                    self._manual_f9_confirmed = True
+                    self.trigger_solve()
+                    return
 
             if self.state != EngineState.WAITING_CONFIRMATION:
                 logger.warning(
                     f"Safeguard engaged: Cannot confirm and execute (F9) in state '{self.state.value}'. "
-                    f"Execution is only allowed in WAITING_CONFIRMATION or READING."
+                    f"Execution is only allowed in WAITING_CONFIRMATION, READING, or IDLE."
                 )
                 if self.state in [
                     EngineState.SCANNING,
@@ -1272,16 +1295,31 @@ class AssistantEngine:
                 logger.warning("Safeguard engaged: Cannot confirm and execute (F9): input stream is already active.")
                 return
 
-            # If already marked CORRECT by platform, skip action execution
-            if self.last_result and self.last_result.get("evaluation_status") == "correct":
+            # If already marked CORRECT by platform and no actions or original actions are pending,
+            # advance to next question upon manual F9 confirmation or mark complete
+            if self.last_result and self.last_result.get("evaluation_status") == "correct" and (
+                not self.last_result.get("actions") and not self.last_result.get("original_actions")
+            ):
                 logger.info("confirm_and_execute: Question already marked CORRECT by platform.")
                 self.last_verification_detail = "already marked CORRECT by platform"
                 self._handle_adjustment("✓ Question already marked CORRECT by platform")
-                if self.config.auto_next and not self.executor.is_stopped():
+                if not self.executor.is_stopped() and (
+                    self.config.auto_next
+                    or self.last_result.get("next_button")
+                    or str(self.last_result.get("advance_action", "")).lower() == "scroll_down"
+                ):
                     self.trigger_next_question()
                 else:
                     self.set_state(EngineState.IDLE, "Question confirmed correct")
                 return
+
+            # Mark manual F9 confirmation to bypass heuristic suppression
+            self._manual_f9_confirmed = True
+
+            # If actions were emptied by pre-check, restore original actions for manual execution
+            if not self.last_result.get("actions") and self.last_result.get("original_actions"):
+                self.last_result["actions"] = [dict(a) for a in self.last_result["original_actions"]]
+                self.last_result["needs_action"] = True
 
             # Atomically claim EXECUTING state so no other hotkey can interleave
             self.set_state(EngineState.EXECUTING)
@@ -1292,15 +1330,23 @@ class AssistantEngine:
     def execute_current_solution(self):
         """Executes the actions stored in self.last_result."""
         if not self.last_result:
+            self._manual_f9_confirmed = False
             self.set_state(EngineState.IDLE)
             return
 
         # Check if already verified correct by platform
-        if self.last_result.get("evaluation_status") == "correct" and (not self.last_result.get("actions") or not self.last_result.get("needs_action", True)):
+        if self.last_result.get("evaluation_status") == "correct" and (
+            not self.last_result.get("actions") and not self.last_result.get("original_actions")
+        ) and not self.last_result.get("needs_action", True):
             logger.info("execute_current_solution: Question already marked CORRECT by platform. Skipping input actions.")
             self.last_verification_detail = "already marked CORRECT by platform"
             self._handle_adjustment("✓ Question already marked CORRECT by platform")
-            if self.config.auto_next and not self.executor.is_stopped():
+            should_advance_correct = (
+                self.config.auto_next
+                or getattr(self, "_manual_f9_confirmed", False)
+            )
+            self._manual_f9_confirmed = False
+            if not self.executor.is_stopped() and should_advance_correct:
                 self.trigger_next_question()
             else:
                 self.set_state(EngineState.IDLE, "Question confirmed correct")
@@ -1312,6 +1358,10 @@ class AssistantEngine:
             or bool(self.last_result.get("action_missed"))
         )
         actions = self.last_result.get("actions", [])
+        if not actions and getattr(self, "_manual_f9_confirmed", False) and self.last_result.get("original_actions"):
+            actions = [dict(a) for a in self.last_result["original_actions"]]
+            self.last_result["actions"] = list(actions)
+            self.last_result["needs_action"] = True
         # CRITICAL SAFETY INVARIANT: Prevent skipping unanswered questions
         # If there are zero actions, no submission check button, and the question is unsubmitted/needs action
         has_submission_action = bool(self.last_result.get("check_button"))
@@ -1340,6 +1390,7 @@ class AssistantEngine:
                 )
                 self.last_result["ready_to_advance"] = False
                 self._handle_adjustment("⚠️ Question is UNANSWERED (0 actions provided). Auto-advance blocked to prevent skipping!")
+                self._manual_f9_confirmed = False
                 self.set_state(EngineState.WAITING_CONFIRMATION, "Unanswered question (no actions). Advancing blocked.")
                 return
 
@@ -1359,7 +1410,7 @@ class AssistantEngine:
                 time.sleep(0.35)
 
         # Pre-Execution Check: Verify if proposed answer options are ALREADY selected on screen
-        if self.config.local_verification_enabled and actions and not was_rethinking:
+        if self.config.local_verification_enabled and actions and not was_rethinking and not getattr(self, "_manual_f9_confirmed", False):
             all_already_selected = True
             for act in actions:
                 act_type = str(act.get("type", "")).lower()
@@ -1642,7 +1693,7 @@ class AssistantEngine:
             should_advance = (
                 self.config.auto_next
                 or (self.config.chain_multi_parts and is_multi_part and has_pending_items)
-                or (self.config.autonomous_mode and bool(check_btn))
+                or bool(check_btn)
             )
 
             if should_advance:
@@ -1848,6 +1899,8 @@ class AssistantEngine:
             self.last_error = diag
             self.set_state(EngineState.ERROR, diag.message)
             self._notify_error(diag)
+        finally:
+            self._manual_f9_confirmed = False
 
     def _double_check_answers_on_screen(self, executed_actions: list) -> bool:
         """

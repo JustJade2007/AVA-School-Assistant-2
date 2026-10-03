@@ -6,9 +6,11 @@ from unittest.mock import MagicMock, patch
 try:
     from ui.playground.workspace import PlaygroundWorkspace
     from ui.app import AVASchoolAssistantApp
+    from core.playground.project_model import SectionDraft
 except ModuleNotFoundError as exc:
     PlaygroundWorkspace = None
     AVASchoolAssistantApp = None
+    SectionDraft = None
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
@@ -20,6 +22,7 @@ class TestPlaygroundLifecycle(unittest.TestCase):
     def make_workspace(self):
         workspace = PlaygroundWorkspace.__new__(PlaygroundWorkspace)
         workspace._is_closing = False
+        workspace._is_generating = False
         workspace.project = MagicMock()
         workspace.destroy = MagicMock()
         workspace.on_exit = MagicMock()
@@ -79,6 +82,52 @@ class TestPlaygroundLifecycle(unittest.TestCase):
 
         self.assertIsNone(app.playground_window)
         stale_window.destroy.assert_not_called()
+
+    def test_navigating_to_empty_section_triggers_auto_draft(self):
+        workspace = self.make_workspace()
+        workspace.current_section_idx = 0
+        empty_section = SectionDraft(title="Intro", goal_summary="Explain the topic")
+        workspace.project.sections = [empty_section]
+        workspace.sec_goal_label = MagicMock()
+        workspace.raw_text_box = MagicMock()
+        workspace.final_text_box = MagicMock()
+        workspace.final_text_box.get = MagicMock(return_value="")
+        workspace.approval_badge = MagicMock()
+        workspace._update_sec_word_stats = MagicMock()
+        workspace._start_drafting_section = MagicMock()
+
+        workspace._load_active_section_into_editor()
+
+        workspace._start_drafting_section.assert_called_once_with(empty_section)
+
+    def test_navigating_to_drafted_section_does_not_auto_draft(self):
+        workspace = self.make_workspace()
+        workspace.current_section_idx = 0
+        drafted_section = SectionDraft(title="Intro", final_text="Already has content.")
+        workspace.project.sections = [drafted_section]
+        workspace.sec_goal_label = MagicMock()
+        workspace.raw_text_box = MagicMock()
+        workspace.final_text_box = MagicMock()
+        workspace.final_text_box.get = MagicMock(return_value="Already has content.")
+        workspace.approval_badge = MagicMock()
+        workspace._update_sec_word_stats = MagicMock()
+        workspace._start_drafting_section = MagicMock()
+
+        workspace._load_active_section_into_editor()
+
+        workspace._start_drafting_section.assert_not_called()
+
+    def test_start_drafting_section_skips_when_already_generating(self):
+        workspace = self.make_workspace()
+        workspace._is_generating = True
+        workspace.draft_ai_btn = MagicMock()
+        workspace.engine = MagicMock()
+
+        section = SectionDraft(title="Body")
+        workspace._start_drafting_section(section)
+
+        workspace.draft_ai_btn.configure.assert_not_called()
+        workspace.engine.draft_section.assert_not_called()
 
     def test_live_playground_is_destroyed_and_cleared(self):
         app = AVASchoolAssistantApp.__new__(AVASchoolAssistantApp)

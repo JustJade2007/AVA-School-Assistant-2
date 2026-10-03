@@ -1712,39 +1712,64 @@ class LocalVisualVerifier:
         Detects if newly introduced visual elements signify an incorrect or correct outcome.
         Uses differential comparison to ignore static pre-existing colored elements.
         """
-        if after_check_img is None:
+        if after_check_img is None or before_check_img is None:
             return {
                 "detected": False,
                 "status": "unsubmitted",
                 "is_incorrect": False,
                 "is_correct": False,
                 "confidence": 0.0,
-                "details": "no_after_image",
+                "details": "no_before_or_after_image_for_differential",
                 "screen_transitioned": False,
                 "transition_diff": 0.0
             }
 
-        target_img = after_check_img
         trans_ok = False
         diff = 0.0
+        target_img = None
 
-        if before_check_img is not None and after_check_img is not None:
-            try:
-                trans_ok, diff = self.verify_screen_transition(before_check_img, after_check_img)
-                # If images are identical size, create a difference mask to inspect ONLY what changed
-                if before_check_img.size == after_check_img.size:
-                    diff_img = ImageChops.difference(before_check_img.convert("RGB"), after_check_img.convert("RGB"))
-                    # Mask of pixels that changed by at least 15 intensity
-                    diff_gray = diff_img.convert("L")
-                    mask = diff_gray.point(lambda p: 255 if p > 15 else 0)
-                    # Apply mask onto after_check_img so only new pixels are evaluated
-                    masked_after = Image.new("RGB", after_check_img.size, (255, 255, 255))
-                    masked_after.paste(after_check_img.convert("RGB"), mask=mask)
-                    target_img = masked_after
-            except Exception as e:
-                logger.debug(f"Differential evaluation mask error: {e}")
+        try:
+            trans_ok, diff = self.verify_screen_transition(before_check_img, after_check_img)
+            # If no screen transition occurred after clicking submit, do not evaluate
+            if not trans_ok or diff < 0.003:
+                return {
+                    "detected": False,
+                    "status": "unsubmitted",
+                    "is_incorrect": False,
+                    "is_correct": False,
+                    "confidence": 0.0,
+                    "details": f"no_transition_after_submit (diff={diff:.4f})",
+                    "screen_transitioned": trans_ok,
+                    "transition_diff": diff
+                }
 
-        markers = self.detect_platform_evaluation_markers(target_img, min_cluster_pixels=1200)
+            # If images are identical size, create a difference mask to inspect ONLY newly introduced pixels
+            if before_check_img.size == after_check_img.size:
+                diff_img = ImageChops.difference(before_check_img.convert("RGB"), after_check_img.convert("RGB"))
+                # Mask of pixels that changed by at least 15 intensity
+                diff_gray = diff_img.convert("L")
+                mask = diff_gray.point(lambda p: 255 if p > 15 else 0)
+                # Apply mask onto after_check_img so ONLY newly appeared pixels are evaluated
+                masked_after = Image.new("RGB", after_check_img.size, (255, 255, 255))
+                masked_after.paste(after_check_img.convert("RGB"), mask=mask)
+                target_img = masked_after
+        except Exception as e:
+            logger.debug(f"Differential evaluation mask error: {e}")
+            target_img = None
+
+        if target_img is None:
+            return {
+                "detected": False,
+                "status": "unsubmitted",
+                "is_incorrect": False,
+                "is_correct": False,
+                "confidence": 0.0,
+                "details": "differential_mask_unavailable",
+                "screen_transitioned": trans_ok,
+                "transition_diff": diff
+            }
+
+        markers = self.detect_platform_evaluation_markers(target_img, min_cluster_pixels=1500)
         markers["is_incorrect"] = (markers.get("status") == "incorrect")
         markers["is_correct"] = (markers.get("status") == "correct")
         markers["screen_transitioned"] = trans_ok

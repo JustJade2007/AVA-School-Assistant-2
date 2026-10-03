@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.20.a] - 2026-10-03
+
+### Fixed & Enhanced
+- **Evaluation Status False-Positive Fix for Unanswered & Correct Answers (Issue #28)**:
+  - **Unanswered & Correct Answer Prompt Constraints**: Updated `get_vision_system_prompt` and `get_double_check_prompt` in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) with explicit negative constraints: an unanswered question (empty text input or all radio/checkbox options unselected) must strictly default to `evaluation_status = "unsubmitted"` and `current_state = "unanswered"` and can never be marked `incorrect` or `wrong`. Correctly answered questions matching sound academic derivations are preserved with `current_state = "answered_correct"` and must never be overturned, re-selected, or flagged as a mistake.
+  - **AI Response Normalization Guards**: In `_normalize_response()` in [core/ai_client.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/ai_client.py), added safeguards distinguishing fresh/unanswered items and already-correct items from genuine grading failures. Automatically suppresses false-positive `incorrect` states when an item has answering actions or matches the correct answer with zero platform error feedback.
+  - **Engine Status Evaluation Safeguards**: In `check_question_evaluation_status` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py), added guards preventing unsubmitted questions or already-answered questions from being marked `incorrect`. Eliminated auto-fabrication of fake rethink reasons (`"Question marked incorrect by platform..."`), requiring actual platform error feedback, rethink reasoning, or confirmed visual markers before triggering a rethink loop.
+  - **Differential Verification Baseline Enforcement**: In `verify_post_submission_evaluation` in [core/local_verifier.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/local_verifier.py), strictly required a pre-submission baseline image (`before_check_img`) and genuine screen transition (`diff >= 0.003`) before evaluating differential red markers. If no baseline is available, returns `status = "unsubmitted"` rather than naively counting full-screen static red pixels (e.g. red headers, logos, buttons) that previously falsely triggered incorrect detection.
+  - **HUD Evaluation Status Rendering**: Updated [ui/hud_overlay.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/hud_overlay.py) so `❌ PLATFORM: INCORRECT -> RETHINKING` is only rendered when `eval_status == "incorrect"` AND `is_rethinking` is active. Unanswered items display `● ANSWERING` and already-correct items display `✓ CORRECT`, eliminating false-positive red error banners.
+
 ## [2.2.19.a] - 2026-10-03
 
 ### Fixed & Enhanced

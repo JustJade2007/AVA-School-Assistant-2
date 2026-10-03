@@ -383,14 +383,29 @@ class AssistantEngine:
                 res["existing_written_text"] = None
 
         # Combine signals:
-        # 1. If AI explicitly indicates incorrect
-        if eval_status in ["incorrect", "wrong"] or any_item_incorrect:
-            final_status = "incorrect"
-            is_answered = False  # NEVER considered answered when marked incorrect!
-            is_rethinking = True
-            if not rethink_reasoning:
-                rethink_reasoning = "Question marked incorrect by platform. Rethinking problem and entry format."
-            details = f"marked_incorrect (ai={eval_status})"
+        # SAFEGUARD: Distinguish unsubmitted questions from genuine post-submission failures.
+        # An unanswered question (with actions to answer, no platform error) or an already-correct question
+        # can NEVER be classified as "incorrect" or trigger "PLATFORM: INCORRECT -> RETHINKING".
+        is_fresh_unanswered = (has_unexecuted_actions or has_items_needing_action) and not platform_feedback and local_markers.get("status") != "incorrect"
+        is_already_filled_unsubmitted = res.get("needs_action") is False and len(res.get("actions", [])) == 0 and not platform_feedback and local_markers.get("status") != "incorrect"
+
+        # 1. Genuine platform incorrect evaluation (requires explicit error feedback, rethink reasoning, or confirmed visual marker)
+        if (eval_status in ["incorrect", "wrong"] or any_item_incorrect) and not is_fresh_unanswered and not is_already_filled_unsubmitted:
+            if platform_feedback or rethink_reasoning or (local_markers.get("detected") and local_markers.get("status") == "incorrect"):
+                final_status = "incorrect"
+                is_answered = False  # NEVER considered answered when marked incorrect!
+                is_rethinking = True
+                if not rethink_reasoning:
+                    rethink_reasoning = f"Platform indicated answer was rejected: {platform_feedback}" if platform_feedback else "Question marked incorrect by platform."
+                details = f"marked_incorrect (ai={eval_status}, feedback={bool(platform_feedback)})"
+            else:
+                # Suppress false-positive incorrect: model flagged "wrong" with zero error evidence on screen
+                logger.info("Suppressed false-positive 'incorrect' evaluation status (no platform feedback or error markers visible).")
+                final_status = "unsubmitted"
+                is_answered = False
+                is_rethinking = False
+                rethink_reasoning = ""
+                details = "unsubmitted_safe (suppressed_ai_false_incorrect)"
 
         # 1b. If post-submission differential verification explicitly confirmed newly appeared error markers
         elif (

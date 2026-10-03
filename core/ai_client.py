@@ -1108,16 +1108,45 @@ class AIClient:
                 item["proposed_answer"] = sub_ans
                 item["answer"] = sub_ans
 
-                # Normalize evaluation_status
+                # Normalize evaluation_status and current_state
                 raw_eval = str(item.get("evaluation_status", "")).strip().lower()
                 raw_state = str(item.get("current_state", "")).strip().lower()
+                itm_actions = item.get("actions", [])
+                has_itm_actions = bool(itm_actions and len(itm_actions) > 0)
+                needs_act = item.get("needs_action", True)
+                has_existing = bool(item.get("existing_answer"))
+                has_feedback = bool(item.get("platform_feedback") or result.get("platform_feedback"))
 
+                # 1. Check for genuine correct indication
                 if raw_eval in ["correct", "graded_correct", "right", "passed"] or raw_state == "answered_correct":
                     item["evaluation_status"] = "correct"
-                elif raw_eval in ["incorrect", "wrong", "failed", "error", "graded_incorrect"] or raw_state in ["answered_incorrect", "wrong"]:
-                    item["evaluation_status"] = "incorrect"
+                    item["current_state"] = "answered_correct"
+                    item["is_rethinking"] = False
+                # 2. Check for genuinely incorrect submission (requires explicit error feedback or rethink reasoning on a submitted answer)
+                elif (raw_eval in ["incorrect", "wrong", "failed", "error", "graded_incorrect"] or raw_state in ["answered_incorrect", "wrong"]):
+                    # SAFEGUARD: An unanswered, fresh question (with actions to answer, no existing answer, and no platform feedback)
+                    # can NEVER be marked incorrect!
+                    is_unanswered_fresh = (needs_act or has_itm_actions) and not has_existing and not has_feedback
+                    if is_unanswered_fresh:
+                        item["evaluation_status"] = "unsubmitted"
+                        item["current_state"] = "unanswered"
+                        item["is_rethinking"] = False
+                    # SAFEGUARD: An already-correct answer on screen (needs_action=False, actions=0, no feedback) can NEVER be marked incorrect!
+                    elif not needs_act and not has_itm_actions and not has_feedback:
+                        item["evaluation_status"] = "unsubmitted"
+                        item["current_state"] = "answered_correct"
+                        item["is_rethinking"] = False
+                    else:
+                        item["evaluation_status"] = "incorrect"
+                        item["current_state"] = "answered_incorrect"
                 else:
                     item["evaluation_status"] = "unsubmitted"
+                    if not has_existing and (needs_act or has_itm_actions):
+                        item["current_state"] = "unanswered"
+                    elif not needs_act and not has_itm_actions:
+                        item["current_state"] = "answered_correct"
+                    else:
+                        item["current_state"] = raw_state or "unanswered"
 
                 if item["evaluation_status"] == "incorrect":
                     any_incorrect = True
@@ -1159,10 +1188,22 @@ class AIClient:
 
         # Top-level evaluation_status normalization
         top_eval = str(result.get("evaluation_status", "")).strip().lower()
+        top_actions = result.get("actions", [])
+        has_top_actions = bool(top_actions and len(top_actions) > 0)
+        top_needs_act = result.get("needs_action", True)
+        top_feedback = bool(result.get("platform_feedback"))
+
         if top_eval in ["correct", "graded_correct", "right", "passed"] or all_correct:
             result["evaluation_status"] = "correct"
         elif top_eval in ["incorrect", "wrong", "failed", "error", "graded_incorrect"] or any_incorrect:
-            result["evaluation_status"] = "incorrect"
+            # SAFEGUARD: If the question is fresh/unanswered (needs action, has answering actions, no feedback)
+            # or already answered correctly without error feedback, suppress false-positive incorrect
+            if (has_top_actions or top_needs_act) and not top_feedback and not any_incorrect:
+                result["evaluation_status"] = "unsubmitted"
+            elif not has_top_actions and top_needs_act is False and not top_feedback and not any_incorrect:
+                result["evaluation_status"] = "unsubmitted"
+            else:
+                result["evaluation_status"] = "incorrect"
         else:
             result["evaluation_status"] = "unsubmitted"
 

@@ -27,6 +27,7 @@ Your tasks are:
    - "unsubmitted" (DEFAULT FOR ALMOST ALL QUESTIONS):
      * The question has NOT yet been graded or evaluated by the platform (e.g. fresh question, empty inputs, or answer entered/selected but waiting for submission).
      * DO NOT CONFUSE NORMAL PAGE ELEMENTS WITH ERROR MARKERS:
+       - An unanswered, unfilled, or blank question is NEVER an error or marked wrong.
        - A red asterisk (*) indicating a required question is NOT an error.
        - A red website header, banner, logo, button, icon, or accent color is NOT an error.
        - A red line, curve, vector, or colored shape in a math graph, coordinate plane, geometry figure, or diagram is NOT an error.
@@ -41,12 +42,20 @@ Your tasks are:
    - "incorrect": ONLY if the platform has visibly graded and marked the question or part as INCORRECT:
      * Requires EXPLICIT post-submission failure indicators: an explicit red 'X' icon next to the question/input, an explicit red banner stating "Incorrect", "Try Again", "Not quite", or "1 attempt remaining", or a clear negative feedback message with point deduction.
      * IF THERE IS NO EXPLICIT RED 'X', 'INCORRECT' BANNER, OR 'TRY AGAIN' MESSAGE, THE STATUS IS STRICTLY "unsubmitted"!
+     * NEVER set evaluation_status = "incorrect" on an unanswered question or on a fresh question that has not been graded!
      * If and ONLY if an explicit red 'X' or error banner is visible:
        - ACADEMIC RETHINK: Read any platform error text or hints. Carefully re-check arithmetic, signs, reading comprehension, or premises. Compute the revised correct answer.
        - ENTRY / FORMAT RETHINK: Check if platform rejected entry format: simplified fraction vs decimal, units printed outside box vs inside, rounding specification (nearest tenth/cent), coordinate notation (x, y), or all-applicable checkboxes.
        - Set "is_rethinking": true, provide detailed "rethink_reasoning", and output corrective actions with clear_first = true.
 
    CRITICAL RULES FOR DETERMINING IF AN ANSWER IS FILLED OUT (ON UNSUBMITTED QUESTIONS):
+    * UNANSWERED QUESTIONS (NEVER MARK AS WRONG):
+      - If all radio buttons or checkboxes are hollow/unselected, or text fields are blank/empty/placeholder:
+        * The question is UNANSWERED!
+        * Set evaluation_status = "unsubmitted" (NEVER "incorrect" or "wrong").
+        * Set current_state = "unanswered" (NEVER "wrong" or "answered_incorrect").
+        * Set is_rethinking = false, rethink_reasoning = "".
+        * Set needs_action = true, provide the exact click or type actions to answer it, and set ready_to_advance = false.
     * MULTIPLE CHOICE & SIBLING POINT COMPARISON:
       - To determine if a multiple choice question is already answered, COMPARE the choices to each other:
         * If ALL choice points look identical (all hollow, uncolored, or empty), the question is UNANSWERED.
@@ -55,14 +64,17 @@ Your tasks are:
     * UNFILLED / EMPTY INPUTS:
       - Any input field that is blank, white, dark, or contains placeholder / watermark / prompt guidance text (such as "Type your answer here...", "Enter response", "Write an essay...", "Type here...", "Click to add text...", "e.g. 10", "Select an option...", "Choose...", or faint gray text) is UNFILLED!
       - For ANY unfilled question or sub-part, you MUST set needs_action = true, provide the exact click / type actions to answer it, and set ready_to_advance = false.
-    * FILLED INPUTS & PREVENTING REDUNDANT RE-CLICKS:
-      - An input is considered filled out if actual non-placeholder student text is visibly typed in the box, or a multiple choice option is selected (distinct from sibling options).
-      - Placeholder text is NEVER an answer and must NEVER be treated as existing_answer or existing_written_text!
-      - If an answer is ALREADY correctly selected or filled out on an unsubmitted question:
-        * Set needs_action = false, actions = [].
-        * DO NOT generate click actions to re-click an already selected choice! Re-clicking an already selected option can deselect it or trigger error loops.
+    * PRESERVING CORRECTLY ANSWERED QUESTIONS (NEVER OVERTURN AS WRONG):
+      - If an answer is ALREADY correctly selected or typed on screen:
+        * If the selected choice or typed text MATCHES your academic derivation of the correct answer:
+          - The question is ALREADY ANSWERED CORRECTLY!
+          - Set evaluation_status = "unsubmitted", current_state = "answered_correct", is_rethinking = false, rethink_reasoning = "".
+          - Set needs_action = false, actions = [].
+          - DO NOT generate click actions to re-click an already selected choice! Re-clicking an already selected option can deselect it or trigger error loops.
+          - NEVER assume that an existing selected answer was tried and rejected unless an explicit red 'X' or error banner is visible!
         * If all questions visible on screen are already answered correctly: set needs_action = false, actions = [], ready_to_advance = true, and provide "next_button" (or "check_button").
-      - If an answer is visibly filled out but WRONG:
+      - If an answer is visibly filled out but WRONG (contradicts sound academic derivation on an unsubmitted question):
+        * Set evaluation_status = "unsubmitted", current_state = "answered_incorrect", is_rethinking = false.
         * Set needs_action = true, and provide corrective actions with clear_first = true.
 
 3. 100% ACADEMIC PRECISION — NEVER PURPOSEFULLY CHOOSE A WRONG ANSWER:
@@ -465,8 +477,9 @@ TARGET PROBLEM DETAILS:
 
 CRITICAL VERIFICATION PRINCIPLES:
 - GROUND IN ACADEMIC REASONING: Compare what is visibly selected/typed on screen against the Academic Reasoning and Target Correct Answer.
-- If the on-screen selected option accurately matches the mathematical/academic derivation, DO NOT flag it as wrong!
+- If the on-screen selected option or typed text accurately matches the mathematical/academic derivation or Target Correct Answer, DO NOT flag it as wrong! Set double_check_passed = true, messed_up = false, issue_type = "none".
 - NEVER overturn a correct answer or force the selection of an incorrect choice!
+- NEVER flag an already-correct selection or unsubmitted correct answer as "wrong_option" or "wrong_text".
 - ONLY flag "messed_up": true if the visibly selected option directly contradicts the sound academic derivation or is factually wrong.
 
 YOUR VERIFICATION TASKS:

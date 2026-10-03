@@ -2084,6 +2084,11 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
                 fg_color="#451a03"
             )
 
+        # Auto-draft sections that have no content yet, so navigating to an
+        # empty section always greets the user with a starting draft.
+        if not sec.get_active_text().strip():
+            self._start_drafting_section(sec)
+
     def _on_final_text_edited(self, event=None):
         if not self.project.sections or self.current_section_idx >= len(self.project.sections):
             return
@@ -2140,9 +2145,13 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             return
 
         sec = self.project.sections[self.current_section_idx]
-        self.draft_ai_btn.configure(text="⏳ Drafting...", state="disabled")
+        self._start_drafting_section(sec)
 
-        tone = self.tone_menu.get().lower()
+    def _start_drafting_section(self, sec: SectionDraft):
+        if self._is_generating:
+            return
+        self._is_generating = True
+        self.draft_ai_btn.configure(text="⏳ Drafting...", state="disabled")
 
         def task():
             self.engine.draft_section(
@@ -2156,6 +2165,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         threading.Thread(target=task, daemon=True).start()
 
     def _finish_draft_active_section(self):
+        self._is_generating = False
         self.draft_ai_btn.configure(text="⚡ Draft Section with AI", state="normal")
         self._load_active_section_into_editor()
 

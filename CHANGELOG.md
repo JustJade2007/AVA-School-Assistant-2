@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.18.a] - 2026-10-03
+
+### Added & Enhanced
+- **Teacher AI Feedback Rewrite, Humanize & Re-Grade Loop (Playground Mode)**:
+  - **Targeted Section Improvement Engine**: Introduced `get_sections_needing_improvement` and `rewrite_and_humanize_sections_with_feedback` in [core/playground/engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/playground/engine.py). Automatically analyzes teacher evaluation reports, links unfulfilled rubric criteria and instructor improvement critiques to specific section drafts, and prompts AI to revise them while strictly maintaining target word count boundaries.
+  - **Jade's AI Humanizer Integration**: Automatically passes all revised sections through [PlaygroundHumanizerBridge](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/playground/humanizer_bridge.py) using active tone and reading level settings, re-applying student word limits via `WrittenSolver`.
+  - **Revision Snapshots & One-Click Revert**: Implemented `revision_snapshots`, `create_revision_snapshot`, and `restore_latest_snapshot` in [core/playground/project_model.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/playground/project_model.py). Takes an automatic snapshot of sections and rubric statuses before rewriting, allowing users to restore previous drafts with a single click if desired.
+  - **Multi-Phase Progress Modal**: Designed a real-time progress dialog in [ui/playground/workspace.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/ui/playground/workspace.py) that tracks execution across Phase 1/3 (Revising Flagged Sections), Phase 2/3 (Applying Jade's AI Humanizer), and Phase 3/3 (Re-grading with Teacher AI) with anti-capture cloaking support.
+  - **Interactive Action Prompts & Side-by-Side Comparison**: Added a post-grading action dialog offering `✨ Rewrite with Feedback`, a persistent `✨ Rewrite & Improve from Feedback` button in the Stage 4 Teacher Card, an action button in the Breakdown Details dialog, and a comparison modal highlighting grade deltas (e.g. `+7%`), newly fulfilled criteria, and options to keep, revert, or run another improvement cycle.
+
 ## [2.2.17.a] - 2026-10-03
 
 ### Fixed & Enhanced

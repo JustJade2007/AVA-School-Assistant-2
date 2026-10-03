@@ -6,7 +6,8 @@ section drafting grounded in source materials and rubric requirements, and itera
 
 import json
 import re
-from typing import List, Dict, Any, Optional
+import time
+from typing import List, Dict, Any, Optional, Callable
 
 from core.logger import get_logger
 from core.playground.project_model import (
@@ -626,3 +627,188 @@ class PlaygroundEngine:
             section.final_text = section.raw_ai_text
 
         return section
+
+    def get_sections_needing_improvement(
+        self,
+        project: PlaygroundProject,
+        teacher_report: Dict[str, Any],
+    ) -> List[SectionDraft]:
+        """
+        Identifies which sections are linked to unfulfilled rubric criteria,
+        lost points, or specific areas for improvement.
+        Falls back to all sections if general feedback applies or none specifically mapped.
+        """
+        crit_evals = teacher_report.get("criteria_evaluations", [])
+        unfulfilled_crit_ids = set()
+        for ev in crit_evals:
+            is_fulfilled = ev.get("fulfilled", True)
+            score = ev.get("score")
+            max_s = ev.get("max_score")
+            has_lost_points = (score is not None and max_s is not None and max_s > 0 and (score / max_s) < 0.9)
+            if not is_fulfilled or has_lost_points:
+                if "id" in ev and ev["id"]:
+                    unfulfilled_crit_ids.add(str(ev["id"]))
+                if "title" in ev and ev["title"]:
+                    unfulfilled_crit_ids.add(ev["title"].lower().strip())
+
+        improvements = teacher_report.get("areas_for_improvement", [])
+        improvements_text = " ".join(improvements).lower()
+
+        targeted: List[SectionDraft] = []
+        for sec in project.sections:
+            matched = False
+            for cid in sec.criteria_ids:
+                if str(cid) in unfulfilled_crit_ids:
+                    matched = True
+                    break
+
+            if not matched:
+                sec_crit_titles = [c.title.lower().strip() for c in project.rubric_criteria if c.id in sec.criteria_ids]
+                for ct in sec_crit_titles:
+                    if ct in unfulfilled_crit_ids:
+                        matched = True
+                        break
+
+            if not matched and improvements_text:
+                if sec.title.lower() in improvements_text:
+                    matched = True
+
+            if matched:
+                targeted.append(sec)
+
+        # Fallback: If no specific section matched, but score is not perfect (or improvements listed),
+        # target all sections so the paper genuinely improves!
+        if not targeted and (improvements or teacher_report.get("numerical_score", 100) < 95):
+            targeted = list(project.sections)
+
+        return targeted
+
+    def rewrite_and_humanize_sections_with_feedback(
+        self,
+        project: PlaygroundProject,
+        teacher_report: Dict[str, Any],
+        humanizer_bridge: PlaygroundHumanizerBridge,
+        progress_callback: Optional[Callable[[str, float], None]] = None,
+    ) -> List[SectionDraft]:
+        """
+        Executes a targeted rewrite and humanization pass across sections needing improvement
+        based on Teacher AI feedback and rubric evaluation.
+        Reports progress via progress_callback(status_text, fractional_progress 0.0-1.0).
+        """
+        targeted = self.get_sections_needing_improvement(project, teacher_report)
+        if not targeted:
+            return project.sections
+
+        crit_evals = teacher_report.get("criteria_evaluations", [])
+        crit_map = {}
+        for ev in crit_evals:
+            if "id" in ev and ev["id"]:
+                crit_map[str(ev["id"])] = ev
+            if "title" in ev and ev["title"]:
+                crit_map[ev["title"].lower().strip()] = ev
+
+        overall_fb = teacher_report.get("overall_feedback", "") or teacher_report.get("summary", "")
+        improvements = teacher_report.get("areas_for_improvement", [])
+        imp_bullets = "\n".join(f"- {imp}" for imp in improvements) if improvements else "Address instructor feedback."
+
+        total_targeted = len(targeted)
+        solver = WrittenSolver()
+
+        # Step 1: Rewrite Targeted Sections
+        for idx, sec in enumerate(targeted):
+            if progress_callback:
+                frac = (idx / total_targeted) * 0.45  # 0% to 45%
+                progress_callback(f"Revising section '{sec.title}' ({idx + 1}/{total_targeted})...", frac)
+
+            sec_crit_fb = []
+            for cid in sec.criteria_ids:
+                ev = crit_map.get(str(cid))
+                if ev:
+                    fb = ev.get("feedback", "").strip()
+                    title = ev.get("title", "")
+                    sec_crit_fb.append(f"Rubric Requirement '{title}': {fb}")
+
+            sec_crit_text = "\n".join(sec_crit_fb) if sec_crit_fb else "Ensure high academic rigor and rubric compliance."
+
+            min_words = sec.target_word_count
+            target_words = int(min_words * 1.10)
+            max_allowed = int(min_words * 1.20)
+            current_text = sec.get_active_text()
+
+            system_prompt = (
+                "You are an expert student academic writer revising a paper section strictly based on instructor feedback.\n"
+                "RULES:\n"
+                f"1. Target Length: Approximately {target_words} words (strict range: {min_words} to {max_allowed} words). Do NOT exceed {max_allowed} words.\n"
+                "2. Faithfully incorporate the instructor's critiques, rubric requirements, and improvement suggestions.\n"
+                "3. Elevate analytical depth, clarity, transitions, and evidence while retaining factual accuracy.\n"
+                "4. Return ONLY the revised section text without markdown fences, headers, or conversational intros."
+            )
+
+            user_prompt = (
+                f"PAPER DETAILS:\n"
+                f"Title: {project.title}\n"
+                f"Section: {sec.title}\n"
+                f"Goal: {sec.goal_summary}\n"
+                f"Target Words: ~{sec.target_word_count} words (Acceptable range: {min_words} - {max_allowed})\n\n"
+                f"CURRENT SECTION DRAFT:\n{current_text}\n\n"
+                f"INSTRUCTOR CRITIQUE & GENERAL FEEDBACK:\n{overall_fb}\n\n"
+                f"KEY AREAS FOR IMPROVEMENT:\n{imp_bullets}\n\n"
+                f"RUBRIC CRITERIA FEEDBACK FOR THIS SECTION:\n{sec_crit_text}\n\n"
+                "Provide the complete revised section text:"
+            )
+
+            revised_raw = ""
+            client = self.active_ai_client
+            if client:
+                try:
+                    revised_raw = client.generate_text_response(
+                        prompt=user_prompt,
+                        system_instruction=system_prompt,
+                    )
+                except Exception as e:
+                    logger.error(f"Teacher feedback rewrite failed for section '{sec.title}': {e}")
+                    revised_raw = current_text
+            else:
+                revised_raw = current_text
+
+            revised_raw = solver.apply_word_limits(
+                revised_raw,
+                min_words=min_words,
+                max_words=max_allowed,
+                buffer_pct=0.15,
+            )
+            sec.raw_ai_text = revised_raw.strip()
+            sec.refinement_history.append(f"Teacher Feedback Revision ({time.strftime('%H:%M:%S')})")
+
+        # Step 2: Humanize Targeted Sections
+        for idx, sec in enumerate(targeted):
+            if progress_callback:
+                frac = 0.45 + (idx / total_targeted) * 0.40  # 45% to 85%
+                progress_callback(f"Humanizing section '{sec.title}' ({idx + 1}/{total_targeted})...", frac)
+
+            min_words = sec.target_word_count
+            max_allowed = int(min_words * 1.20)
+
+            if humanizer_bridge:
+                try:
+                    h_res = humanizer_bridge.humanize_text(
+                        text=sec.raw_ai_text,
+                        tone=self.config.humanizer_tone if self.config else "academic",
+                        level=self.config.humanizer_reading_level if self.config else "college",
+                        mode=self.config.humanizer_mode if self.config else "budget",
+                    )
+                    h_text = h_res.get("humanized_text", sec.raw_ai_text).strip()
+                    sec.humanized_text = solver.apply_word_limits(
+                        h_text,
+                        min_words=min_words,
+                        max_words=max_allowed,
+                        buffer_pct=0.15,
+                    ).strip()
+                    sec.final_text = sec.humanized_text
+                except Exception as e:
+                    logger.error(f"Humanizing failed for section '{sec.title}': {e}")
+                    sec.final_text = sec.raw_ai_text
+            else:
+                sec.final_text = sec.raw_ai_text
+
+        return targeted

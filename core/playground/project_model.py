@@ -4,6 +4,7 @@ Stores long-form writing projects, rubrics, sources, outlines, section drafts,
 and review approval statuses with JSON serialization.
 """
 
+import copy
 import json
 import os
 import time
@@ -104,6 +105,7 @@ class PlaygroundProject:
     course_name: str = ""
     instructor_name: str = ""
     teacher_grade_report: Optional[Dict[str, Any]] = None
+    revision_snapshots: List[Dict[str, Any]] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
 
@@ -124,6 +126,7 @@ class PlaygroundProject:
             "course_name": self.course_name,
             "instructor_name": self.instructor_name,
             "teacher_grade_report": self.teacher_grade_report,
+            "revision_snapshots": self.revision_snapshots,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -151,9 +154,40 @@ class PlaygroundProject:
             course_name=data.get("course_name", ""),
             instructor_name=data.get("instructor_name", ""),
             teacher_grade_report=data.get("teacher_grade_report"),
+            revision_snapshots=data.get("revision_snapshots", []),
             created_at=data.get("created_at", time.time()),
             updated_at=data.get("updated_at", time.time()),
         )
+
+    def create_revision_snapshot(self, description: str = "") -> Dict[str, Any]:
+        """Creates and stores a snapshot of current sections, rubric statuses, and teacher report."""
+        snapshot = {
+            "timestamp": time.time(),
+            "description": description or f"Revision Snapshot ({time.strftime('%H:%M:%S')})",
+            "sections": [sec.to_dict() for sec in self.sections],
+            "rubric_criteria": [c.to_dict() for c in self.rubric_criteria],
+            "teacher_grade_report": copy.deepcopy(self.teacher_grade_report) if self.teacher_grade_report else None,
+        }
+        self.revision_snapshots.append(snapshot)
+        return snapshot
+
+    def restore_latest_snapshot(self) -> bool:
+        """Restores the most recent revision snapshot."""
+        if not self.revision_snapshots:
+            return False
+        snapshot = self.revision_snapshots.pop()
+        self.sections = [SectionDraft.from_dict(s) for s in snapshot.get("sections", [])]
+        if "rubric_criteria" in snapshot:
+            self.rubric_criteria = [RubricCriterion.from_dict(c) for c in snapshot["rubric_criteria"]]
+        self.teacher_grade_report = snapshot.get("teacher_grade_report")
+        self.updated_at = time.time()
+        return True
+
+    def get_latest_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Returns the most recent revision snapshot without popping it."""
+        if self.revision_snapshots:
+            return self.revision_snapshots[-1]
+        return None
 
     def save_to_file(self, file_path: str):
         self.updated_at = time.time()

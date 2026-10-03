@@ -202,6 +202,80 @@ class PlaygroundEngine:
                     )
         return criteria
 
+    def generate_project_title(self, project: PlaygroundProject) -> str:
+        """
+        Auto-generates a concise, descriptive project title derived from the
+        assignment's topic description and/or rubric criteria. Intended to be
+        used only when the user has not already supplied a custom title.
+        Returns an empty string if no meaningful title could be produced.
+        """
+        valid_criteria = [
+            c for c in project.rubric_criteria
+            if not self.is_administrative_criterion(c.title, c.description)
+        ]
+        rubric_text_full = "\n".join([f"{c.title}: {c.description}" for c in valid_criteria])
+        if getattr(project, "rubric_raw_text", ""):
+            rubric_text_full += "\n" + project.rubric_raw_text
+
+        context = f"Topic/Prompt: {project.topic_description}\n\nRubric:\n{rubric_text_full}".strip()
+        if not project.topic_description.strip() and not rubric_text_full.strip():
+            return ""
+
+        system_prompt = (
+            "You are an academic writing assistant. Based on the assignment prompt and/or "
+            "grading rubric provided, generate ONE concise, descriptive title suitable for "
+            "a student's paper or project.\n\n"
+            "Rules:\n"
+            "- Use Title Case and do NOT wrap the title in quotation marks.\n"
+            "- Keep it between 3 and 12 words.\n"
+            "- Reflect the subject matter of the assignment itself, not the rubric's grading "
+            "structure, point values, or submission requirements.\n"
+            "- Respond with ONLY the title text and nothing else."
+        )
+        user_prompt = f"Assignment details:\n\n{context[:4000]}"
+
+        ai = self.active_ai_client or self.ai_client
+        try:
+            if ai:
+                resp = ai.generate_text_response(
+                    prompt=user_prompt,
+                    system_instruction=system_prompt,
+                )
+                title = re.sub(r"^```(?:text)?\s*", "", resp.strip(), flags=re.MULTILINE)
+                title = re.sub(r"\s*```$", "", title.strip(), flags=re.MULTILINE).strip()
+                title = title.splitlines()[0].strip() if title else ""
+                title = title.strip(" \"'")
+                if title:
+                    return title[:120]
+        except Exception as e:
+            logger.warning(f"AI title generation encountered error: {e}. Falling back to rule-based title.")
+
+        return self._fallback_title(project, valid_criteria)
+
+    @staticmethod
+    def _fallback_title(project: PlaygroundProject, valid_criteria: Optional[List[RubricCriterion]] = None) -> str:
+        """Rule-based title derivation used when no AI client is available or AI generation fails."""
+        topic = (project.topic_description or "").strip()
+        if topic:
+            first_line = topic.splitlines()[0].strip()
+            first_sentence = re.split(r"(?<=[.!?])\s", first_line)[0].strip()
+            candidate = (first_sentence or first_line).rstrip(".!? ")
+            if candidate:
+                return candidate[:80]
+
+        criteria = valid_criteria if valid_criteria is not None else project.rubric_criteria
+        top_titles = [c.title.strip() for c in criteria[:3] if c.title.strip()]
+        if top_titles:
+            return ("Project on " + ", ".join(top_titles))[:80]
+
+        raw = (project.rubric_raw_text or "").strip()
+        if raw:
+            first_line = raw.splitlines()[0].strip()
+            if first_line:
+                return first_line[:80]
+
+        return ""
+
     def generate_outline(
         self,
         project: PlaygroundProject,

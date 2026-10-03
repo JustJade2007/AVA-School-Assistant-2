@@ -8,6 +8,7 @@ Dedicated long-form writing studio featuring a 4-stage pipeline:
 Includes anti-screen capture cloaking by default with a header toggle.
 """
 
+import copy
 import os
 import threading
 import tkinter as tk
@@ -124,6 +125,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.current_file_path: Optional[str] = None
         self._is_generating = False
         self._is_closing = False
+        self._title_user_edited = False
 
         self._setup_window()
         self._build_header()
@@ -732,6 +734,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
 
     def _on_title_entry_changed(self):
         new_title = self.title_entry.get().strip()
+        self._title_user_edited = True
         if new_title:
             self.project.title = new_title
             self.title_display.configure(text=new_title)
@@ -1397,12 +1400,21 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
             except Exception as e:
                 logger.error(f"Error parsing rubric: {e}")
                 criteria = []
-            finally:
-                self._after_if_open(0, lambda: self._finish_rubric_parse(criteria))
+
+            auto_title = ""
+            if not self._title_user_edited:
+                try:
+                    temp_project = copy.copy(self.project)
+                    temp_project.rubric_criteria = criteria
+                    auto_title = self.engine.generate_project_title(temp_project)
+                except Exception as e:
+                    logger.warning(f"Error auto-generating project title: {e}")
+
+            self._after_if_open(0, lambda: self._finish_rubric_parse(criteria, auto_title))
 
         threading.Thread(target=task, daemon=True).start()
 
-    def _finish_rubric_parse(self, criteria: List[RubricCriterion]):
+    def _finish_rubric_parse(self, criteria: List[RubricCriterion], auto_title: str = ""):
         if hasattr(self, "stage_1_parse_btn"):
             self.stage_1_parse_btn.configure(
                 state="normal",
@@ -1416,6 +1428,12 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.project.rubric_criteria = valid_criteria
         self.stage_1_rubric_viewer.set_criteria(valid_criteria)
         self._auto_detect_word_requirements()
+
+        if auto_title and not self._title_user_edited:
+            self.project.title = auto_title
+            self.title_entry.delete(0, "end")
+            self.title_entry.insert(0, auto_title)
+            self.title_display.configure(text=auto_title)
 
     # -------------------------------------------------------------------------
     # Stage 2: Outline Formulation & Plan
@@ -3023,6 +3041,7 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         self.project = PlaygroundProject()
         self.current_file_path = None
         self.current_section_idx = 0
+        self._title_user_edited = False
 
         self.title_entry.delete(0, "end")
         self.title_entry.insert(0, self.project.title)
@@ -3097,6 +3116,8 @@ class PlaygroundWorkspace(ctk.CTkToplevel):
         try:
             self.project = PlaygroundProject.load_from_file(path)
             self.current_file_path = path
+            # A loaded project already has its own title; don't auto-overwrite it.
+            self._title_user_edited = True
 
             # Update UI
             self.title_entry.delete(0, "end")

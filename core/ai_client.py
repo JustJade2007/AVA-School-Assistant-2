@@ -341,15 +341,19 @@ class AIClient:
         if not self.api_key:
             return {"double_check_passed": True, "messed_up": False, "issue_type": "none", "details": "API key not configured", "corrective_actions": []}
 
-        from core.prompt import get_double_check_prompt
-        prompt = get_double_check_prompt(
-            image_width=image_width,
-            image_height=image_height,
-            question=question,
-            intended_answer=intended_answer,
-            intended_actions=intended_actions,
-            reasoning=reasoning
-        )
+        try:
+            from core.prompt import get_double_check_prompt
+            prompt = get_double_check_prompt(
+                image_width=image_width,
+                image_height=image_height,
+                question=question,
+                intended_answer=intended_answer,
+                intended_actions=intended_actions,
+                reasoning=reasoning
+            )
+        except Exception as e:
+            logger.warning(f"Double-check prompt generation failed: {e}")
+            return {"double_check_passed": True, "messed_up": False, "issue_type": "none", "details": f"Prompt generation error: {e}", "corrective_actions": []}
 
         raw_response_text = ""
         try:

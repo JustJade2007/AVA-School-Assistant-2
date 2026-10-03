@@ -404,6 +404,16 @@ Output raw JSON only without markdown fences.
 """
 
 
+def _json_safe_default(obj):
+    if isinstance(obj, (set, tuple)):
+        return list(obj)
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
+
+
 def get_double_check_prompt(
     image_width: int,
     image_height: int,
@@ -419,7 +429,27 @@ def get_double_check_prompt(
     """
     actions_desc = ""
     if intended_actions:
-        actions_desc = f"\nIntended actions attempted:\n{json.dumps(intended_actions, indent=2)}"
+        # Sanitize actions for prompt readability and strip internal telemetry/non-serializable state
+        sanitized_actions = []
+        for act in intended_actions:
+            if isinstance(act, dict):
+                clean_act = {}
+                for k, v in act.items():
+                    if k in ("prior_attempted_coords", "attempted_clicks", "raw_response"):
+                        continue
+                    if isinstance(v, set):
+                        clean_act[k] = list(v)
+                    else:
+                        clean_act[k] = v
+                sanitized_actions.append(clean_act)
+            else:
+                sanitized_actions.append(act)
+
+        try:
+            serialized = json.dumps(sanitized_actions, indent=2, default=_json_safe_default)
+        except Exception:
+            serialized = str(sanitized_actions)
+        actions_desc = f"\nIntended actions attempted:\n{serialized}"
 
     reasoning_desc = f"\n- Academic Reasoning: {reasoning}" if reasoning else ""
 

@@ -8,6 +8,16 @@ The version format is `1.2.3.a`:
 - **3**: New features or major bug update
 - **a**: Basic bug fixes
 
+## [2.2.17.a] - 2026-10-03
+
+### Fixed & Enhanced
+- **Zero-Token & Visual Double-Check Verification Set Serialization (Issue #30)**:
+  - **Robust JSON Fallback Serializer**: Introduced `_json_safe_default` in [core/prompt.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/prompt.py) to automatically serialize non-standard Python types (e.g., `set`, `tuple`, custom objects) to JSON-compatible lists and dicts when constructing verification prompts, preventing `TypeError: Object of type set is not JSON serializable`.
+  - **Telemetry Stripping in Verification Prompts**: Sanitized action payloads passed into `get_double_check_prompt` by stripping internal worker telemetry (`prior_attempted_coords`, `attempted_clicks`, `raw_response`), keeping the double-check prompt clean and token-efficient.
+  - **Serializable Offset History**: Ensured `prior_attempted_coords` in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) are stored as a JSON-serializable list of coordinate pairs rather than a Python `set`.
+  - **Coordinate Normalization in Recovery Probing**: Updated candidate coordinate filtering in [core/automation.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/automation.py) to normalize `prior_attempted_coords` into a set of coordinate tuples, guaranteeing accurate candidate exclusion whether coordinates are represented as lists or tuples.
+  - **Phase Diagnostic Accuracy & Fault Tolerance**: Set `phase = "Visual Double-Check"` before invoking screen verification in [core/assistant_engine.py](file:///c:/Users/jacob/OneDrive/Desktop/Coding/AVA-School-Assistant-2/core/assistant_engine.py) so errors are accurately attributed to visual double-check rather than zero-token verification. Wrapped `_double_check_answers_on_screen` and `get_double_check_prompt` in fail-open exception handlers to ensure verification telemetry glitches never crash the automated worker or halt solving.
+
 ## [2.2.16.a] - 2026-09-29
 
 ### Fixed & Enhanced
